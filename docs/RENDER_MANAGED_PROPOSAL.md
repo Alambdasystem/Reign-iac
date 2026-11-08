@@ -52,8 +52,9 @@ External computer/full-desktop adapters remain unfinished.
 1. Obtain James's explicit decision to use Render Blueprint ownership instead
    of OpenTofu for this pilot, and to launch the initial pilot without REIGN
    database persistence while the isolated schema/role are prepared.
-2. Record that choice in AGENTS.md, HANDOFF.md and DEPLOYMENT.md; disable the
-   OpenTofu apply path for these resources so there is only one owner.
+2. The proposal includes matching AGENTS.md, HANDOFF.md and DEPLOYMENT.md changes
+   and disables both jobs of the legacy OpenTofu workflow. Record James's
+   approval on the PR before merging so there is only one owner.
 3. Merge the reviewed configuration after required CI. Point the pending
    Blueprint to main and re-plan that exact revision with auto-sync disabled.
 4. Inspect the resolved create-only plan and cost, then apply within the approved

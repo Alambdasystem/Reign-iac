@@ -1,7 +1,13 @@
 # REIGN repository guidance
 
 - Keep the infrastructure milestone separate from the browser/human-takeover E2E milestone.
-- Use OpenTofu as the single owner of new Render resources. Do not adopt existing
+- This proposal selects Render Blueprint as the single owner of the four REIGN
+  pilot resources, **only after James explicitly approves this ownership change**.
+  Until then, leave the Blueprint unapplied and this PR unmerged. Never run both
+  deployment methods against the pilot. The legacy OpenTofu plan/apply workflow
+  is disabled in this proposal; re-enabling it requires a reviewed state migration.
+  Keep Blueprint auto-sync off and promote only reviewed, tested image digests.
+  Do not adopt existing
   Workmates or Git High services, change billing, or perform destructive changes
   without explicit approval for the concrete plan.
 - Never commit credentials, state, raw plans, recordings containing credentials,
