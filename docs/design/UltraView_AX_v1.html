@@ -1,0 +1,175 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>REIGN UltraView AX — Fluid Engine</title><style>
+:root{color-scheme:dark}*{box-sizing:border-box}html,body{margin:0;width:100%;min-height:100%;background:#050002;color:#ffe3e7;font-family:system-ui,-apple-system,sans-serif}button,input{font:inherit}button{cursor:pointer}button:focus-visible,input:focus-visible{outline:2px solid white;outline-offset:2px}
+#fluid{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;filter:saturate(1.35) contrast(1.15)}
+.shade{position:fixed;inset:0;pointer-events:none;background:radial-gradient(ellipse at 50% 38%,transparent 15%,rgba(3,0,1,.4) 70%,rgba(3,0,1,.82));z-index:1}
+.ui{position:relative;z-index:2;width:min(100%,480px);margin:auto;min-height:100dvh;padding:calc(14px + env(safe-area-inset-top)) 15px calc(12px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:12px}
+.top{display:flex;justify-content:space-between;align-items:center}.brand{font-size:24px;font-weight:800;letter-spacing:.2em;color:#ff6679;text-shadow:0 0 16px #fc1a43}.sub{font-size:10px;letter-spacing:.1em;color:#f6a1ad}.preview{font-size:11px;color:#ffd2d8;border:1px solid #b92943;border-radius:30px;padding:7px 10px;background:#2c030ba6}
+.tabs,.nav{display:flex;gap:7px}.tabs button{flex:1;border:1px solid #a91d36;background:#27040bc7;color:#e9a5b1;border-radius:16px;padding:9px}.tabs button.on{border-color:#ff5b73;color:white;background:#75102ac7}
+.hero{min-height:290px;flex:1;max-height:470px;display:flex;align-items:center;justify-content:center;flex-direction:column;position:relative}
+.orb{position:relative;width:min(74vw,290px);aspect-ratio:1;border-radius:50%;background:radial-gradient(ellipse at 35% 24%,#a40b2a66 0%,#28000ba0 33%,#070003ed 69%,#ee1c4288 94%,#ff7188 99%);box-shadow:inset 0 0 32px #ff3b58a8,0 0 23px #f51c43aa,0 0 78px #ed0e3455;overflow:hidden;animation:breath 5s ease-in-out infinite}
+.orb::before{content:"";position:absolute;inset:8%;border-radius:46% 54% 63% 37% / 41% 35% 65% 59%;border:2px solid #ff5169a9;box-shadow:0 0 16px #ff2b4e;animation:turn 14s linear infinite}
+.orb::after{content:"";position:absolute;inset:13%;border-radius:62% 38% 49% 51% / 39% 57% 43% 61%;border:2px solid #ff315f88;box-shadow:inset 0 0 28px #a90d2f;animation:turn 21s linear infinite reverse}
+.orb[data-mode="thinking"]{animation-duration:2.7s}.orb[data-mode="speaking"]{animation-duration:1.6s}.orb[data-mode="working"]{animation-duration:3.2s}.orb .glow{position:absolute;inset:23%;background:conic-gradient(from 50deg,#ff3b5000,#ff566e44,#40001000,#c4103244,#ff3b5000);filter:blur(16px);animation:turn 11s linear infinite}
+@keyframes breath{50%{transform:scale(1.055);box-shadow:inset 0 0 44px #ff3b58a8,0 0 42px #ff1c43aa,0 0 100px #ed0e3466}}@keyframes turn{to{transform:rotate(360deg)}}
+.state-picker{display:flex;flex-wrap:wrap;justify-content:center;gap:5px;margin-top:12px}.state-picker button{font-size:11px;color:#e9a5b1;border:1px solid #a52943;background:#22040aa8;border-radius:16px;padding:6px 9px}.state-picker button.selected{border-color:#ff7b91;background:#8b1432;color:white}.state{margin-top:18px;font-size:20px;text-shadow:0 0 12px #fb1c43}.hint{font-size:11px;color:#f3a2b1;margin-top:3px;text-align:center}
+.panel{background:linear-gradient(140deg,#29050cdd,#0d0105db);border:1px solid #e73a5670;border-radius:22px;padding:13px 15px;box-shadow:inset 0 0 20px #a80c2822;backdrop-filter:blur(12px);transition:opacity .8s}
+.panel.dim{opacity:.27}.panel:focus-within{opacity:1}.panel:hover{opacity:1}.panel .feed{scroll-behavior:smooth}.panel-head{display:flex;justify-content:space-between;font-size:11px;letter-spacing:.08em;color:#ff8095}.panel-head button{background:none;border:0;color:#ffb9c4}
+.feed{height:clamp(100px,18dvh,175px);overflow-y:auto;scrollbar-width:thin;scrollbar-color:#a92b47 transparent;margin-top:7px}
+.entry{font-size:13px;color:#f0c3ca;padding:7px 0;border-bottom:1px solid #ff486522}.entry b{display:block;color:#ff6681;font-size:11px;margin-bottom:3px}
+.actions{display:flex;justify-content:center;gap:20px}.action{border:0;background:none;color:#ffd6de;display:flex;flex-direction:column;align-items:center;gap:5px;font-size:12px}.action i{font-style:normal;display:grid;place-items:center;width:57px;height:57px;border:1px solid #ff54736b;border-radius:50%;background:#350812d9;font-size:24px}.action.end i{background:#b40d2a}
+form{display:flex;gap:7px}input{min-width:0;flex:1;background:#1a0309dd;color:white;border:1px solid #e0395677;border-radius:17px;padding:12px}form button{border:1px solid #ff5c77;background:#8d0b28;color:white;border-radius:15px;padding:0 15px}
+.nav{justify-content:space-around;border:1px solid #c52a436b;border-radius:20px;background:#180309da;padding:7px}.nav button{border:0;background:none;color:#e6a5b0;font-size:12px;padding:6px}.nav button.on{color:#ff7188}.footer{text-align:center;color:#a7707a;font-size:10px}
+@media(min-width:780px){.ui{width:min(100%,1000px);display:grid;grid-template-columns:1fr 1fr;grid-template-rows:auto auto 1fr auto auto;column-gap:26px}.top,.tabs,.nav,.footer{grid-column:1/-1}.hero{grid-column:1;grid-row:3;max-height:none}.panel{grid-column:2;grid-row:3;align-self:center}.feed{height:300px}.actions{grid-column:1;grid-row:4}form{grid-column:2;grid-row:4}}
+@media(prefers-reduced-motion:reduce){.orb,.orb::before,.orb::after,.orb .glow{animation:none}.panel{transition:none}}
+
+/* Remote computer preview and takeover */
+.screen-card{margin:8px 0 4px;border:1px solid #fb54776e;border-radius:15px;overflow:hidden;background:#0b0e17;box-shadow:0 0 22px #e60d2c30}
+.screen-top{display:flex;align-items:center;justify-content:space-between;gap:6px;background:#202332;padding:7px 9px;font-size:10px;color:#e7dce1}
+.screen-top .live{color:#ff8e9c;font-weight:700}.screen-top button{background:#7b1231;border:1px solid #ff6c85;color:#fff;border-radius:9px;padding:5px 9px}
+.mini-desktop{position:relative;height:122px;background:#101b2c;overflow:hidden;display:flex}
+.mini-sidebar{width:28px;background:#0c1422;border-right:1px solid #374052;display:flex;flex-direction:column;gap:10px;align-items:center;padding-top:11px;color:#b8c9d8}
+.mini-main{flex:1;padding:9px;font-size:10px;color:#c7d6e5}.mini-browser{background:#27364c;border-radius:6px;padding:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mini-code{margin-top:7px;font:9px/1.6 monospace;color:#83dbb4}.mini-code span{color:#ffb5c0}
+.fake-pointer{position:absolute;top:70px;left:58%;color:#fff;text-shadow:0 0 3px black;font-size:21px;transition:top .55s,left .55s;pointer-events:none}
+.screen-footer{background:#171b29;color:#e4b6c0;padding:7px 9px;font-size:10px;display:flex;justify-content:space-between;gap:6px}
+.screen-footer .running{color:#72e3a9}
+.remote-overlay{position:fixed;inset:0;z-index:100;background:#030407f2;display:none;flex-direction:column;padding:calc(10px + env(safe-area-inset-top)) 10px calc(10px + env(safe-area-inset-bottom));gap:10px}
+.remote-overlay.open{display:flex}.remote-header{display:flex;justify-content:space-between;align-items:center;gap:8px;color:#fbd9df;font-size:13px}.remote-header button,.remote-toolbar button{border:1px solid #bc3c55;background:#290b16;color:#ffe1e5;border-radius:11px;padding:9px}
+.remote-screen{position:relative;flex:1;min-height:250px;border:1px solid #b83e56;border-radius:15px;overflow:hidden;background:#0f1727;display:flex}
+.remote-left{width:48px;background:#101626;border-right:1px solid #384256;display:flex;flex-direction:column;gap:18px;align-items:center;padding-top:20px;color:#a7c0d8}
+.remote-window{flex:1;min-width:0;display:flex;flex-direction:column}
+.remote-address{background:#273447;color:#b7d1df;padding:10px;font-size:12px}
+.remote-body{flex:1;padding:16px;overflow:auto;color:#e6f2f7;font-size:13px}
+.remote-body h3{margin:0 0 8px;font-size:18px}.remote-body .chip{display:inline-block;border:1px solid #45637c;border-radius:12px;padding:5px 8px;margin:3px;background:#1d3247}
+.terminal{background:#080e16;border:1px solid #3e5266;border-radius:10px;padding:13px;font:12px/1.65 monospace;white-space:pre-wrap;color:#8ee7b3;min-height:130px;margin-top:18px}
+.remote-pointer{position:absolute;top:45%;left:55%;font-size:28px;color:white;text-shadow:1px 1px 3px black;transition:top .65s,left .65s;pointer-events:none}
+.remote-toolbar{display:flex;flex-wrap:wrap;gap:7px;align-items:center;justify-content:center}
+.remote-status{color:#ffc2cc;font-size:12px;text-align:center}.remote-note{color:#cba1a9;font-size:11px;text-align:center}
+@media(min-width:780px){.remote-overlay{padding:20px max(20px,calc((100vw - 1100px)/2))}.remote-screen{min-height:420px}}
+</style></head><body><canvas id="fluid" aria-label="Animated dark ruby fluid simulation"></canvas><div class="shade"></div>
+<main class="ui"><header class="top"><div><div class="brand">REIGN</div><div class="sub">ULTRAVIEW · AGENTIC EXPERIENCE</div></div><div class="preview">FLUID V5 · REMOTE SCREEN DEMO</div></header>
+<nav class="tabs"><button class="on" data-tab="Chat">Chat</button><button data-tab="Work">Work</button><button data-tab="Agents">Agents</button><button data-tab="Tools">Tools</button></nav>
+<section class="hero"><div class="orb"><div class="glow"></div></div><div class="state" id="state">Listening…</div><div class="hint">Visual preview · swipe the background to stir the fluid</div>
+<div class="state-picker" role="group" aria-label="Simulate REIGN state"><button data-state="listening" class="selected">Listening</button><button data-state="thinking">Thinking</button><button data-state="speaking">Speaking</button><button data-state="working">Working</button></div></section>
+<section class="panel" id="panel"><div class="panel-head"><b id="panelName">LIVING CANVAS</b><button id="pin">Pin visible</button></div><div class="screen-card" id="screenCard"><div class="screen-top"><span class="live">● DEMO SCREEN SHARE</span><span>REIGN Computer · Session 01</span><button id="expandRemote" type="button">Expand ↗</button></div><div class="mini-desktop"><div class="mini-sidebar">⌂<br>⌘<br>▣</div><div class="mini-main"><div class="mini-browser">🔒 alambda-forge.onrender.com / Reign-core</div><div class="mini-code" id="miniCode">$ git status<br><span>Preparing workspace…</span></div></div><div class="fake-pointer" id="miniPointer">➤</div></div><div class="screen-footer"><span id="miniStep">Opening Git High…</span><span class="running">● Simulated</span></div></div><div class="feed" id="feed"><div class="entry"><b>YOU</b>REIGN, bring up the Git High deployment.</div><div class="entry"><b>REIGN</b>I'm ready to show work here when execution is connected.</div><div class="entry"><b>WORKSPACE</b>REIGN Core → Git High → Render</div></div></section>
+<div class="actions"><button class="action" id="mute"><i>♩</i>Mute</button><button class="action end" id="call"><i>☎</i>End</button><button class="action" id="motion"><i>◉</i>Pause fluid</button></div>
+<form id="form"><input id="message" placeholder="Ask REIGN…" aria-label="Message"><button type="submit">Send</button></form>
+<nav class="nav"><button class="on" data-tab="Chat">⌂ Home</button><button data-tab="Work">▱ Projects</button><button data-tab="Tools">⌘ MCP</button><button data-tab="Agents">◈ Agents</button></nav><div class="footer">REIGN Harness · UltraView AX · Fluid simulation + optional GPU shading · Screen share simulated · Voice states simulated · No live backend</div></main>
+<div class="remote-overlay" id="remoteOverlay" role="dialog" aria-modal="true" aria-label="REIGN remote computer demonstration"><div class="remote-header"><strong>▣ REIGN COMPUTER · LIVE VIEW DEMO</strong><button id="closeRemote">✕ Close</button></div><div class="remote-screen" id="remoteScreen"><div class="remote-left">⌂<br>▣<br>⌘<br>⚙</div><div class="remote-window"><div class="remote-address" id="remoteAddress">🔒 https://alambda-forge.onrender.com</div><div class="remote-body"><h3 id="remoteTitle">Git High · REIGN Core</h3><div id="remoteContent">Repository dashboard loading…</div><div class="terminal" id="remoteTerminal">$ starting demonstration…</div></div></div><div class="remote-pointer" id="remotePointer">➤</div></div><div class="remote-toolbar"><button id="pauseRemote">⏸ Pause</button><button id="restartRemote">↻ Replay</button><button id="takeoverRemote">☝ Take control</button><button id="returnRemote" hidden>↩ Return to REIGN</button></div><div class="remote-status" id="remoteStatus">REIGN is navigating the remote computer (simulation).</div><div class="remote-note">This is an animated mock remote desktop, not a connection to your actual computer or accounts.</div></div><script>
+// Semi-Lagrangian incompressible 2D fluid simulation: velocity advection,
+// pressure projection, dye advection, vorticity-like stirring and dissipation.
+// The dye is transported by the velocity field, rather than moving circles.
+const cv=document.getElementById('fluid'),ctx=cv.getContext('2d',{alpha:false});
+const display=document.createElement('canvas'),dc=display.getContext('2d');
+// GPU compositing: WebGL shader samples the simulated dye texture and applies
+// nonlinear filmic color, edge lighting, and subtle refractive warping.
+const gpuCanvas=document.createElement('canvas');
+const gl=gpuCanvas.getContext('webgl',{alpha:false,premultipliedAlpha:false,preserveDrawingBuffer:false});
+let gpuProgram=null,gpuTex=null,gpuBuffer=null,gpuTime=null,gpuState=null;
+function initGPU(){if(!gl)return false;
+ const compile=(type,source)=>{const sh=gl.createShader(type);gl.shaderSource(sh,source);gl.compileShader(sh);if(!gl.getShaderParameter(sh,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(sh));return sh};
+ try{
+ gl.getExtension('OES_standard_derivatives');
+ const vs=compile(gl.VERTEX_SHADER,`attribute vec2 a;varying vec2 uv;void main(){uv=(a+1.)*.5;gl_Position=vec4(a,0.,1.);}`);
+ const fs=compile(gl.FRAGMENT_SHADER,`#extension GL_OES_standard_derivatives : enable\nprecision mediump float;varying vec2 uv;uniform sampler2D dye;uniform float time;uniform float activity;
+ void main(){vec2 q=uv;float n=sin(q.y*18.+time*.13)*sin(q.x*11.-time*.09);q+=vec2(n*.0015,-n*.001);vec3 c=texture2D(dye,q).rgb;
+ float density=max(0.,c.r-c.g*.5);float ed=abs(dFdx(c.r))+abs(dFdy(c.r));
+ vec3 base=vec3(.012,.001,.006);vec3 deep=vec3(.22,.009,.045);vec3 ruby=vec3(.72,.025,.14);vec3 bright=vec3(1.,.19,.27);
+ float a=smoothstep(.02,.25,density);float b=smoothstep(.19,.8,density);float rim=clamp(ed*1.2,0.,1.)*b;
+ vec3 color=mix(base,deep,a);color=mix(color,ruby,b*.85);color=mix(color,bright,clamp(rim*.36+activity*.07*b,0.,.3));
+ color*=.92+.08*sin(time*.25+q.y*9.);gl_FragColor=vec4(color,1.);}`);
+ gpuProgram=gl.createProgram();gl.attachShader(gpuProgram,vs);gl.attachShader(gpuProgram,fs);gl.linkProgram(gpuProgram);if(!gl.getProgramParameter(gpuProgram,gl.LINK_STATUS))throw Error('shader link failed');
+ gl.useProgram(gpuProgram);gpuBuffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,gpuBuffer);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),gl.STATIC_DRAW);
+ const loc=gl.getAttribLocation(gpuProgram,'a');gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+ gpuTex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,gpuTex);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+ gpuTime=gl.getUniformLocation(gpuProgram,'time');gpuState=gl.getUniformLocation(gpuProgram,'activity');gpuCanvas.width=NX;gpuCanvas.height=NY;gl.viewport(0,0,NX,NY);return true;
+ }catch(e){console.warn('GPU compositing unavailable, using 2D fallback:',e);return false}
+}
+let useGPU=false;
+
+const mobile=Math.min(innerWidth,innerHeight)<650, NX=mobile?112:170, NY=Math.round(NX*innerHeight/innerWidth),N=NX*NY;
+display.width=NX;display.height=NY;let img=dc.createImageData(NX,NY);
+let vx=new Float32Array(N),vy=new Float32Array(N),tx=new Float32Array(N),ty=new Float32Array(N),r=new Float32Array(N),g=new Float32Array(N),b=new Float32Array(N),tr=new Float32Array(N),tg=new Float32Array(N),tb=new Float32Array(N),pressure=new Float32Array(N),div=new Float32Array(N),p2=new Float32Array(N);
+const ix=(x,y)=>Math.max(0,Math.min(NY-1,y|0))*NX+Math.max(0,Math.min(NX-1,x|0));
+function sample(a,x,y){x=Math.max(0,Math.min(NX-1.001,x));y=Math.max(0,Math.min(NY-1.001,y));let X=x|0,Y=y|0,fx=x-X,fy=y-Y,i=Y*NX+X;return (a[i]*(1-fx)+a[i+1]*fx)*(1-fy)+(a[i+NX]*(1-fx)+a[i+NX+1]*fx)*fy}
+function advect(dst,src,dt,decay){for(let y=1;y<NY-1;y++)for(let x=1;x<NX-1;x++){let i=y*NX+x;dst[i]=sample(src,x-vx[i]*dt,y-vy[i]*dt)*decay}}
+function inject(x,y,dx,dy,strength=1){const rad=Math.max(5,NX*.10),minX=Math.max(1,(x-rad)|0),maxX=Math.min(NX-2,(x+rad)|0),minY=Math.max(1,(y-rad)|0),maxY=Math.min(NY-2,(y+rad)|0);for(let j=minY;j<=maxY;j++)for(let k=minX;k<=maxX;k++){let xx=(k-x)/rad,yy=(j-y)/rad,dist=xx*xx+yy*yy;if(dist>1)continue;let fall=Math.pow(1-dist,2),i=j*NX+k;vx[i]+=(dx-yy*1.9)*fall*strength;vy[i]+=(dy+xx*1.9)*fall*strength;let wisps=.65+.35*Math.sin(k*.21+j*.43+clock*.015);r[i]=Math.min(2.2,r[i]+fall*strength*.42*wisps);g[i]=Math.min(2,g[i]+fall*strength*.05);b[i]=Math.min(2,b[i]+fall*strength*.11)}}
+let activity=0,voiceState="listening";let clock=0,run=!matchMedia('(prefers-reduced-motion: reduce)').matches,raf=0;
+function step(){clock++;
+// Autonomous asymmetric disturbances: they create vortices, not visible circular shapes.
+if(clock%9===0){
+ const force=voiceState==='speaking'?1.6:voiceState==='thinking'?1.25:voiceState==='working'?1.1:.65;
+ let cx=NX*.5,cy=NY*.38,t=clock*.011;
+ // State-dependent asymmetrical currents around the voice orb.
+ inject(cx+Math.sin(t*1.3)*NX*.11,cy+Math.cos(t*.9)*NY*.08,
+ voiceState==='speaking'?Math.sin(t)*3:Math.cos(t)*-.8,
+ voiceState==='speaking'?Math.cos(t)*3:Math.sin(t)*-.8,force*.22);
+ }
+if(clock%11===0){let t=clock*.008,x=NX*(.5+.31*Math.sin(t*.81+Math.sin(t*.23))),y=NY*(.5+.32*Math.cos(t*.63+Math.sin(t*.31)));inject(x,y,Math.sin(t*1.2)*1.2,Math.cos(t*.8)*1.3,.75)}
+if(clock%37===0){let t=clock*.017;inject(NX*(.5+.38*Math.sin(t*1.31)),NY*(.5+.4*Math.cos(t*.7)),Math.cos(t)*2,Math.sin(t)*2,.85)}
+// Transport velocity and apply damping.
+advect(tx,vx,.75,.994);advect(ty,vy,.75,.994);[vx,tx]=[tx,vx];[vy,ty]=[ty,vy];
+// Compute divergence.
+for(let y=1;y<NY-1;y++)for(let x=1;x<NX-1;x++){let i=y*NX+x;div[i]=-.5*(vx[i+1]-vx[i-1]+vy[i+NX]-vy[i-NX]);pressure[i]=0}
+// Jacobi pressure solve.
+for(let it=0;it<17;it++){for(let y=1;y<NY-1;y++)for(let x=1;x<NX-1;x++){let i=y*NX+x;p2[i]=(div[i]+pressure[i-1]+pressure[i+1]+pressure[i-NX]+pressure[i+NX])*.25}[pressure,p2]=[p2,pressure]}
+for(let y=1;y<NY-1;y++)for(let x=1;x<NX-1;x++){let i=y*NX+x;vx[i]-=.5*(pressure[i+1]-pressure[i-1]);vy[i]-=.5*(pressure[i+NX]-pressure[i-NX])}
+// Advect dyes through the same velocity field.
+advect(tr,r,.75,.998);advect(tg,g,.75,.998);advect(tb,b,.75,.998);[r,tr]=[tr,r];[g,tg]=[tg,g];[b,tb]=[tb,b];
+}
+function paint(){const data=img.data;for(let i=0;i<N;i++){let density=Math.max(0,r[i]);let w=Math.min(1,Math.pow(density,1.15));let folds=Math.max(0,Math.min(1,(r[i]-g[i]*.35)*.8));let light=Math.pow(w,1.6);data[i*4]=Math.min(255,6+210*folds+45*light);data[i*4+1]=Math.min(255,1+13*w+45*light+35*g[i]);data[i*4+2]=Math.min(255,3+16*w+33*light+70*b[i]);data[i*4+3]=255}dc.putImageData(img,0,0);ctx.imageSmoothingEnabled=true;
+ if(useGPU){
+  gl.bindTexture(gl.TEXTURE_2D,gpuTex);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,display);
+  gl.uniform1f(gpuTime,clock*.016);gl.uniform1f(gpuState,activity);
+  gl.drawArrays(gl.TRIANGLES,0,6);ctx.drawImage(gpuCanvas,0,0,cv.width,cv.height);
+ }else ctx.drawImage(display,0,0,cv.width,cv.height)}
+function size(){let d=Math.min(devicePixelRatio||1,1.5);cv.width=innerWidth*d;cv.height=innerHeight*d}addEventListener('resize',size);size();
+function animate(){if(!run)return;step();paint();raf=requestAnimationFrame(animate)}
+// Seed irregularly over time, allowing actual advection to form folds.
+for(let i=0;i<65;i++){let t=i*.27;inject(NX*(.5+.34*Math.sin(t*.61+Math.sin(t*.29))),NY*(.5+.3*Math.cos(t*.83)),Math.cos(t)*1.6,Math.sin(t*.7)*1.4,1.1);step()}
+useGPU=initGPU();paint();if(run)animate();
+let pointer=null;cv.style.pointerEvents='auto';
+addEventListener('pointerdown',e=>{pointer={x:e.clientX,y:e.clientY};wake()});
+addEventListener('pointermove',e=>{if(!pointer||!run)return;let x=e.clientX/innerWidth*NX,y=e.clientY/innerHeight*NY,dx=(e.clientX-pointer.x)/innerWidth*NX,dy=(e.clientY-pointer.y)/innerHeight*NY;inject(x,y,dx*1.6,dy*1.6,2.3);pointer={x:e.clientX,y:e.clientY};wake()});
+addEventListener('pointerup',()=>pointer=null);
+let pinned=false,last=Date.now(),active=true,muted=false;const panel=document.getElementById('panel');function wake(){last=Date.now();panel.classList.remove('dim')}
+document.addEventListener('pointerdown',wake,{passive:true});document.addEventListener('scroll',wake,{passive:true});
+setInterval(()=>{if(!pinned&&Date.now()-last>5200)panel.classList.add('dim')},750);
+document.getElementById('pin').onclick=()=>{pinned=!pinned;document.getElementById('pin').textContent=pinned?'Unpin':'Pin visible';wake()};
+document.querySelectorAll('[data-state]').forEach(btn=>btn.onclick=()=>{
+ voiceState=btn.dataset.state;activity={listening:.2,thinking:.7,speaking:1,working:.55}[voiceState];
+ document.querySelector('.orb').dataset.mode=voiceState;
+ document.getElementById('state').textContent=voiceState[0].toUpperCase()+voiceState.slice(1)+'…';
+ document.querySelectorAll('[data-state]').forEach(b=>b.classList.toggle('selected',b===btn));
+ if(run)inject(NX*.5,NY*.4,voiceState==='speaking'?3:-2,voiceState==='thinking'?2:1,2);
+ wake();
+});
+document.getElementById('motion').onclick=e=>{run=!run;e.currentTarget.innerHTML=run?'<i>◉</i>Pause fluid':'<i>▶</i>Resume fluid';if(run)animate()};
+document.getElementById('mute').onclick=e=>{muted=!muted;e.currentTarget.innerHTML=muted?'<i>×</i>Unmute':'<i>♩</i>Mute';document.getElementById('state').textContent=muted?'Muted':active?'Listening…':'Call ended'};
+document.getElementById('call').onclick=e=>{active=!active;e.currentTarget.innerHTML=active?'<i>☎</i>End':'<i>☎</i>Call';document.getElementById('state').textContent=active?(muted?'Muted':'Listening…'):'Call ended'};
+const feed=document.getElementById('feed');document.querySelectorAll('[data-tab]').forEach(el=>el.onclick=()=>{document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('on',b.dataset.tab===el.dataset.tab));document.getElementById('panelName').textContent=el.dataset.tab.toUpperCase();const content={Chat:'<div class="entry"><b>YOU</b>Show me the REIGN deployment.</div><div class="entry"><b>REIGN</b>Ready when the execution layer is connected.</div>',Work:'<div class="entry"><b>WORKSPACE</b>Git High source → Render build → Deploy → Verify</div><div class="entry"><b>STATUS</b>Illustrative only; not deployed.</div>',Agents:'<div class="entry"><b>REIGN CORE</b>Starter code prepared.</div><div class="entry"><b>REIGN COMPUTER</b>Not connected.</div>',Tools:'<div class="entry"><b>MCP REGISTRY</b>Git High · Render · Browser · Scheduler · Vault</div><div class="entry"><b>STATUS</b>Conceptual tools, not active.</div>'};feed.innerHTML=content[el.dataset.tab];wake()});
+document.getElementById('form').onsubmit=e=>{e.preventDefault();let input=document.getElementById('message'),s=input.value.trim();if(!s)return;let a=document.createElement('div');a.className='entry';let b=document.createElement('b');b.textContent='YOU';a.append(b,document.createTextNode(s));feed.append(a);let reply=document.createElement('div');reply.className='entry';reply.innerHTML='<b>REIGN</b>Mockup only. Live conversation will be connected later.';feed.append(reply);feed.scrollTop=feed.scrollHeight;input.value='';wake()};
+
+// Mock remote-computer workflow. No network requests, remote commands, or credentials.
+const remoteSteps=[
+ {title:'Git High · REIGN Core',url:'🔒 alambda-forge.onrender.com/jameshill/Reign-core',body:'<span class="chip">Repositories</span><span class="chip">Reign-core</span><span class="chip">Branches</span><p>Opening the source repository and inspecting its files.</p>',cmd:'$ git status\nOn branch main\nWorking tree clean',mini:'Opening Git High…',x:'64%',y:'30%'},
+ {title:'REIGN Computer · Workspace',url:'🖥️ /workspace/reign-core',body:'<span class="chip">app/</span><span class="chip">Dockerfile</span><span class="chip">render.yaml</span><p>Inspecting the application and deployment configuration.</p>',cmd:'$ ls -la\napp/  Dockerfile  requirements.txt  render.yaml\n$ python -m compileall app\nCompilation successful',mini:'Inspecting source files…',x:'37%',y:'58%'},
+ {title:'REIGN Computer · Test Runner',url:'🖥️ terminal /workspace/reign-core',body:'<span class="chip">Tests</span><span class="chip">API</span><span class="chip">Docker</span><p>Running the mock test workflow.</p>',cmd:'$ pytest -q\n1 passed in 0.23s\n$ docker build -t reign-core .\nSimulated image build complete',mini:'Running tests and build…',x:'71%',y:'71%'},
+ {title:'Render · Deployment',url:'🔒 dashboard.render.com / reign-core',body:'<span class="chip">Build</span><span class="chip">Deploy</span><span class="chip">Logs</span><p>Following an illustrative deployment timeline.</p>',cmd:'[build] Image assembled\n[deploy] Starting service…\n[health] GET /health → 200\nDemo complete — not actually deployed',mini:'Watching Render deploy…',x:'54%',y:'43%'},
+ {title:'REIGN · Task Complete',url:'🖥️ REIGN Computer / summary',body:'<span class="chip">Review</span><span class="chip">Logs</span><span class="chip">Approve</span><p>REIGN would summarize changes and request your approval for consequential actions.</p>',cmd:'$ echo "Mock workflow complete"\nNo real repository changes or deployments occurred.',mini:'Reviewing simulated result…',x:'75%',y:'36%'}
+];
+let remoteIndex=0,remotePaused=false,remoteTaken=false,remoteTimer=null;
+const remoteOverlay=document.getElementById('remoteOverlay');
+function renderRemote(){const s=remoteSteps[remoteIndex];document.getElementById('remoteTitle').textContent=s.title;document.getElementById('remoteAddress').textContent=s.url;document.getElementById('remoteContent').innerHTML=s.body;document.getElementById('remoteTerminal').textContent=s.cmd;document.getElementById('miniStep').textContent=s.mini;document.getElementById('miniCode').textContent=s.cmd.split('\n').slice(0,2).join(' · ');document.getElementById('remotePointer').style.left=s.x;document.getElementById('remotePointer').style.top=s.y;document.getElementById('miniPointer').style.left=s.x;document.getElementById('miniPointer').style.top=s.y;document.getElementById('remoteStatus').textContent=remoteTaken?'Demo takeover: click the desktop to move the pointer.':remotePaused?'Paused — press Resume to continue.':`REIGN is working · Step ${remoteIndex+1} of ${remoteSteps.length} (simulation)`;}
+function advanceRemote(){if(remotePaused||remoteTaken)return;remoteIndex=(remoteIndex+1)%remoteSteps.length;renderRemote()}
+remoteTimer=setInterval(advanceRemote,3100);renderRemote();
+document.getElementById('expandRemote').onclick=()=>{remoteOverlay.classList.add('open');renderRemote()};
+document.getElementById('screenCard').addEventListener('click',e=>{if(e.target.id!=='expandRemote'){remoteOverlay.classList.add('open');renderRemote()}});
+document.getElementById('closeRemote').onclick=()=>remoteOverlay.classList.remove('open');
+document.getElementById('pauseRemote').onclick=e=>{remotePaused=!remotePaused;e.currentTarget.textContent=remotePaused?'▶ Resume':'⏸ Pause';renderRemote()};
+document.getElementById('restartRemote').onclick=()=>{remoteIndex=0;remotePaused=false;remoteTaken=false;document.getElementById('pauseRemote').textContent='⏸ Pause';document.getElementById('takeoverRemote').hidden=false;document.getElementById('returnRemote').hidden=true;renderRemote()};
+document.getElementById('takeoverRemote').onclick=()=>{remoteTaken=true;document.getElementById('takeoverRemote').hidden=true;document.getElementById('returnRemote').hidden=false;renderRemote()};
+document.getElementById('returnRemote').onclick=()=>{remoteTaken=false;document.getElementById('takeoverRemote').hidden=false;document.getElementById('returnRemote').hidden=true;renderRemote()};
+document.getElementById('remoteScreen').onclick=e=>{if(!remoteTaken)return;const box=e.currentTarget.getBoundingClientRect();document.getElementById('remotePointer').style.left=((e.clientX-box.left)/box.width*100)+'%';document.getElementById('remotePointer').style.top=((e.clientY-box.top)/box.height*100)+'%'};
+document.addEventListener('keydown',e=>{if(e.key==='Escape')remoteOverlay.classList.remove('open')});
+</script></body></html>

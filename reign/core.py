@@ -25,7 +25,10 @@ def authorize(request: Request):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.http = httpx.AsyncClient(timeout=60.0, trust_env=False)
+    from reign.agent import AgentRuntime
+    app.state.agent = AgentRuntime()
     yield
+    await app.state.agent.shutdown()
     await app.state.http.aclose()
 
 
@@ -176,3 +179,35 @@ async def input_event(sid: uuid.UUID, data: InputRequest):
 @app.delete("/api/sessions/{sid}", dependencies=[Depends(authorize)])
 async def close(sid: uuid.UUID):
     return (await worker("DELETE", f"/sessions/{sid}")).json()
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    thread_id: uuid.UUID | None = None
+    session_id: uuid.UUID | None = None
+
+
+@app.get("/api/agent", dependencies=[Depends(authorize)])
+async def agent_capabilities():
+    return app.state.agent.capabilities()
+
+
+@app.post("/api/chat", dependencies=[Depends(authorize)])
+async def chat(data: ChatRequest):
+    return app.state.agent.submit(data.message, str(data.thread_id) if data.thread_id else None,
+                                  str(data.session_id) if data.session_id else None)
+
+
+@app.get("/api/chat/{tid}", dependencies=[Depends(authorize)])
+async def chat_state(tid: uuid.UUID):
+    return app.state.agent.get(str(tid)).snapshot()
+
+
+@app.post("/api/chat/{tid}/resume", dependencies=[Depends(authorize)])
+async def chat_resume(tid: uuid.UUID):
+    return await app.state.agent.resume(str(tid))
+
+
+@app.delete("/api/chat/{tid}", dependencies=[Depends(authorize)])
+async def chat_delete(tid: uuid.UUID):
+    return await app.state.agent.delete(str(tid))

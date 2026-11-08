@@ -8,6 +8,7 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from pydantic import BaseModel
 
@@ -48,6 +49,10 @@ async def lifespan(app):
     await app.state.http.aclose()
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+ASSETS = Path(__file__).resolve().parent.parent / "ax_static"
+if not ASSETS.is_dir():
+    ASSETS = Path(__file__).resolve().parent.parent / "services" / "ax"
+app.mount("/assets", StaticFiles(directory=ASSETS), name="assets")
 
 class Login(BaseModel):
     password: str
@@ -62,6 +67,21 @@ async def console():
 @app.get("/healthz")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/api/me")
+async def me(request: Request):
+    user(request)
+    return JSONResponse({"authenticated": True, "capabilities": {
+        "managed_browser": True, "external_computer": False,
+        "voice": False, "ai_chat": True}}, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/status")
+async def workspace_status(request: Request):
+    user(request)
+    return JSONResponse((await core("GET", "/api/readyz")).json(),
+                        headers={"Cache-Control": "no-store"})
 
 @app.post("/login")
 async def login(data: Login):
@@ -140,3 +160,33 @@ async def action(sid: str, action: str, request: Request):
 async def close(sid: str, request: Request):
     csrf(request)
     return (await core("DELETE", f"/api/sessions/{session_id(sid)}")).json()
+
+
+@app.get("/api/agent")
+async def agent(request: Request):
+    user(request)
+    return JSONResponse((await core("GET", "/api/agent")).json(), headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/chat")
+async def chat(request: Request):
+    csrf(request)
+    return JSONResponse((await core("POST", "/api/chat", await request.json())).json(), headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/chat/{tid}")
+async def chat_state(tid: str, request: Request):
+    user(request)
+    return JSONResponse((await core("GET", f"/api/chat/{session_id(tid)}")).json(), headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/chat/{tid}/resume")
+async def chat_resume(tid: str, request: Request):
+    csrf(request)
+    return JSONResponse((await core("POST", f"/api/chat/{session_id(tid)}/resume")).json(), headers={"Cache-Control": "no-store"})
+
+
+@app.delete("/api/chat/{tid}")
+async def chat_delete(tid: str, request: Request):
+    csrf(request)
+    return (await core("DELETE", f"/api/chat/{session_id(tid)}")).json()
