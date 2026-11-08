@@ -4,6 +4,7 @@ Reads potentially secret plan JSON on stdin; prints only addresses and actions.
 This intentionally cannot authorize changes to Workmates or existing Git High.
 """
 import json
+import re
 import sys
 
 EXPECTED = {
@@ -28,6 +29,8 @@ def validate(plan):
             raise ValueError("Plan includes a resource outside the REIGN pilot")
         if actions not in (["no-op"], ["create"], ["update"]):
             raise ValueError("Deletes, replacements, and unknown actions require a separate review")
+        if change.get("importing"):
+            raise ValueError("Adopting existing infrastructure requires a separate review")
         if any(value.get("id") in PROTECTED_IDS for value in (before, after)):
             raise ValueError("Plan touches an existing protected service")
         if after.get("name") != EXPECTED[address]:
@@ -36,7 +39,16 @@ def validate(plan):
             raise ValueError("Pilot must stay in Oregon with one instance per service")
         if after.get("plan") not in ("starter", "standard"):
             raise ValueError("Unreviewed compute plan")
-        summaries.append(f"{address}: {','.join(actions)} ({after['plan']})")
+        image = (after.get("runtime_source") or {}).get("image") or {}
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", image.get("digest", "")):
+            raise ValueError("Image digest must be known and immutable")
+        disk = after.get("disk")
+        previous_disk = before.get("disk")
+        if previous_disk and any(previous_disk.get(key) != (disk or {}).get(key) for key in ("name", "mount_path", "size_gb")):
+            raise ValueError("Existing persistent disk changes require a separate review")
+        if disk and (address != 'render_private_service.temporal["pilot"]' or disk.get("size_gb") != 1 or disk.get("mount_path") != "/data"):
+            raise ValueError("Unreviewed disk configuration")
+        summaries.append(f"{address}: {','.join(actions)} ({after['plan']}); image {image.get('image_url')}@{image['digest']}; disk {disk.get('size_gb') if disk else 0} GB")
     return summaries
 
 

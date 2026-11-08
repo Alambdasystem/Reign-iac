@@ -25,6 +25,7 @@ jobs:
       - run: tofu -chdir=infra/render init -backend=false -input=false -lockfile=readonly
       - run: tofu -chdir=infra/render validate -no-color
       - run: tofu -chdir=infra/render test -no-color
+      - run: test ! -f infra/render/errored_test.tfstate
       - run: python3 -m unittest discover -s tests -v
       - run: python3 -m compileall -q reign scripts
   containers:

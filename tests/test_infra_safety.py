@@ -1,4 +1,3 @@
-import copy
 import unittest
 
 from scripts.check_plan import validate
@@ -8,6 +7,7 @@ from scripts.preflight import check
 class PlanPolicyTests(unittest.TestCase):
     def plan(self, **updates):
         service = {"name": "reign-core-pilot", "region": "oregon", "num_instances": 1, "plan": "starter"}
+        service["runtime_source"] = {"image": {"image_url": "example.invalid/reign/core", "digest": "sha256:" + "a" * 64}}
         service.update(updates)
         return {"planned_values": {}, "resource_changes": [{
             "address": 'render_private_service.core["pilot"]',
@@ -50,6 +50,23 @@ class PlanPolicyTests(unittest.TestCase):
 
     def test_summary_contains_no_environment_secrets(self):
         self.assertNotIn("sensitive-test-value", str(validate(self.plan(env_vars={"TOKEN": "sensitive-test-value"}))))
+
+    def test_disk_removal_or_resize_is_blocked(self):
+        for disk in (None, {"name": "data", "mount_path": "/data", "size_gb": 2}):
+            plan = self.plan(disk=disk)
+            plan["resource_changes"][0]["change"]["before"] = {"disk": {"name": "data", "mount_path": "/data", "size_gb": 1}}
+            with self.subTest(disk=disk), self.assertRaises(ValueError):
+                validate(plan)
+
+    def test_mutable_image_is_blocked(self):
+        with self.assertRaises(ValueError):
+            validate(self.plan(runtime_source={"image": {"image_url": "example.invalid/reign/core", "tag": "latest"}}))
+
+    def test_import_is_blocked(self):
+        plan = self.plan()
+        plan["resource_changes"][0]["change"]["importing"] = {"id": "srv-existing"}
+        with self.assertRaises(ValueError):
+            validate(plan)
 
 
 class PreflightTests(unittest.TestCase):

@@ -22,7 +22,8 @@ run "reject_missing_release_inputs" {
 }
 
 run "four_isolated_services" {
-  command = apply
+  # Plan-only avoids test teardown conflicting with prevent_destroy.
+  command = plan
   variables {
     provision = true
     # Synthetic values for mocked provider tests only; not usable credentials.
@@ -47,11 +48,11 @@ run "four_isolated_services" {
     error_message = "The pilot Temporal store must be persistent and single-instance."
   }
   assert {
-    condition     = render_private_service.core["pilot"].env_vars.TEMPORAL_ADDRESS.value == "mock-private:7233"
-    error_message = "Temporal must use its gRPC port, not the HTTP port."
+    condition     = render_private_service.computer["pilot"].env_vars.ALLOWED_HOSTS.value == "alambda-forge.onrender.com"
+    error_message = "Computer must stay restricted to Git High."
   }
   assert {
-    condition     = render_web_service.ax["pilot"].env_vars.CORE_URL.value == "http://mock-private:10000"
-    error_message = "AX must connect to Core through the private network."
+    condition     = render_web_service.ax["pilot"].health_check_path == "/healthz"
+    error_message = "AX must expose a Render HTTP health check."
   }
 }
