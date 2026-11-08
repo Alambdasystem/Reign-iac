@@ -14,9 +14,10 @@ class CoreTests(unittest.TestCase):
     def test_private_endpoints_require_token(self):
         with patch.dict(os.environ, {"CORE_TOKEN": "x" * 40}):
             with TestClient(app) as client:
-                for path in ("/api/readyz", "/api/sessions"):
+                for path in ("/api/readyz",):
                     with self.subTest(path=path):
                         self.assertEqual(client.get(path).status_code, 401)
+                self.assertEqual(client.post("/api/sessions", json={}).status_code, 401)
 
     def test_disallowed_navigation_rejected_before_dispatch(self):
         with patch.dict(os.environ, {"CORE_TOKEN": "x" * 40}):
