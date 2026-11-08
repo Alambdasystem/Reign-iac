@@ -103,6 +103,10 @@ class BrowserSessions:
             s = self.get(sid)
             if epoch != s["epoch"]:
                 raise HTTPException(409, "Stale control state; refresh the session")
+            if mode == s["mode"]:
+                raise HTTPException(409, "Control already belongs to requested controller")
+            if (s["mode"], mode) not in {("agent", "human"), ("human", "agent")}:
+                raise HTTPException(409, "Invalid control transition")
             s["mode"] = mode
             s["epoch"] += 1
             return await self.info(sid)
