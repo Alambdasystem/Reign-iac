@@ -1,5 +1,7 @@
 name: REIGN application validation
 on:
+  push:
+    branches: [main, feat/configurable-computer-profiles]
   pull_request:
     paths:
       - 'reign/**'
