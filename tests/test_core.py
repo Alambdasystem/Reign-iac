@@ -28,6 +28,21 @@ class CoreTests(unittest.TestCase):
                     json={"url": "https://example.org"})
                 self.assertEqual(response.status_code, 422)
 
+    def test_database_readiness_is_authenticated_and_fails_closed(self):
+        token = "x" * 40
+        headers = {"Authorization": "Bearer " + token}
+        with patch.dict(os.environ, {"CORE_TOKEN": token}):
+            with TestClient(app) as client:
+                self.assertEqual(client.get("/api/database/readyz").status_code, 401)
+                with patch("reign.database.probe_reign_database", new_callable=AsyncMock) as probe:
+                    probe.return_value = True
+                    self.assertEqual(client.get("/api/database/readyz", headers=headers).json(),
+                                     {"status": "ready", "schema": "reign"})
+                    probe.return_value = False
+                    self.assertEqual(client.get("/api/database/readyz", headers=headers).status_code, 503)
+                    probe.side_effect = ConnectionError("private database unavailable")
+                    self.assertEqual(client.get("/api/database/readyz", headers=headers).status_code, 503)
+
     def test_ready_requires_both_temporal_and_computer(self):
         token = "x" * 40
         headers = {"Authorization": "Bearer " + token}
