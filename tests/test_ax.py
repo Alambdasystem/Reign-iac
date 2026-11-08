@@ -18,6 +18,8 @@ class AXTests(unittest.TestCase):
                 self.assertEqual(client.post("/login", json={"password": "bad"}).status_code, 401)
                 self.assertEqual(client.post("/login", json={"password": "p" * 40}).status_code, 200)
                 self.assertEqual(client.get("/api/sessions/not-a-uuid").status_code, 422)
+                self.assertEqual(client.get("/api/sessions/not-a-uuid").status_code, 401)
+                # Authenticated requests are validated before forwarding to Core.
                 self.assertEqual(client.post("/api/sessions", json={}).status_code, 403)
                 self.assertEqual(client.post("/api/sessions", headers={"Origin": "https://evil.example",
                     "x-csrf-token": client.cookies.get("ax_csrf")}, json={}).status_code, 403)
