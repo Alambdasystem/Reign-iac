@@ -37,9 +37,11 @@ to `true`. Do not enable it before the following setup is verified.
    These environments now exist with `main`-only rules. Apply requires review by
    `Alambdasystem`; administrator bypass is disabled. Self-review is permitted
    because only this owner is configured; add a designated second reviewer before
-   enabling independent approval. Main branch protection is prepared but not
-   saved: GitHub requested account verification. Finish that verification and
-   verify required PRs and all four validation checks before deployment.
+   enabling independent approval. Main branch protection is saved and verified:
+   PRs, up-to-date branches, resolved conversations and all four GitHub Actions
+   validation checks are required. Administrators cannot bypass these rules;
+   force pushes and branch deletion are disabled. This pilot does not require
+   an additional PR reviewer; the apply environment requires explicit review.
 4. In both plan/apply environments set the same variables `TF_HTTP_ADDRESS`,
    `TF_HTTP_LOCK_ADDRESS`, `TF_HTTP_UNLOCK_ADDRESS`; the backend must support
    default POST update and LOCK/UNLOCK methods. Adapt explicitly for other servers.
