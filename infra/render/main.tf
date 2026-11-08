@@ -73,6 +73,9 @@ resource "render_web_service" "ax" {
     CORE_URL       = { value = "http://${local.core_host}:10000" }
     CORE_TOKEN     = { value = var.runtime_secrets.core_token }
     AX_SESSION_KEY = { value = var.runtime_secrets.ax_session_key }
+    AX_ADMIN_PASSWORD = { value = var.runtime_secrets.ax_admin_password }
+    AX_PUBLIC_ORIGIN = { value = var.ax_public_origin }
+    AX_ALLOW_INTERNAL_HTTP = { value = "1" }
   }
   previews = { generation = "off" }
   lifecycle { prevent_destroy = true }
