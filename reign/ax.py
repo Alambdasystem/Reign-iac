@@ -2,10 +2,11 @@
 import os
 import secrets
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from pydantic import BaseModel
 
@@ -48,6 +49,10 @@ app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None
 
 class Login(BaseModel):
     password: str
+
+@app.get("/")
+async def console():
+    return FileResponse(Path(__file__).resolve().parent.parent / "ax_static" / "index.html", headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
 @app.get("/healthz")
 async def health():
