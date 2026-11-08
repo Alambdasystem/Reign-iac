@@ -91,6 +91,19 @@ async def ready():
     return {"status": "ready", "components": {"core": "ready", "temporal": "ready", "computer": "ready"}}
 
 
+@app.get("/api/database/readyz", dependencies=[Depends(authorize)])
+async def database_ready():
+    """Read-only REIGN schema permission probe, never a migration endpoint."""
+    from reign.database import probe_reign_database
+    try:
+        permitted = await probe_reign_database()
+    except Exception:
+        raise HTTPException(503, "REIGN database unavailable")
+    if not permitted:
+        raise HTTPException(503, "REIGN database role lacks schema access")
+    return {"status": "ready", "schema": "reign"}
+
+
 @app.post("/api/sessions", dependencies=[Depends(authorize)])
 async def open_session(data: OpenRequest):
     try:
