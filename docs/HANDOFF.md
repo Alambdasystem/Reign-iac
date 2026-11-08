@@ -1,30 +1,32 @@
-## In progress: approved UltraView and LangGraph rollout (2026-11-08)
+## Live: approved UltraView + LangChain/LangGraph (2026-11-08)
 
-User authorized deploying the original UltraView AX design and using Workmates'
-OpenAI connection, with active LangChain/LangGraph orchestration. Implementation
-is in this change; do not label it live until the immutable image promotion and
-Render acceptance receipt below are recorded.
+Your original UltraView AX design is deployed at
+https://reign-ax-pilot-d934.onrender.com/. Source cf95a713, PR7; promotion PR8.
+All four CI checks and the tested-image release passed. The live authenticated
+API acceptance at 23:54:42Z passed using actual OpenAI gpt-6-astra, inherited from
+Workmates through Render secret/model references. No secret values were copied
+into source, AX or browser storage. Workmates was unchanged.
 
-- Original design preserved under `docs/design/UltraView_AX_v1.html`; live UI uses
-  its ruby fluid/orb/canvas and mobile layout, with real browser ownership,
-  reconnect, session restore and expanded remote view.
-- LangChain ChatOpenAI uses Workmates' Responses API pattern. LangGraph runs
-  bounded model/tool loops, memory, trace events, and pause/resume checkpoints.
-- Connect Core's OPENAI_API_KEY and OPENAI_MODEL through Render `fromService`
-  references to existing workmates-api; never copy secrets into source or AX.
-- Keep existing paid resource sizes, Blueprint ownership and autoSync=false.
-  Publish tested images, pin Core/AX digests, review plan, then verify actual
-  OpenAI tools plus live takeover/handback with `reign.live_acceptance`.
-- Voice, durable agent memory, restricted DB permissions and external desktop
-  adapters remain separate unfinished integrations. Remote computers must support
-  both provisioned managed workers and user-supplied endpoints, with credential
-  references, connectivity checks, explicit capability discovery, and the same
-  takeover/epoch fences. Never treat an arbitrary URL as a compatible desktop.
+LangChain ChatOpenAI uses the Responses API; LangGraph actively runs conversation
+memory, bounded model/tool loops, trace events, token usage and checkpointed
+pause/resume. Actual browser navigation paused under human control and resumed
+through Temporal after handback. The live browser controls retain epoch fencing.
 
-# Continue REIGN from another ChatGPT session
+See [deployment receipt](deployments/2026-11-08-ultraview-langgraph.md) and
+[sanitized live acceptance](deployments/2026-11-08-ultraview-acceptance.json).
+The Blueprint uses normal AX startup, with the temporary verifier removed.
+Human acceptance by James has not yet been performed. CI tested the authenticated UI at mobile and desktop
+sizes; live verification exercised the public authenticated API chain.
 
-Temporary repository: https://github.com/Alambdasystem/Reign-iac
-Long-term destination: https://alambda-forge.onrender.com/
+Remaining: voice, durable LangGraph checkpoints, restricted REIGN DB access and
+external desktop adapters. Current conversation memory is process-local. Keep
+the existing Blueprint as sole owner, autoSync=false, and the same resource sizes.
+The shared database and unrelated services remain unchanged.
+
+Remote-computer requirement: support both provisioned managed workers and
+user-supplied endpoints, with secure credential references, connectivity checks,
+capability discovery and the same takeover/epoch fences. An arbitrary URL alone
+is not a compatible desktop connection. Preserve this in the next implementation.
 
 ## Approved deployment checkpoint (2026-11-08)
 

@@ -1,0 +1,35 @@
+{
+  "verification": "ultraview-live-api",
+  "status": "passed",
+  "human_acceptance": "not_run",
+  "live_ui_browser": "not_run",
+  "session_id": "043739b7-96e6-4d76-b1c8-2b74eccc1437",
+  "workflow_id": "reign-open-043739b7-96e6-4d76-b1c8-2b74eccc1437",
+  "model": "gpt-6-astra",
+  "agent_tools": [
+    "browser_status",
+    "workspace_status"
+  ],
+  "agent_usage": {
+    "input_tokens": 1647,
+    "output_tokens": 102
+  },
+  "live_llm": "passed",
+  "langgraph_pause_resume": "passed",
+  "checks": [
+    "public_frontend",
+    "dependencies",
+    "authentication",
+    "csrf",
+    "temporal_browser_open",
+    "fresh_frames",
+    "takeover",
+    "handback",
+    "stale_input",
+    "cleanup"
+  ],
+  "observed_at": "2026-11-08T23:54:42.315567723Z",
+  "ax_deploy": "dep-dbogn9u417fc73873f6g",
+  "core_deploy": "dep-dbogm7jrjlhs73bd07eg",
+  "source_sha": "cf95a713ba6c7a6c7f3f3bc79a20f3036517dfaf"
+}
