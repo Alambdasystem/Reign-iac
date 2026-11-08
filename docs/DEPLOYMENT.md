@@ -19,11 +19,14 @@ These files alone do not configure GitHub environments, secrets or a state
 server. The apply job is disabled unless `REIGN_APPLY_ENABLED` is explicitly set
 to `true`. Do not enable it before the following setup is verified.
 
-## Required setup (not yet completed)
+## Required setup and current status
 
-1. Implement and test Core and AX per the contracts; complete Computer acceptance
-   and E2E tests. Build all four linux/amd64 images. Replace the disabled release
-   manifest with the four audited image repositories/digests and `provision:true`.
+1. Four linux/amd64 images have passed automated browser acceptance and were
+   published by release run 42527962724 from commit `bd01832f2b29c5587e763adbc6f17481fba74f64`.
+   The release manifest now pins their digests, and remains `provision:false`.
+   Anonymous registry manifest reads verified all four exact digests; the images
+   are public. Verify actual Render pulls during deployment. Complete setup before proposing
+   `provision:true` in a reviewed infrastructure change.
    Render private-registry credential IDs can be supplied per image; passwords
    cannot be placed in the manifest.
 2. Select an existing HTTPS state backend that implements OpenTofu HTTP state
@@ -31,9 +34,12 @@ to `true`. Do not enable it before the following setup is verified.
    repository/file URL is not a state backend. No state service was provisioned.
    Validate competing-client lock rejection and restore before the first apply.
 3. Configure `reign-plan`, `reign-release`, and `reign-apply` GitHub environments.
-   Restrict them to `main`. Require human review for `reign-apply` and prevent
-   self-review/bypass where the account permits. Environment creation/protection
-   has not been performed or verified. Protect `main` with validation checks.
+   These environments now exist with `main`-only rules. Apply requires review by
+   `Alambdasystem`; administrator bypass is disabled. Self-review is permitted
+   because only this owner is configured; add a designated second reviewer before
+   enabling independent approval. Main branch protection is prepared but not
+   saved: GitHub requested account verification. Finish that verification and
+   verify required PRs and all four validation checks before deployment.
 4. In both plan/apply environments set the same variables `TF_HTTP_ADDRESS`,
    `TF_HTTP_LOCK_ADDRESS`, `TF_HTTP_UNLOCK_ADDRESS`; the backend must support
    default POST update and LOCK/UNLOCK methods. Adapt explicitly for other servers.
@@ -49,7 +55,11 @@ to `true`. Do not enable it before the following setup is verified.
 6. Run **plan**. Review the exact source commit, resource names, plans, image
    digests, disk and current pricing. Get James's approval for the concrete cost.
    Defaults request starter for AX/Core, standard for Temporal/Computer, and
-   1 GB persistent disk. No budget approval or live pricing quote is recorded.
+   1 GB persistent disk. The 2026-11-08 published-price estimate is $64.25/month
+   ($7 Core + $7 AX + $25 Computer + $25 Temporal + $0.25 disk), excluding usage,
+   tax, workspace changes and any extra state/database service. Source:
+   https://render.com/pricing. This is a budget estimate, not an actual plan or
+   approved spend. No paid resources were created.
 7. Only then set `REIGN_APPLY_ENABLED=true`, dispatch **apply** with the cost
    approval checkbox, and review the newly generated plan before approving the
    `reign-apply` environment. The job consumes the encrypted plan from that same

@@ -1,0 +1,28 @@
+{
+  "source_sha": "bd01832f2b29c5587e763adbc6f17481fba74f64",
+  "acceptance": {
+    "status": "passed",
+    "source_sha": "bd01832f2b29c5587e763adbc6f17481fba74f64",
+    "workflow": {
+      "workflow_id": "reign-open-e31a0400-5173-4868-afcb-247d59ae59d3",
+      "run_id": "01a1bd2e-1285-7854-bda5-f7d207bb4018",
+      "completed_activities": 1
+    },
+    "restart_session": "def70033-0397-4603-ba32-bd1803d6b28f",
+    "restart_workflow": {
+      "workflow_id": "reign-open-def70033-0397-4603-ba32-bd1803d6b28f",
+      "run_id": "01a1bd2e-1c45-7b52-b911-b03480ceac6c",
+      "completed_activities": 1
+    },
+    "authenticated_ui": "passed",
+    "live_frames": "passed",
+    "takeover_handback": "passed",
+    "stale_commands": "passed",
+    "cleanup": "passed",
+    "human_acceptance": "not_run",
+    "target": "https://alambda-forge.onrender.com/",
+    "restart_expiry": "passed",
+    "temporal_persistence": "passed"
+  },
+  "promotion": "Requires cost approval, registry pull verification and OpenTofu plan/apply"
+}

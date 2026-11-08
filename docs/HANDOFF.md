@@ -21,9 +21,9 @@ in prompts and do not assume switching modes guarantees a particular credit cost
 > docs/APPLICATION_CONTRACTS.md and the latest CI results first. Confirm your actual
 > repository read/write capability. Keep infrastructure ownership in OpenTofu;
 > GitHub is temporary and Git High is the intended long-term source of truth.
-> Implement REIGN Core and UltraView AX as independent Docker services, complete
-> and test the experimental Computer worker, and use the existing Temporal pilot
-> container. First implement the configurable computer requirement below: let
+> Preserve the tested four-service managed-browser pilot and its release digests.
+> Finish deployment setup from the verified checkpoint below. Continue the
+> configurable computer requirement in a separate application change: let
 > James create a managed computer or connect an existing one by URL plus secure
 > remote-access setup. Keep browser and full desktop capabilities explicit and
 > use one Core/AX session contract across adapters. Implement authenticated live
@@ -101,6 +101,35 @@ against a real supported desktop before marking it complete; report unavailable
 adapters as unsupported or blocked. Mock tests do not prove remote access.
 Retain the documented Git High E2E flow and James's actual human acceptance.
 
+## Verified recovery checkpoint (2026-11-08)
+
+- PR #1 is merged at `bd01832f2b29c5587e763adbc6f17481fba74f64`.
+- Main CI [42527808432](https://github.com/Alambdasystem/Reign-iac/actions/runs/42527808432)
+  passed infrastructure validation/mock tests, 45 Python tests, six disposable
+  PostgreSQL integration tests, and all four Docker builds plus browser acceptance.
+- Release run [42527962724](https://github.com/Alambdasystem/Reign-iac/actions/runs/42527962724)
+  rebuilt and tested the exact images before publishing all four to GHCR.
+  `deploy/release.json` pins those registry digests with `provision:false`.
+  `deploy/provenance.json` records the source and actual acceptance results.
+  The downloaded release artifact SHA-256 matched GitHub's artifact digest.
+- Anonymous GHCR manifest reads returned HTTP 200 and the exact recorded digest
+  for all four images. No private registry credential is needed for these public
+  images; actual Render image pulls remain part of live deployment verification.
+- Automated acceptance exercised AX login, live frames, Core/Temporal dispatch,
+  takeover/handback, stale-command rejection, cleanup, session expiry after a
+  worker restart and persisted Temporal history. James's human acceptance and
+  live Render acceptance are still **not run**.
+- GitHub environments `reign-plan`, `reign-release` and `reign-apply` now exist
+  and accept only branch `main`. Apply requires `Alambdasystem` review and
+  disables administrator bypass. Self-review remains allowed for the sole
+  configured reviewer; no independent second approver has been designated.
+- Main branch protection was prepared with all four CI checks, required PRs,
+  current-branch checks and no admin bypass. Saving reached GitHub's account
+  verification screen; the API still reports `protected:false`. Do not call it
+  enforced until the owner completes verification and the rule is read back.
+- Jim's Render workspace is `tea-dbdccfpsrm7s73b8rugg`. No REIGN pilot services
+  exist there. No live Render services or shared database objects were changed.
+
 ## Still outstanding
 
 - Configurable computer profiles, managed/external adapters and connection setup;
@@ -110,9 +139,9 @@ Retain the documented Git High E2E flow and James's actual human acceptance.
   checks; consult the exact commit's run before claiming they passed.
 - Real external-computer adapters and user-owned connection acceptance remain
   unfinished; the profile/interface types are groundwork only.
-- GitHub protected environments/branch policy, CI secrets, state server and lock
-  verification; these require account configuration not accomplished by YAML.
-- Four released container digests; Render private-registry credentials if needed.
+- Finish GitHub branch-protection account verification, populate deployment
+  secrets/variables, select the state server and verify locks/restores.
+- Confirm successful pulls of the pinned public images during live deployment.
 - Current price review, explicit paid approval, actual OpenTofu plan/apply.
 - Live per-service verification, browser E2E and human acceptance.
 - Authenticated Git High source migration and later Tailscale integration.
@@ -144,11 +173,13 @@ or an authorization to enroll devices, expose ports, or spend an unbounded amoun
 5. Move one workload at a time with measured rollback and preserve the working
    Render deployment until the replacement passes live acceptance.
 
-**Current blockers to first live apply:** select the Render workspace; confirm
-the existing database's capacity/permissions; configure GitHub deployment
-environments, secrets, locked OpenTofu state backend and registry pull access;
-publish reviewed image digests and inspect an actual costed plan. CI success
-alone is not live deployment evidence.
+**Current blockers to first live apply:** finish branch verification and secrets,
+verify the locked OpenTofu state backend and registry pull access, and inspect an
+actual costed plan. If enabling database persistence, confirm the existing
+database's capacity/permissions from an authorized private-network connection.
+The hosted DB connector cannot reach it because its external allowlist is empty;
+do not open it broadly to make the connector work. CI success alone is not live
+deployment evidence.
 
 ## Recovery changes (2026-11-08)
 
@@ -159,6 +190,6 @@ four-service smoke exercises the actual AX browser UI and Temporal activities,
 including takeover, stale input and restart recovery. CD publishes tested image
 digests as a disabled candidate; OpenTofu remains the only deployment owner.
 No Render services or live database objects were changed during this recovery.
-Live configuration remains blocked on protected GitHub environment/secrets
-access, a verified locked HTTP state backend, registry pull access and cost
-approval. The hosted DB connector cannot reach the private database.
+Live configuration remains blocked on GitHub secrets and branch verification,
+a verified locked HTTP state backend, registry pull access and cost approval.
+The hosted DB connector cannot reach the private database.
