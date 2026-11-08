@@ -3,23 +3,19 @@
 Temporary repository: https://github.com/Alambdasystem/Reign-iac
 Long-term destination: https://alambda-forge.onrender.com/
 
-## Pending deployment-method decision
+## Approved deployment checkpoint (2026-11-08)
 
-PR #4 prepares a Render-managed alternative to the original OpenTofu path:
-https://github.com/Alambdasystem/Reign-iac/pull/4
-Read `docs/RENDER_MANAGED_PROPOSAL.md` before proceeding. The preview creates four
-new pilot services with the same tested digests and approximately $64.25/month
-base compute/disk cost. No existing services or shared database are changed.
-The initial alternative has no REIGN database persistence. James's existing
-budget approval is recorded; changing the deployment owner and postponing live
-database setup still requires his explicit decision.
+James approved the Render Blueprint ownership change, four-service base budget
+of approximately $64.25/month, and initial launch without REIGN database
+persistence. PR #4 is merged at `0cd627ea483060b4b41570b9960a7e7a8cf5356f`.
+The existing Blueprint `exs-dbofqkm417fc7384kou0` was applied from main with
+auto-sync off. Do not ask for the same approval again or create a second pilot.
+The legacy OpenTofu workflow is disabled; do not run both owners.
 
-Pending Blueprint: `exs-dbofqkm417fc7384kou0`, auto-sync off. It has not been
-applied. The OpenTofu workflow is disabled on this proposed branch, which must
-remain unmerged until that decision. After approval, use this same Blueprint,
-point it to the reviewed main revision and re-plan; never create duplicate pilot
-resources or run both deployment owners. The remainder of this handoff records
-the original OpenTofu path and completed application work.
+Read [DEPLOYMENT_RECEIPT.md](DEPLOYMENT_RECEIPT.md) for the latest live service,
+deploy, startup-fix and verification evidence. That receipt supersedes the
+historical pre-deployment recovery notes below. The shared database and existing
+Workmates, Git High and Moby Alpha services are outside this deployment.
 
 GitHub write access through the Work session's connector was verified with the
 initial commit `dc88c05d29d9eec6fa9798e928c21e66ec9d99e6`. That does not prove a
@@ -37,17 +33,17 @@ in prompts and do not assume switching modes guarantees a particular credit cost
 
 > Continue Alambdasystem/Reign-iac. Read README.md, docs/DEPLOYMENT.md,
 > docs/APPLICATION_CONTRACTS.md and the latest CI results first. Confirm your actual
-> repository read/write capability. Keep infrastructure ownership in OpenTofu;
+> repository read/write capability. Keep pilot infrastructure ownership in Render Blueprint;
 > GitHub is temporary and Git High is the intended long-term source of truth.
 > Preserve the tested four-service managed-browser pilot and its release digests.
-> Finish deployment setup from the verified checkpoint below. Continue the
+> Verify the live receipt and finish outstanding acceptance. Continue the
 > configurable computer requirement in a separate application change: let
 > James create a managed computer or connect an existing one by URL plus secure
 > remote-access setup. Keep browser and full desktop capabilities explicit and
 > use one Core/AX session contract across adapters. Implement authenticated live
 > screen viewing and human takeover with
 > stale-command rejection. Build/publish immutable images through the pipeline,
-> update deploy/release.json only with tested digests, and prepare a concrete
+> update the Blueprint only with tested digests, and prepare a concrete
 > costed plan before seeking approval for paid changes. Preserve Workmates and
 > Git High; never commit secrets. Keep Tailscale/GPU workers deferred. Do not claim
 > deployment or E2E success without actual evidence. Run the documented browser
@@ -57,14 +53,15 @@ in prompts and do not assume switching modes guarantees a particular credit cost
 
 James approved adding this requirement to the handoff before continuing in a new
 session. This update records the design; it does not implement or deploy it.
-Add the connection layer before completing Core and AX so the selected computer
-can change without rewriting the application.
+Profile/interface types now exist, but functional external adapters and the
+Create/Connect setup UI still need implementation. Preserve the shared contract
+so the selected computer can change without rewriting Core and AX.
 
 ### Two user choices
 
 | Choice | Expected behavior |
 |---|---|
-| Create a computer | Start a managed browser worker, or a supported desktop environment when desktop capabilities are needed. Provision infrastructure through OpenTofu after the concrete cost is approved. |
+| Create a computer | Start a managed browser worker, or a supported desktop environment when desktop capabilities are needed. Provision through the approved single infrastructure owner after any new cost is approved. |
 | Connect my computer | Register an existing worker/computer using its connection URL and configured remote access. Test authentication, reachability and capabilities before allowing tasks. Do not provision a replacement silently. |
 
 Distinguish browser access from full desktop access. The existing Computer
@@ -119,7 +116,7 @@ against a real supported desktop before marking it complete; report unavailable
 adapters as unsupported or blocked. Mock tests do not prove remote access.
 Retain the documented Git High E2E flow and James's actual human acceptance.
 
-## Verified recovery checkpoint (2026-11-08)
+## Historical recovery checkpoint, before live apply (2026-11-08)
 
 - PR #1 is merged at `bd01832f2b29c5587e763adbc6f17481fba74f64`.
 - Main CI [42527808432](https://github.com/Alambdasystem/Reign-iac/actions/runs/42527808432)
@@ -152,23 +149,18 @@ Retain the documented Git High E2E flow and James's actual human acceptance.
 
 ## Still outstanding
 
-- Configurable computer profiles, managed/external adapters and connection setup;
-  browser and desktop capabilities must be implemented and verified separately.
-- Core/AX application implementations and Dockerfiles now exist. CI now includes
-  four-service browser acceptance and disposable PostgreSQL migration/isolation
-  checks; consult the exact commit's run before claiming they passed.
-- Real external-computer adapters and user-owned connection acceptance remain
-  unfinished; the profile/interface types are groundwork only.
-- Populate deployment secrets/variables, select the state server and verify
-  locks/restores. Connected app access does not automatically supply credentials
-  to GitHub Actions; keep those credentials in the protected environment UI.
-- Confirm successful pulls of the pinned public images during live deployment.
-- Current price review, explicit paid approval, actual OpenTofu plan/apply.
-- Live per-service verification, browser E2E and human acceptance.
-- Authenticated Git High source migration and later Tailscale integration.
+- Authenticated live dependency readiness and actual Render browser acceptance,
+  including restart recovery; consult the receipt for which checks have run.
+- James's real takeover and handback signoff, distinct from automated CI checks.
+- Configurable managed/external profiles and connection setup. External browser
+  and full-desktop adapters remain unsupported until implemented and tested.
+- Restricted REIGN database role/schema, migrations and private-network validation
+  before enabling database persistence. Do not open the shared DB broadly.
+- Measure resource usage, persistent-disk behavior and actual cost after acceptance.
+- Authenticated Git High source migration; later separately scoped Tailscale work.
 
-Consult live CI for validation results on the current commit. Infrastructure
-validation, mock provider tests and container smoke are separate from deployment.
+CI success and Render deployment status are different evidence. Never substitute
+mocked tests or the public AX health endpoint for authenticated end-to-end testing.
 
 ## Approved deployment direction (2026-11-08)
 
@@ -177,8 +169,8 @@ This is a deployment direction, not approval to bypass infrastructure safety gat
 or an authorization to enroll devices, expose ports, or spend an unbounded amount.
 
 1. Complete Core/AX/Computer/Temporal integration and real browser acceptance.
-2. Deploy on Render with OpenTofu, immutable tested images, isolated credentials,
-   protected state, and explicit protection for Workmates and Git High. Reuse an
+2. Deploy on Render with the approved Blueprint, immutable tested images and
+   generated isolated credentials; preserve Workmates and Git High. Reuse an
    existing PostgreSQL instance only after identifying its workspace, confirming
    capacity and ownership, and isolating REIGN via a separate database/schema and
    restricted role. Keep the pilot Temporal disk unless a migration is tested.
@@ -194,15 +186,12 @@ or an authorization to enroll devices, expose ports, or spend an unbounded amoun
 5. Move one workload at a time with measured rollback and preserve the working
    Render deployment until the replacement passes live acceptance.
 
-**Current blockers to first live apply:** configure deployment secrets,
-verify the locked OpenTofu state backend, and inspect an
-actual costed plan. If enabling database persistence, confirm the existing
-database's capacity/permissions from an authorized private-network connection.
-The hosted DB connector cannot reach it because its external allowlist is empty;
-do not open it broadly to make the connector work. CI success alone is not live
-deployment evidence.
+**Current follow-up:** complete the receipt's live acceptance checks and the
+separate restricted database setup. The hosted DB connector cannot reach the
+shared instance because its external allowlist is empty; do not open it broadly.
+OpenTofu state/provider setup is no longer a prerequisite for this Blueprint pilot.
 
-## Recovery changes (2026-11-08)
+## Historical recovery changes before Blueprint approval (2026-11-08)
 
 The application branch was reconciled with main's four scaffolding commits.
 Two incorrect async HTTP response mocks were fixed. CI is consolidated under

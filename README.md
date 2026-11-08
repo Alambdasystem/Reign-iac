@@ -3,15 +3,15 @@
 Infrastructure first. This repository is the **temporary** source for REIGN;
 [Git High](https://alambda-forge.onrender.com/) is the intended long-term authority.
 
-**Current stage:** infrastructure definitions and CI are being validated. No new
-Render services have been provisioned. Core and UltraView AX pilot application code and Dockerfiles now exist
-on the application branch; use the current CI result to assess validation. The Computer code is an experimental starting point.
-No full browser/human-takeover E2E result has been established.
+**Current stage:** the four-service managed-browser pilot is live on
+Render through Blueprint after successful CI and James's approval. See the current
+[deployment receipt](docs/DEPLOYMENT_RECEIPT.md) for service/deploy IDs and actual
+verification results. Live human acceptance is separate and remains outstanding.
 
 ## Two milestones
 
-1. **Infrastructure as code:** versioned OpenTofu definitions, independent Docker
-   services, secret/state handling, CI validation, reviewed plans, guarded apply,
+1. **Infrastructure as code:** versioned Render Blueprint configuration, independent Docker
+   services, generated runtime secrets, CI validation, reviewed plans, guarded apply,
    and per-service deployment verification.
 2. **End-to-end behavior:** UltraView AX submits a task to Core; Temporal dispatches
    it to Computer; Playwright opens Git High; AX shows live frames; James takes
@@ -36,9 +36,10 @@ reviewed database/cluster and backup design.
 
 Image-based deployments keep the runtime independent of the Git host. Docker
 builds produce immutable SHA256 digests, which are reviewed in
-[`deploy/release.json`](deploy/release.json). OpenTofu is the sole owner of these
-Render resources; do not also create a Blueprint for them or change image digests
-through an unrelated deploy hook.
+[`deploy/release.json`](deploy/release.json). Render Blueprint is the sole owner of the pilot
+resources. Its pinned digests are in `deploy/render-pilot.proposed.yaml` (the
+original proposal filename is retained). The legacy OpenTofu workflow is disabled;
+its release manifest remains `provision:false` and must not manage these services.
 
 Workmates and the existing Git High service are outside this configuration.
 The plan policy protects their known IDs; nothing is imported or renamed.
@@ -67,4 +68,4 @@ restart recovery. It does not establish deployed or human acceptance.
 
 Read [deployment setup](docs/DEPLOYMENT.md),
 [application contracts](docs/APPLICATION_CONTRACTS.md), and
-[the next-session handoff](docs/HANDOFF.md) before enabling anything.
+[the next-session handoff](docs/HANDOFF.md) before changing the deployment.

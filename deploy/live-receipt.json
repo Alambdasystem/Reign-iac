@@ -1,0 +1,64 @@
+{
+  "verified_at": "2026-11-08T23:11:20Z",
+  "workspace_id": "tea-dbdccfpsrm7s73b8rugg",
+  "blueprint_id": "exs-dbofqkm417fc7384kou0",
+  "blueprint_auto_sync": false,
+  "blueprint_commit": "0d86c58ca1bb3bfba06d22ef93785b30163d26ae",
+  "sync_id": "exe-dbog24s9v7es73f5olv0",
+  "image_source_commit": "bd01832f2b29c5587e763adbc6f17481fba74f64",
+  "services": {
+    "temporal": {
+      "id": "srv-dbofv3rrjlhs73basukg",
+      "name": "reign-temporal-pilot-d934",
+      "deploy_id": "dep-dbofv43rjlhs73basvk0",
+      "status": "live",
+      "image": "ghcr.io/alambdasystem/reign-temporal@sha256:afbae0626e74adbb7f1b4fab54b11342bc11af12df184b0847a5d6c55089aeb4",
+      "finished_at": "2026-11-08T23:03:03.286302Z",
+      "plan": "1c-2g",
+      "region": "oregon"
+    },
+    "computer": {
+      "id": "srv-dbofvbrrjlhs73bathc0",
+      "name": "reign-computer-pilot-d934",
+      "deploy_id": "dep-dbog273rjlhs73bb4sug",
+      "status": "live",
+      "image": "ghcr.io/alambdasystem/reign-computer@sha256:43e3b319193e0e61ecf2cceb23d3fead868685b1c816d1e47508c402c2d791c8",
+      "finished_at": "2026-11-08T23:10:09.366736Z",
+      "plan": "1c-2g",
+      "region": "oregon"
+    },
+    "core": {
+      "id": "srv-dbog273rjlhs73bb4t90",
+      "name": "reign-core-pilot-d934",
+      "deploy_id": "dep-dbog27jrjlhs73bb4uag",
+      "status": "live",
+      "image": "ghcr.io/alambdasystem/reign-core@sha256:1259e7c738a11f8385f059c754b1f153829d80d89dbe16bf24a74b710e4d1915",
+      "finished_at": "2026-11-08T23:09:31.138401Z",
+      "plan": "0.5c-512mb",
+      "region": "oregon"
+    },
+    "ax": {
+      "id": "srv-dbog2f3rjlhs73bb5f0g",
+      "name": "reign-ax-pilot-d934",
+      "deploy_id": "dep-dbog2ffig07c73a6pp90",
+      "status": "live",
+      "image": "ghcr.io/alambdasystem/reign-ax@sha256:d9c480181f432e3ec26971d530fa3e0c6cf0c5975b77d15f8534b98b97ad4142",
+      "finished_at": "2026-11-08T23:10:19.046849Z",
+      "plan": "0.5c-512mb",
+      "region": "oregon"
+    }
+  },
+  "verification": {
+    "render_all_four_live": true,
+    "exact_image_digests": true,
+    "ax_public_health": 200,
+    "ax_login_page": 200,
+    "anonymous_readiness": 401,
+    "anonymous_create_session": 401,
+    "authenticated_dependency_readiness": "not_run",
+    "live_browser_acceptance": "not_run",
+    "live_restart_recovery": "not_run",
+    "human_acceptance": "not_run",
+    "shared_database": "unchanged; no REIGN persistence"
+  }
+}
