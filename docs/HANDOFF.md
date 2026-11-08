@@ -123,10 +123,12 @@ Retain the documented Git High E2E flow and James's actual human acceptance.
   and accept only branch `main`. Apply requires `Alambdasystem` review and
   disables administrator bypass. Self-review remains allowed for the sole
   configured reviewer; no independent second approver has been designated.
-- Main branch protection was prepared with all four CI checks, required PRs,
-  current-branch checks and no admin bypass. Saving reached GitHub's account
-  verification screen; the API still reports `protected:false`. Do not call it
-  enforced until the owner completes verification and the rule is read back.
+- Main branch protection is saved after owner account verification. The API
+  confirms `protected:true` and all four required GitHub Actions checks with
+  enforcement for everyone. The rule requires PRs, up-to-date branches and
+  resolved conversations; administrator bypass, force pushes and deletion are
+  disabled. Additional PR reviewer approval is not required for this sole-owner
+  pilot; paid infrastructure still requires the separate apply review.
 - Jim's Render workspace is `tea-dbdccfpsrm7s73b8rugg`. No REIGN pilot services
   exist there. No live Render services or shared database objects were changed.
 
@@ -139,8 +141,9 @@ Retain the documented Git High E2E flow and James's actual human acceptance.
   checks; consult the exact commit's run before claiming they passed.
 - Real external-computer adapters and user-owned connection acceptance remain
   unfinished; the profile/interface types are groundwork only.
-- Finish GitHub branch-protection account verification, populate deployment
-  secrets/variables, select the state server and verify locks/restores.
+- Populate deployment secrets/variables, select the state server and verify
+  locks/restores. Connected app access does not automatically supply credentials
+  to GitHub Actions; keep those credentials in the protected environment UI.
 - Confirm successful pulls of the pinned public images during live deployment.
 - Current price review, explicit paid approval, actual OpenTofu plan/apply.
 - Live per-service verification, browser E2E and human acceptance.
@@ -173,8 +176,8 @@ or an authorization to enroll devices, expose ports, or spend an unbounded amoun
 5. Move one workload at a time with measured rollback and preserve the working
    Render deployment until the replacement passes live acceptance.
 
-**Current blockers to first live apply:** finish branch verification and secrets,
-verify the locked OpenTofu state backend and registry pull access, and inspect an
+**Current blockers to first live apply:** configure deployment secrets,
+verify the locked OpenTofu state backend, and inspect an
 actual costed plan. If enabling database persistence, confirm the existing
 database's capacity/permissions from an authorized private-network connection.
 The hosted DB connector cannot reach it because its external allowlist is empty;
@@ -190,6 +193,6 @@ four-service smoke exercises the actual AX browser UI and Temporal activities,
 including takeover, stale input and restart recovery. CD publishes tested image
 digests as a disabled candidate; OpenTofu remains the only deployment owner.
 No Render services or live database objects were changed during this recovery.
-Live configuration remains blocked on GitHub secrets and branch verification,
-a verified locked HTTP state backend, registry pull access and cost approval.
+Live configuration remains blocked on GitHub deployment secrets,
+a verified locked HTTP state backend and cost approval.
 The hosted DB connector cannot reach the private database.
