@@ -53,7 +53,10 @@ class Login(BaseModel):
 
 @app.get("/")
 async def console():
-    return FileResponse(Path(__file__).resolve().parent.parent / "ax_static" / "index.html", headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+    path = Path(__file__).resolve().parent.parent / "ax_static" / "index.html"
+    if not path.is_file():
+        path = Path(__file__).resolve().parent.parent / "services" / "ax" / "index.html"
+    return FileResponse(path, headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
 @app.get("/healthz")
 async def health():
