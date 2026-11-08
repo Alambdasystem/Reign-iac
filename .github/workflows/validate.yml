@@ -26,7 +26,9 @@ jobs:
       - run: tofu -chdir=infra/render validate -no-color
       - run: tofu -chdir=infra/render test -no-color
       - run: test ! -f infra/render/errored_test.tfstate
-      - run: python3 -m compileall -q reign scripts
+      - run: python3 -m compileall -q reign scripts tests
+      - run: python3 -m pip install -r services/core/requirements.txt -r services/ax/requirements.txt -r services/computer/requirements.txt
+      - run: python3 -m unittest discover -s tests -v
   containers:
     needs: infrastructure
     runs-on: ubuntu-24.04
@@ -35,6 +37,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+      - run: docker build --platform linux/amd64 -f services/core/Dockerfile -t reign-core:ci .
+      - run: docker build --platform linux/amd64 -f services/ax/Dockerfile -t reign-ax:ci .
       - run: docker build --platform linux/amd64 -f services/temporal/Dockerfile -t reign-temporal:ci .
       - run: docker build --platform linux/amd64 -f services/computer/Dockerfile -t reign-computer:ci .
       - run: bash scripts/container_smoke.sh
