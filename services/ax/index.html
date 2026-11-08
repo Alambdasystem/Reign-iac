@@ -39,7 +39,7 @@ async function sync(){
  if(!sid)return;
  try{
  const s=await api('/api/sessions/'+encodeURIComponent(sid));
- controller=s.control_owner??s.controller??null;epoch=s.epoch??s.control_epoch??null;
+ controller=s.control_owner??s.controller??s.mode??null;epoch=s.epoch??s.control_epoch??null;
  refreshControls();
  $('screen').src='/api/sessions/'+encodeURIComponent(sid)+'/frame?t='+Date.now();
  }catch(e){say('Connection lost: '+e.message);if(poll)clearInterval(poll);poll=null;refreshControls()}
@@ -47,7 +47,7 @@ async function sync(){
 async function run(fn){try{await fn()}catch(e){say(e.message)}}
 $('loginForm').onsubmit=e=>{e.preventDefault();run(async()=>{await api('/login','POST',{password:$('password').value});$('password').value='';$('loginPanel').hidden=true;$('console').hidden=false;say('Authenticated')})};
 $('open').onclick=()=>run(async()=>{stop();const s=await api('/api/sessions','POST',{url:'https://alambda-forge.onrender.com/'});sid=s.id??s.session_id;if(!sid)throw Error('Core returned no session ID');say('Session opened');await sync();poll=setInterval(sync,1500)});
-async function change(mode){const s=await api('/api/sessions/'+encodeURIComponent(sid)+'/control','POST',{mode,epoch});controller=s.control_owner??mode;epoch=s.epoch??epoch;refreshControls();say('Control: '+controller)}
+async function change(mode){const s=await api('/api/sessions/'+encodeURIComponent(sid)+'/control','POST',{mode,epoch});controller=s.control_owner??s.mode??mode;epoch=s.epoch??epoch;refreshControls();say('Control: '+controller)}
 $('take').onclick=()=>run(()=>change('human'));$('return').onclick=()=>run(()=>change('agent'));
 async function input(data){await api('/api/sessions/'+encodeURIComponent(sid)+'/input','POST',{epoch,...data});await sync()}
 $('screen').onclick=e=>run(async()=>{if(controller!=='human')return;const r=e.currentTarget.getBoundingClientRect();await input({kind:'click',x:Math.max(0,Math.min(1279,(e.clientX-r.left)*1280/r.width)),y:Math.max(0,Math.min(799,(e.clientY-r.top)*800/r.height))})});
