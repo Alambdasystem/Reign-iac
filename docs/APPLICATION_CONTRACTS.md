@@ -12,7 +12,7 @@ UltraView now uses the approved v1 visual source recorded in `docs/design/`.
 `GET /api/status` uses that session to request real Core dependency readiness.
 Neither exposes Core/Computer credentials. The older Bearer `/api/readyz` remains
 available for deployment verification. The text composer supports explicit
-workspace commands; voice and general AI chat remain unavailable.
+workspace commands and LangGraph conversations; voice remains unavailable.
 
 - Core consumes `TEMPORAL_ADDRESS`, namespace/task queue, `COMPUTER_URL`,
   `COMPUTER_TOKEN`, `CORE_TOKEN`. Use server-side authenticated requests.

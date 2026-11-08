@@ -10,12 +10,12 @@ simulated. It is retained here as a design reference, not served as a live app.
 The application in `services/ax/` reuses its CSS and fluid renderer. It replaces
 the simulated workflow with authenticated AX → Core → Temporal → Computer actions,
 fresh frames, takeover/handback, input, cleanup, reload recovery and fail-closed
-connection handling. Workspace text commands invoke those real actions. General
-AI conversation, voice, external computer adapters and full desktop access remain
+connection handling. Workspace commands and LangGraph tools invoke those real
+actions. Voice, external computer adapters and full desktop access remain
 unavailable and are labeled honestly; they are not implemented by animated states.
 
-API credentials remain server-side. The browser stores only a non-secret session
-identifier in sessionStorage to reconnect after reload. No password/token is
+API credentials remain server-side. The browser stores only non-secret session and conversation
+identifiers in sessionStorage to reconnect after reload. No password/token is
 stored there. Responsive and interaction acceptance is in `scripts/browser_smoke.py`.
 
 `python -m reign.live_acceptance` is a one-shot public-AX API acceptance command
