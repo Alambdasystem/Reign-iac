@@ -1,6 +1,7 @@
 """UltraView AX: authenticated human console for the private REIGN Core."""
 import os
 import secrets
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -77,6 +78,13 @@ async def logout(request: Request):
     response.delete_cookie("ax_csrf")
     return response
 
+def session_id(value: str) -> str:
+    try:
+        return str(uuid.UUID(value))
+    except ValueError:
+        raise HTTPException(422, "Invalid session identifier")
+
+
 async def core(method, path, data=None):
     base = os.environ.get("CORE_URL", "").rstrip("/")
     if not base.startswith("https://") and not (os.environ.get("AX_ALLOW_INTERNAL_HTTP") == "1" and base.startswith("http://")):
@@ -100,12 +108,12 @@ async def ready(request: Request):
 @app.get("/api/sessions/{sid}")
 async def session(sid: str, request: Request):
     user(request)
-    return (await core("GET", f"/api/sessions/{sid}")).json()
+    return (await core("GET", f"/api/sessions/{session_id(sid)}")).json()
 
 @app.get("/api/sessions/{sid}/frame")
 async def frame(sid: str, request: Request):
     user(request)
-    result = await core("GET", f"/api/sessions/{sid}/frame")
+    result = await core("GET", f"/api/sessions/{session_id(sid)}/frame")
     return Response(result.content, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 @app.post("/api/sessions")
@@ -118,9 +126,9 @@ async def action(sid: str, action: str, request: Request):
     csrf(request)
     if action not in ("navigate", "control", "input"):
         raise HTTPException(404)
-    return (await core("POST", f"/api/sessions/{sid}/{action}", await request.json())).json()
+    return (await core("POST", f"/api/sessions/{session_id(sid)}/{action}", await request.json())).json()
 
 @app.delete("/api/sessions/{sid}")
 async def close(sid: str, request: Request):
     csrf(request)
-    return (await core("DELETE", f"/api/sessions/{sid}")).json()
+    return (await core("DELETE", f"/api/sessions/{session_id(sid)}")).json()
