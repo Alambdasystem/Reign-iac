@@ -115,3 +115,33 @@ Retain the documented Git High E2E flow and James's actual human acceptance.
 
 Consult live CI for validation results on the current commit. Infrastructure
 validation, mock provider tests and container smoke are separate from deployment.
+
+## Approved deployment direction (2026-11-08)
+
+James selected **Render first, Tailscale second, hybrid long-term**.
+This is a deployment direction, not approval to bypass infrastructure safety gates
+or an authorization to enroll devices, expose ports, or spend an unbounded amount.
+
+1. Complete Core/AX/Computer/Temporal integration and real browser acceptance.
+2. Deploy on Render with OpenTofu, immutable tested images, isolated credentials,
+   protected state, and explicit protection for Workmates and Git High. Reuse an
+   existing PostgreSQL instance only after identifying its workspace, confirming
+   capacity and ownership, and isolating REIGN via a separate database/schema and
+   restricted role. Keep the pilot Temporal disk unless a migration is tested.
+3. Measure CPU, memory, storage, browser session limits and actual monthly cost
+   after live validation. Optimize Render service sizing without silently changing
+   the four-component architecture.
+4. In a separate, reversible migration phase, connect an approved Render-side
+   Tailscale connector with scoped ACLs to authorized worker hosts. Start with
+   Computer workers; consider GPU workloads later. Never expose CDP/RDP/VNC or
+   internal service ports publicly. Test authentication, identity binding,
+   takeover/handback, stale command rejection, reconnect and cleanup over the
+   private path.
+5. Move one workload at a time with measured rollback and preserve the working
+   Render deployment until the replacement passes live acceptance.
+
+**Current blockers to first live apply:** select the Render workspace; confirm
+the existing database's capacity/permissions; configure GitHub deployment
+environments, secrets, locked OpenTofu state backend and registry pull access;
+publish reviewed image digests and inspect an actual costed plan. CI success
+alone is not live deployment evidence.
