@@ -1,4 +1,4 @@
-"""Create a disabled OpenTofu release candidate from tested, pushed images."""
+"""Record a disabled legacy manifest and tested image provenance for Blueprint promotion."""
 import json
 import re
 import subprocess
@@ -43,6 +43,6 @@ if __name__ == "__main__":
     (output / "release.json").write_text(json.dumps(release, indent=2) + "\n")
     (output / "provenance.json").write_text(json.dumps({
         "source_sha": sha, "acceptance": smoke,
-        "promotion": "Requires cost approval, registry pull verification and OpenTofu plan/apply"
+        "promotion": "Promote reviewed digests through the existing Render Blueprint with autoSync=false; never apply the legacy OpenTofu manifest."
     }, indent=2) + "\n")
     print(json.dumps(release))

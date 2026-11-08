@@ -34,9 +34,28 @@ receipt is collected. CI uses its exact local-only mode without a provider key.
 
 ## Live verification
 
-Pending immutable image promotion and a recorded Render acceptance receipt.
-Do not equate successful CI, image publication or process health with live LLM
-acceptance. Human takeover signoff has not been performed by James.
+Passed at 2026-11-08T23:54:42Z. Sanitized receipt:
+[2026-11-08-ultraview-acceptance.json](2026-11-08-ultraview-acceptance.json).
+
+- Promotion PR8 merged as edd6418d3444eb824ca0f59b609ecc27fc6a8a97.
+- Render sync exe-dbogm3jrjlhs73bcvprg updated only Core and AX.
+- Core deploy dep-dbogm7jrjlhs73bd07eg is live on the tested digest.
+- AX verification deploy dep-dbogn9u417fc73873f6g used the same tested digest.
+- Actual OpenAI model: gpt-6-astra, inherited from Workmates. workspace_status
+  and browser_status tools completed; the first turn used 1,647 input and 102
+  output tokens. A separate actual-model navigation paused under human control,
+  rejected resume before handback, then resumed through Temporal successfully.
+- Public authentication/CSRF, fresh frames, takeover/handback, stale-epoch
+  rejection and cleanup all passed. The verifier deleted its own conversation
+  and browser session.
+- First verification hit an old AX instance (404 /api/me) during the rolling
+  update. A same-image AX redeploy after both new services were live passed.
+- The public browser showed the new UltraView sign-in page. Authenticated UI
+  interactions were exercised by CI; the live run exercised the authenticated
+  API. Human takeover signoff has not been performed by James.
+
+The Blueprint now specifies normal AX startup without the temporary verification
+command. This cleanup changes no images, credentials, resource sizes or data.
 
 ## Remaining integrations
 

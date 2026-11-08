@@ -127,6 +127,5 @@ services:
     value: '1'
   # Render passes the remainder after /bin/sh -c as one shell program. Do not
   # quote that entire program as in a local terminal command.
-  # Temporary rollout acceptance; remove after recording the sanitized receipt.
-  dockerCommand: /bin/sh -c export CORE_URL="http://${CORE_HOST}:10000"; python -m reign.live_acceptance & exec uvicorn reign.ax:app --host 0.0.0.0 --port "${PORT:-10000}"
+  dockerCommand: /bin/sh -c export CORE_URL="http://${CORE_HOST}:10000"; exec uvicorn reign.ax:app --host 0.0.0.0 --port "${PORT:-10000}"
   healthCheckPath: /healthz
