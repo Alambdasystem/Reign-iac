@@ -53,7 +53,7 @@ services:
   region: oregon
   numInstances: 1
   image:
-    url: ghcr.io/alambdasystem/reign-core@sha256:1259e7c738a11f8385f059c754b1f153829d80d89dbe16bf24a74b710e4d1915
+    url: ghcr.io/alambdasystem/reign-core@sha256:2e6f8eb970480b0e02b7c901a119f71687de984640cb5fb1b8f320817c4b1cd5
   envVars:
   - key: PORT
     value: '10000'
@@ -80,6 +80,17 @@ services:
       envVarKey: COMPUTER_TOKEN
   - key: CORE_TOKEN
     generateValue: true
+  # Read existing Workmates configuration without exposing or copying secret values.
+  - key: OPENAI_API_KEY
+    fromService:
+      name: workmates-api
+      type: web
+      envVarKey: OPENAI_API_KEY
+  - key: OPENAI_MODEL
+    fromService:
+      name: workmates-api
+      type: web
+      envVarKey: OPENAI_MODEL
   # Core derives both private endpoints from the referenced host variables.
   dockerCommand: ''
 - type: web
@@ -89,7 +100,7 @@ services:
   region: oregon
   numInstances: 1
   image:
-    url: ghcr.io/alambdasystem/reign-ax@sha256:d9c480181f432e3ec26971d530fa3e0c6cf0c5975b77d15f8534b98b97ad4142
+    url: ghcr.io/alambdasystem/reign-ax@sha256:661590b743bcaed777fb8f17f3142e44fccce034543bddeca44f21ec1ef53543
   envVars:
   - key: PORT
     value: '10000'
@@ -116,5 +127,6 @@ services:
     value: '1'
   # Render passes the remainder after /bin/sh -c as one shell program. Do not
   # quote that entire program as in a local terminal command.
-  dockerCommand: /bin/sh -c export CORE_URL="http://${CORE_HOST}:10000"; exec uvicorn reign.ax:app --host 0.0.0.0 --port "${PORT:-10000}"
+  # Temporary rollout acceptance; remove after recording the sanitized receipt.
+  dockerCommand: /bin/sh -c export CORE_URL="http://${CORE_HOST}:10000"; python -m reign.live_acceptance & exec uvicorn reign.ax:app --host 0.0.0.0 --port "${PORT:-10000}"
   healthCheckPath: /healthz
