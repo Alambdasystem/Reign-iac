@@ -21,7 +21,7 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {"REIGN_DATABASE_URL": value}):
             self.assertEqual(database_dsn(), value)
 
-    async def test_probe_checks_only_reign_schema_permission(self):
+    async def test_probe_checks_schema_tables_and_isolation_without_writes(self):
         from contextlib import asynccontextmanager
         from reign import database
         connection = AsyncMock()
@@ -37,7 +37,9 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         sql = connection.fetchrow.await_args.args[0]
         self.assertIn("has_schema_privilege", sql)
         self.assertIn("'reign'", sql)
-        self.assertNotIn("CREATE", sql.upper())
+        self.assertIn("has_table_privilege", sql)
+        self.assertIn("rolbypassrls", sql)
+        self.assertTrue(sql.strip().startswith("WITH"))
 
 
 if __name__ == "__main__":

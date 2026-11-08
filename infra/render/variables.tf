@@ -33,9 +33,9 @@ variable "images" {
 
 variable "runtime_secrets" {
   type = object({
-    core_token     = string
-    computer_token = string
-    ax_session_key = string
+    core_token        = string
+    computer_token    = string
+    ax_session_key    = string
     ax_admin_password = string
   })
   default   = { core_token = "", computer_token = "", ax_session_key = "", ax_admin_password = "" }
@@ -59,11 +59,22 @@ variable "plans" {
 }
 
 variable "ax_public_origin" {
-  type = string
-  default = ""
+  type        = string
+  default     = ""
   description = "Exact HTTPS origin of the public AX console, required for CSRF protection."
   validation {
-    condition = !var.provision || can(regex("^https://[^/]+$", var.ax_public_origin))
+    condition     = !var.provision || can(regex("^https://[^/]+$", var.ax_public_origin))
     error_message = "Provide the exact HTTPS AX origin before provisioning."
+  }
+}
+
+variable "reign_database_url" {
+  type        = string
+  default     = ""
+  sensitive   = true
+  description = "Optional private DSN for a verified REIGN-only runtime role. Never use Moby Alpha's application credentials."
+  validation {
+    condition     = var.reign_database_url == "" || can(regex("^postgres(ql)?://", var.reign_database_url))
+    error_message = "Supply a PostgreSQL DSN through protected secret storage, or leave database support disabled."
   }
 }

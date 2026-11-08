@@ -5,6 +5,7 @@ mocked Computer/Temporal boundary. It does not claim live Render acceptance.
 """
 import os
 import unittest
+from httpx import Response
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
@@ -41,9 +42,9 @@ class AXCoreContractTests(unittest.TestCase):
 
                 with patch.object(ax_app.state.http, "request", side_effect=forward):
                     with patch("reign.core.worker", new_callable=AsyncMock) as worker:
-                        worker.return_value.json.return_value = {
+                        worker.return_value = Response(200, json={
                             "id": sid, "mode": "human", "epoch": 1
-                        }
+                        })
                         login = ax.post("/login", json={"password": "p" * 40})
                         self.assertEqual(login.status_code, 200)
                         response = ax.post(

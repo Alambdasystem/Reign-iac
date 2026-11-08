@@ -1,11 +1,11 @@
-# Application milestone to implement next
+# Application contracts and acceptance
 
 Docker build context is the repository root; Dockerfiles live at
 `services/{core,temporal,computer,ax}/Dockerfile`. Bind `0.0.0.0:$PORT` (10000)
 except Temporal gRPC (7233). Keep containers independent, one replica each in
 this pilot. Application releases must not add credentials to images or Git.
 
-## Core and UltraView AX (not implemented)
+## Core and UltraView AX (implemented pilot; release gates still apply)
 
 - Core consumes `TEMPORAL_ADDRESS`, namespace/task queue, `COMPUTER_URL`,
   `COMPUTER_TOKEN`, `CORE_TOKEN`. Use server-side authenticated requests.
@@ -36,7 +36,13 @@ Current private endpoints require Bearer `COMPUTER_TOKEN`: `/healthz`,
 `/sessions/{id}`, `/sessions/{id}/frame`, `/sessions/{id}/control`,
 `/sessions/{id}/input`, and DELETE `/sessions/{id}`.
 
-## E2E acceptance (required, not yet run)
+## E2E acceptance (automated CI plus separate human signoff)
+
+The four-container smoke test exercises the real AX UI, Core, Temporal and Computer
+against public Git High, including frame freshness, stale commands, cleanup and
+restart recovery. It records JSON evidence and a screenshot. It does not replace
+the following deployed acceptance or James's human signoff. Frames carry
+`X-Session-ID`, `X-Frame-Sequence` and `X-Frame-Timestamp` through Core and AX.
 
 1. Use the deployed AX URL in a real Playwright browser; authenticate James.
 2. Submit **Open Git High** through AX. Capture the Core request/session ID and

@@ -42,7 +42,8 @@ def csrf(request: Request):
 
 @asynccontextmanager
 async def lifespan(app):
-    app.state.http = httpx.AsyncClient(timeout=20)
+    # Browser startup/Temporal dispatch can take longer than a normal API call.
+    app.state.http = httpx.AsyncClient(timeout=120, trust_env=False)
     yield
     await app.state.http.aclose()
 
@@ -117,7 +118,11 @@ async def session(sid: str, request: Request):
 async def frame(sid: str, request: Request):
     user(request)
     result = await core("GET", f"/api/sessions/{session_id(sid)}/frame")
-    return Response(result.content, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+    headers = {"Cache-Control": "no-store"}
+    for name in ("X-Frame-Sequence", "X-Frame-Timestamp", "X-Session-ID"):
+        if name in result.headers:
+            headers[name] = result.headers[name]
+    return Response(result.content, media_type="image/jpeg", headers=headers)
 
 @app.post("/api/sessions")
 async def open_session(request: Request):

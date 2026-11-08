@@ -4,8 +4,8 @@ Infrastructure first. This repository is the **temporary** source for REIGN;
 [Git High](https://alambda-forge.onrender.com/) is the intended long-term authority.
 
 **Current stage:** infrastructure definitions and CI are being validated. No new
-Render services have been provisioned. Core and UltraView AX application code
-remain to be implemented. The Computer code is an experimental starting point.
+Render services have been provisioned. Core and UltraView AX pilot application code and Dockerfiles now exist
+on the application branch; use the current CI result to assess validation. The Computer code is an experimental starting point.
 No full browser/human-takeover E2E result has been established.
 
 ## Two milestones
@@ -53,14 +53,17 @@ tofu -chdir=infra/render init -backend=false -lockfile=readonly
 tofu -chdir=infra/render validate
 tofu -chdir=infra/render test
 python3 -m unittest discover -s tests -v
+docker build --platform linux/amd64 -f services/core/Dockerfile -t reign-core:ci .
+docker build --platform linux/amd64 -f services/ax/Dockerfile -t reign-ax:ci .
 docker build --platform linux/amd64 -f services/temporal/Dockerfile -t reign-temporal:ci .
 docker build --platform linux/amd64 -f services/computer/Dockerfile -t reign-computer:ci .
 bash scripts/container_smoke.sh
 ```
 
 The OpenTofu tests mock the provider and never provision real services. The
-container smoke test checks Temporal RPC, worker readiness and authorization,
-and Chromium rendering/screenshot capture. It does not implement milestone 2.
+container smoke test now runs all four services with the real AX UI, Temporal
+workflow history, fresh frames, takeover/handback, stale-command rejection and
+restart recovery. It does not establish deployed or human acceptance.
 
 Read [deployment setup](docs/DEPLOYMENT.md),
 [application contracts](docs/APPLICATION_CONTRACTS.md), and

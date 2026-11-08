@@ -5,6 +5,7 @@ Git High browser acceptance test on deployed Render services.
 """
 import os
 import unittest
+from httpx import Response
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
@@ -38,9 +39,10 @@ class CoreWorkflowContractTests(unittest.TestCase):
         with patch.dict(os.environ, {"CORE_TOKEN": self.token}):
             with TestClient(app) as client:
                 with patch("reign.core.worker", new_callable=AsyncMock) as worker:
-                    worker.return_value.json.return_value = {
-                        "id": sid, "mode": "human", "epoch": 1}
-                    worker.return_value.content = b"jpeg-data"
+                    worker.side_effect = [
+                        Response(200, json={"id": sid, "mode": "human", "epoch": 1}),
+                        Response(200, content=b"jpeg-data"),
+                    ]
                     result = client.post(f"/api/sessions/{sid}/control",
                         headers=self.headers, json={"mode": "human", "epoch": 0})
                     self.assertEqual(result.status_code, 200)

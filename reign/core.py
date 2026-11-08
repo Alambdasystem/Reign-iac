@@ -9,6 +9,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from temporalio.client import Client
+from temporalio.exceptions import ApplicationError
 from temporalio.api.workflowservice.v1 import GetSystemInfoRequest
 
 from reign.config import QUEUE, NAMESPACE, checked_url, computer_url, temporal_address
@@ -23,7 +24,7 @@ def authorize(request: Request):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.http = httpx.AsyncClient(timeout=15.0)
+    app.state.http = httpx.AsyncClient(timeout=60.0, trust_env=False)
     yield
     await app.state.http.aclose()
 
@@ -33,6 +34,18 @@ app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None
 
 class OpenRequest(BaseModel):
     url: str = "https://alambda-forge.onrender.com/"
+
+
+def workflow_http_error(error):
+    """Preserve expected worker rejections across Temporal's exception wrappers."""
+    cause = error
+    for _ in range(5):
+        if isinstance(cause, ApplicationError) and cause.type == "ControlChanged":
+            return HTTPException(409, "Control changed; refresh the session")
+        cause = getattr(cause, "cause", None)
+        if cause is None:
+            break
+    return HTTPException(503, "Computer workflow failed")
 
 
 class NavigateRequest(BaseModel):
@@ -128,7 +141,11 @@ async def session(sid: uuid.UUID):
 @app.get("/api/sessions/{sid}/frame", dependencies=[Depends(authorize)])
 async def frame(sid: uuid.UUID):
     result = await worker("GET", f"/sessions/{sid}/frame")
-    return Response(result.content, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+    headers = {"Cache-Control": "no-store"}
+    for name in ("X-Frame-Sequence", "X-Frame-Timestamp", "X-Session-ID"):
+        if name in result.headers:
+            headers[name] = result.headers[name]
+    return Response(result.content, media_type="image/jpeg", headers=headers)
 
 
 @app.post("/api/sessions/{sid}/navigate", dependencies=[Depends(authorize)])
@@ -142,8 +159,8 @@ async def navigate(sid: uuid.UUID, data: NavigateRequest):
         return await client.execute_workflow("NavigateBrowser",
             {"id": str(sid), "url": data.url, "epoch": data.epoch},
             id="reign-navigate-" + str(uuid.uuid4()), task_queue=QUEUE)
-    except Exception:
-        raise HTTPException(503, "Navigation workflow failed")
+    except Exception as error:
+        raise workflow_http_error(error) from error
 
 
 @app.post("/api/sessions/{sid}/control", dependencies=[Depends(authorize)])

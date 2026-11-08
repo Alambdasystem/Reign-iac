@@ -30,6 +30,7 @@ async function api(path,method='GET',body){
  if(!r.ok)throw Error('Request failed ('+r.status+')');return r.json()
 }
 function refreshControls(){
+ $('open').disabled=!!sid;
  $('take').disabled=!sid||controller!=='agent';$('return').disabled=!sid||controller!=='human';
  $('close').disabled=!sid;$('send').disabled=!sid||controller!=='human';$('scroll').disabled=$('send').disabled;
  $('session').textContent=sid||'None';$('controller').textContent=controller||'—';$('epoch').textContent=epoch??'—'
@@ -42,7 +43,7 @@ async function sync(){
  controller=s.control_owner??s.controller??s.mode??null;epoch=s.epoch??s.control_epoch??null;
  refreshControls();
  $('screen').src='/api/sessions/'+encodeURIComponent(sid)+'/frame?t='+Date.now();
- }catch(e){say('Connection lost: '+e.message);if(poll)clearInterval(poll);poll=null;refreshControls()}
+ }catch(e){say('Connection lost: '+e.message);if(poll)clearInterval(poll);poll=null;controller=null;epoch=null;refreshControls()}
 }
 async function run(fn){try{await fn()}catch(e){say(e.message)}}
 $('loginForm').onsubmit=e=>{e.preventDefault();run(async()=>{await api('/login','POST',{password:$('password').value});$('password').value='';$('loginPanel').hidden=true;$('console').hidden=false;say('Authenticated')})};

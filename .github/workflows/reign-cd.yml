@@ -1,90 +1,66 @@
 name: REIGN continuous delivery (gated)
 on:
   workflow_run:
-    workflows: ["REIGN application validation"]
+    workflows: ["Validate REIGN infrastructure"]
     types: [completed]
     branches: [main]
 permissions:
   contents: read
-  packages: write
 concurrency:
   group: reign-cd
   cancel-in-progress: false
 jobs:
   publish:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
-    runs-on: ubuntu-latest
-    outputs:
-      sha: ${{ steps.revision.outputs.sha }}
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    environment: reign-release
+    permissions:
+      contents: read
+      packages: write
+    env:
+      SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
-      - name: Resolve trusted revision
-        id: revision
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
-          DISPATCH_SHA: ${{ github.sha }}
-        run: |
-          if [ "$EVENT_NAME" = workflow_dispatch ]; then echo "sha=$DISPATCH_SHA" >> "$GITHUB_OUTPUT"; else echo "sha=$RUN_SHA" >> "$GITHUB_OUTPUT"; fi
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ${{ steps.revision.outputs.sha }}
+          ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: false
-      - name: Require main branch HEAD (no stale deploy)
+      - name: Require current main revision
         env:
           GH_TOKEN: ${{ github.token }}
-          SHA: ${{ steps.revision.outputs.sha }}
-        run: |
-          current="$(gh api repos/$GITHUB_REPOSITORY/branches/main --jq .commit.sha)"
-          test "$SHA" = "$current"
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and publish immutable revision images
-        env:
-          SHA: ${{ steps.revision.outputs.sha }}
-          OWNER: ${{ github.repository_owner }}
+        run: test "$SOURCE_SHA" = "$(gh api repos/$GITHUB_REPOSITORY/branches/main --jq .commit.sha)"
+      - name: Build the exact images to be tested and published
         run: |
           set -euo pipefail
-          owner="$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')"
           for service in core ax computer temporal; do
-            image="ghcr.io/$owner/reign-$service:$SHA"
-            docker build --platform linux/amd64 -f "services/$service/Dockerfile" -t "$image" .
+            docker build --platform linux/amd64 -f "services/$service/Dockerfile" -t "reign-$service:ci" .
+          done
+      - name: Test all four images before publishing
+        run: bash scripts/container_smoke.sh
+      - name: Publish tested images and record immutable digests
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          for service in core ax computer temporal; do
+            image="ghcr.io/$owner/reign-$service:$SOURCE_SHA"
+            docker tag "reign-$service:ci" "$image"
             docker push "$image"
           done
-  deploy:
-    needs: publish
-    runs-on: ubuntu-latest
-    environment: reign-render-production
-    if: ${{ vars.REIGN_DEPLOY_ENABLED == 'true' }}
-    steps:
-      - name: Require verified image-pinning integration before enabling deploy
-        env:
-          VERIFIED: ${{ vars.REIGN_IMAGE_PINNING_VERIFIED }}
-        run: |
-          if [ "$VERIFIED" != "true" ]; then echo "::error::Render deploy hooks alone cannot select the new immutable image. Configure and verify image pinning first."; exit 1; fi
-      - name: Require explicit existing-service deployment hooks
-        env:
-          CORE_HOOK: ${{ secrets.REIGN_CORE_DEPLOY_HOOK }}
-          AX_HOOK: ${{ secrets.REIGN_AX_DEPLOY_HOOK }}
-          COMPUTER_HOOK: ${{ secrets.REIGN_COMPUTER_DEPLOY_HOOK }}
-          TEMPORAL_HOOK: ${{ secrets.REIGN_TEMPORAL_DEPLOY_HOOK }}
-        run: |
-          set -euo pipefail
-          for name in CORE_HOOK AX_HOOK COMPUTER_HOOK TEMPORAL_HOOK; do
-            value="${!name:-}"
-            if [[ "$value" != https://* ]]; then echo "::error::$name must be a configured HTTPS Render deploy hook"; exit 1; fi
-          done
-      - name: Trigger existing Render services (no infrastructure apply)
-        env:
-          CORE_HOOK: ${{ secrets.REIGN_CORE_DEPLOY_HOOK }}
-          AX_HOOK: ${{ secrets.REIGN_AX_DEPLOY_HOOK }}
-          COMPUTER_HOOK: ${{ secrets.REIGN_COMPUTER_DEPLOY_HOOK }}
-          TEMPORAL_HOOK: ${{ secrets.REIGN_TEMPORAL_DEPLOY_HOOK }}
-        run: |
-          set -euo pipefail
-          for name in TEMPORAL_HOOK COMPUTER_HOOK CORE_HOOK AX_HOOK; do
-            curl --fail --silent --show-error --retry 2 --max-time 30 -X POST "${!name}" >/dev/null
-          done
-          echo "Deploy requests accepted; runtime health and pinned-image verification remain separate release gates."
+          python3 scripts/release_manifest.py "$owner" "$SOURCE_SHA"
+          cat artifacts/release/release.json >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tested-release-${{ github.event.workflow_run.head_sha }}
+          path: |
+            artifacts/release/
+            artifacts/smoke/
+          retention-days: 14
+      - name: Explain promotion gate
+        run: echo "Review the tested release manifest and registry access, then use the protected OpenTofu plan/apply workflow. This workflow never calls deploy hooks or changes Render resources." >> "$GITHUB_STEP_SUMMARY"

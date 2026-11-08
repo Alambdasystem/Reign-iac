@@ -8,6 +8,13 @@ from reign.core import app
 
 
 class CoreTests(unittest.TestCase):
+    def test_temporal_control_rejection_stays_a_conflict(self):
+        from reign.core import workflow_http_error
+        from temporalio.exceptions import ApplicationError
+        rejected = ApplicationError("Control changed", type="ControlChanged", non_retryable=True)
+        self.assertEqual(workflow_http_error(rejected).status_code, 409)
+        self.assertEqual(workflow_http_error(ConnectionError()).status_code, 503)
+
     def test_health_is_process_only(self):
         with TestClient(app) as client:
             self.assertEqual(client.get("/healthz").json(), {"status": "ok"})
