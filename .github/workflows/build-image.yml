@@ -1,0 +1,47 @@
+name: Build selected application image
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        type: choice
+        options: [core, temporal, computer, ax]
+        required: true
+      publish:
+        description: Publish this version to GHCR (no Render deployment)
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: reign-release
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Build
+        env:
+          SERVICE: ${{ inputs.service }}
+        run: |
+          set -euo pipefail
+          case "$SERVICE" in core|temporal|computer|ax) ;; *) exit 1 ;; esac
+          test -f "services/$SERVICE/Dockerfile" || { echo "Application Dockerfile is not implemented yet."; exit 1; }
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/reign-$SERVICE:$GITHUB_SHA"
+          docker build --platform linux/amd64 -f "services/$SERVICE/Dockerfile" -t "$image" .
+          printf 'IMAGE=%s\n' "$image" >> "$GITHUB_ENV"
+      - name: Publish immutable release
+        if: inputs.publish
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker push "$IMAGE"
+          docker inspect --format '{{join .RepoDigests "\n"}}' "$IMAGE" >> "$GITHUB_STEP_SUMMARY"

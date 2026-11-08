@@ -1,0 +1,67 @@
+# REIGN Harness / Kaleidoscope
+
+Infrastructure first. This repository is the **temporary** source for REIGN;
+[Git High](https://alambda-forge.onrender.com/) is the intended long-term authority.
+
+**Current stage:** infrastructure definitions and CI are being validated. No new
+Render services have been provisioned. Core and UltraView AX application code
+remain to be implemented. The Computer code is an experimental starting point.
+No full browser/human-takeover E2E result has been established.
+
+## Two milestones
+
+1. **Infrastructure as code:** versioned OpenTofu definitions, independent Docker
+   services, secret/state handling, CI validation, reviewed plans, guarded apply,
+   and per-service deployment verification.
+2. **End-to-end behavior:** UltraView AX submits a task to Core; Temporal dispatches
+   it to Computer; Playwright opens Git High; AX shows live frames; James takes
+   control, interacts, and returns control. Preserve screenshots, workflow IDs,
+   build digests and actual results. A public Git High page opening alone is not
+   this milestone.
+
+## Topology
+
+| Component | Render service | Exposure | Responsibility |
+|---|---|---|---|
+| UltraView AX | `reign-ax-pilot` | HTTPS public; authenticated sessions | UI, live view, human takeover, server-side Core proxy |
+| REIGN Core | `reign-core-pilot` | Private HTTP :10000 | Task/session API and Temporal client |
+| Temporal | `reign-temporal-pilot` | Private gRPC :7233 | Durable pilot workflows; 1 GB disk |
+| REIGN Computer | `reign-computer-pilot` | Private HTTP :10000 | Playwright browser and Temporal worker |
+
+All are independent services in Oregon in Jim's workspace. Private networking
+is scoped to the Render workspace and region; it is not a separate tenant VPC.
+The Temporal development server is a **single-node pilot**, not a production
+Temporal cluster. It uses persistent SQLite; production needs a separately
+reviewed database/cluster and backup design.
+
+Image-based deployments keep the runtime independent of the Git host. Docker
+builds produce immutable SHA256 digests, which are reviewed in
+[`deploy/release.json`](deploy/release.json). OpenTofu is the sole owner of these
+Render resources; do not also create a Blueprint for them or change image digests
+through an unrelated deploy hook.
+
+Workmates and the existing Git High service are outside this configuration.
+The plan policy protects their known IDs; nothing is imported or renamed.
+
+## Run validation
+
+Requires OpenTofu 1.13.0, Python 3, Docker for container checks:
+
+```sh
+tofu -chdir=infra/render fmt -check -recursive
+tofu -chdir=infra/render init -backend=false -lockfile=readonly
+tofu -chdir=infra/render validate
+tofu -chdir=infra/render test
+python3 -m unittest discover -s tests -v
+docker build --platform linux/amd64 -f services/temporal/Dockerfile -t reign-temporal:ci .
+docker build --platform linux/amd64 -f services/computer/Dockerfile -t reign-computer:ci .
+bash scripts/container_smoke.sh
+```
+
+The OpenTofu tests mock the provider and never provision real services. The
+container smoke test checks Temporal RPC, worker readiness and authorization,
+and Chromium rendering/screenshot capture. It does not implement milestone 2.
+
+Read [deployment setup](docs/DEPLOYMENT.md),
+[application contracts](docs/APPLICATION_CONTRACTS.md), and
+[the next-session handoff](docs/HANDOFF.md) before enabling anything.

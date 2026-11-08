@@ -7,8 +7,12 @@
 *.tfstate.*
 *.tfplan
 *.tfvars
+*.tfvars.json
 !*.tfvars.example
 .terraform/
+*.plan.json
+*.plan.enc
+crash.log
 .venv/
 __pycache__/
 .pytest_cache/

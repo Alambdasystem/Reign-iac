@@ -1,0 +1,108 @@
+name: Plan and approve REIGN infrastructure
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        type: choice
+        options: [plan, apply]
+        default: plan
+      approve_paid_changes:
+        description: I approve the cost of this reviewed REIGN pilot change
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: reign-infrastructure-pilot
+  cancel-in-progress: false
+env:
+  TF_IN_AUTOMATION: 'true'
+  TF_INPUT: 'false'
+jobs:
+  plan:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: reign-plan
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      TF_VAR_runtime_secrets: ${{ secrets.REIGN_RUNTIME_SECRETS_JSON }}
+      TF_HTTP_ADDRESS: ${{ vars.TF_HTTP_ADDRESS }}
+      TF_HTTP_LOCK_ADDRESS: ${{ vars.TF_HTTP_LOCK_ADDRESS }}
+      TF_HTTP_UNLOCK_ADDRESS: ${{ vars.TF_HTTP_UNLOCK_ADDRESS }}
+      TF_HTTP_USERNAME: ${{ secrets.TF_HTTP_USERNAME }}
+      TF_HTTP_PASSWORD: ${{ secrets.TF_HTTP_PASSWORD }}
+      PLAN_ENCRYPTION_KEY: ${{ secrets.PLAN_ENCRYPTION_KEY }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: opentofu/setup-opentofu@9d84900f3238fab8cd84ce47d658d25dd008be2f
+        with:
+          tofu_version: 1.13.0
+          tofu_wrapper: false
+      - run: python3 scripts/preflight.py
+      - run: tofu -chdir=infra/render init -input=false -lockfile=readonly
+      - name: Create plan and sanitized review
+        run: |
+          set -euo pipefail
+          umask 077
+          tofu -chdir=infra/render plan -input=false -no-color -var-file=../../deploy/release.json -out=release.tfplan > "$RUNNER_TEMP/plan.log" 2>&1 || { echo "Plan failed; raw logs withheld because they can contain secrets."; exit 1; }
+          tofu -chdir=infra/render show -json release.tfplan | python3 scripts/check_plan.py | tee "$RUNNER_TEMP/review.txt"
+          cat "$RUNNER_TEMP/review.txt" >> "$GITHUB_STEP_SUMMARY"
+          printf '\nSource commit: %s\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          openssl enc -aes-256-cbc -salt -pbkdf2 -iter 200000 -pass env:PLAN_ENCRYPTION_KEY -in infra/render/release.tfplan -out release.plan.enc
+          sha256sum release.plan.enc > release.plan.enc.sha256
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: encrypted-plan
+          path: |
+            release.plan.enc
+            release.plan.enc.sha256
+          retention-days: 1
+      - name: Remove local sensitive artifacts
+        if: always()
+        run: rm -f infra/render/release.tfplan "$RUNNER_TEMP/plan.log"
+  apply:
+    needs: plan
+    if: inputs.operation == 'apply' && inputs.approve_paid_changes && vars.REIGN_APPLY_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    # Must have required reviewers and main-only branch policy before enabling.
+    environment: reign-apply
+    env:
+      PAID_CHANGE_APPROVAL: ${{ inputs.approve_paid_changes }}
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      TF_VAR_runtime_secrets: ${{ secrets.REIGN_RUNTIME_SECRETS_JSON }}
+      TF_HTTP_ADDRESS: ${{ vars.TF_HTTP_ADDRESS }}
+      TF_HTTP_LOCK_ADDRESS: ${{ vars.TF_HTTP_LOCK_ADDRESS }}
+      TF_HTTP_UNLOCK_ADDRESS: ${{ vars.TF_HTTP_UNLOCK_ADDRESS }}
+      TF_HTTP_USERNAME: ${{ secrets.TF_HTTP_USERNAME }}
+      TF_HTTP_PASSWORD: ${{ secrets.TF_HTTP_PASSWORD }}
+      PLAN_ENCRYPTION_KEY: ${{ secrets.PLAN_ENCRYPTION_KEY }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: opentofu/setup-opentofu@9d84900f3238fab8cd84ce47d658d25dd008be2f
+        with:
+          tofu_version: 1.13.0
+          tofu_wrapper: false
+      - run: python3 scripts/preflight.py --apply
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: encrypted-plan
+      - name: Apply the reviewed plan
+        run: |
+          set -euo pipefail
+          umask 077
+          sha256sum -c release.plan.enc.sha256
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:PLAN_ENCRYPTION_KEY -in release.plan.enc -out infra/render/release.tfplan
+          tofu -chdir=infra/render init -input=false -lockfile=readonly
+          tofu -chdir=infra/render show -json release.tfplan | python3 scripts/check_plan.py
+          tofu -chdir=infra/render apply -input=false -no-color release.tfplan > "$RUNNER_TEMP/apply.log" 2>&1 || { echo "Apply failed; reconcile remote state and Render before retrying. Raw logs withheld."; exit 1; }
+          tofu -chdir=infra/render output -json services > "$RUNNER_TEMP/services.json"
+          python3 scripts/verify_deployment.py "$RUNNER_TEMP/services.json"
+      - name: Remove local sensitive artifacts
+        if: always()
+        run: rm -f infra/render/release.tfplan "$RUNNER_TEMP/apply.log" "$RUNNER_TEMP/services.json"
