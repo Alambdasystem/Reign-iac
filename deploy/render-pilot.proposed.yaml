@@ -1,5 +1,5 @@
-# PROPOSAL ONLY: requires explicit approval to replace OpenTofu ownership.
-# Use create_new and autoSync=false when planning. No existing resources adopted.
+# Approved pilot: Render Blueprint is the single infrastructure owner.
+# Keep the existing Blueprint and autoSync=false. No unrelated resources adopted.
 previews:
   generation: 'off'
 services:
@@ -44,8 +44,8 @@ services:
     generateValue: true
   - key: MAX_SESSIONS
     value: '1'
-  dockerCommand: sh -ec 'export TEMPORAL_ADDRESS="${TEMPORAL_HOST}:7233"; exec python -m uvicorn reign.computer:app
-    --host 0.0.0.0 --port "${PORT:-10000}"'
+  # Clear the failed override; the image CMD and TEMPORAL_HOST fallback suffice.
+  dockerCommand: ''
 - type: pserv
   name: reign-core-pilot
   runtime: image
@@ -80,8 +80,8 @@ services:
       envVarKey: COMPUTER_TOKEN
   - key: CORE_TOKEN
     generateValue: true
-  dockerCommand: sh -ec 'export TEMPORAL_ADDRESS="${TEMPORAL_HOST}:7233"; export COMPUTER_URL="http://${COMPUTER_HOST}:10000";
-    exec uvicorn reign.core:app --host 0.0.0.0 --port "${PORT:-10000}"'
+  # Core derives both private endpoints from the referenced host variables.
+  dockerCommand: ''
 - type: web
   name: reign-ax-pilot
   runtime: image
@@ -114,6 +114,7 @@ services:
       envVarKey: RENDER_EXTERNAL_URL
   - key: AX_ALLOW_INTERNAL_HTTP
     value: '1'
-  dockerCommand: sh -ec 'export CORE_URL="http://${CORE_HOST}:10000"; exec uvicorn reign.ax:app --host 0.0.0.0 --port
-    "${PORT:-10000}"'
+  # Render passes the remainder after /bin/sh -c as one shell program. Do not
+  # quote that entire program as in a local terminal command.
+  dockerCommand: /bin/sh -c export CORE_URL="http://${CORE_HOST}:10000"; exec uvicorn reign.ax:app --host 0.0.0.0 --port "${PORT:-10000}"
   healthCheckPath: /healthz
