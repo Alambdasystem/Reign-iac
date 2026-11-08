@@ -57,7 +57,13 @@ jobs:
     needs: publish
     runs-on: ubuntu-latest
     environment: reign-render-production
+    if: ${{ vars.REIGN_DEPLOY_ENABLED == 'true' }}
     steps:
+      - name: Require verified image-pinning integration before enabling deploy
+        env:
+          VERIFIED: ${{ vars.REIGN_IMAGE_PINNING_VERIFIED }}
+        run: |
+          if [ "$VERIFIED" != "true" ]; then echo "::error::Render deploy hooks alone cannot select the new immutable image. Configure and verify image pinning first."; exit 1; fi
       - name: Require explicit existing-service deployment hooks
         env:
           CORE_HOOK: ${{ secrets.REIGN_CORE_DEPLOY_HOOK }}
