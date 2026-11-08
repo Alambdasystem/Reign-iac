@@ -1,4 +1,21 @@
 {
   "provision": false,
-  "images": {}
+  "images": {
+    "core": {
+      "image_url": "ghcr.io/alambdasystem/reign-core",
+      "digest": "sha256:1259e7c738a11f8385f059c754b1f153829d80d89dbe16bf24a74b710e4d1915"
+    },
+    "ax": {
+      "image_url": "ghcr.io/alambdasystem/reign-ax",
+      "digest": "sha256:d9c480181f432e3ec26971d530fa3e0c6cf0c5975b77d15f8534b98b97ad4142"
+    },
+    "computer": {
+      "image_url": "ghcr.io/alambdasystem/reign-computer",
+      "digest": "sha256:43e3b319193e0e61ecf2cceb23d3fead868685b1c816d1e47508c402c2d791c8"
+    },
+    "temporal": {
+      "image_url": "ghcr.io/alambdasystem/reign-temporal",
+      "digest": "sha256:afbae0626e74adbb7f1b4fab54b11342bc11af12df184b0847a5d6c55089aeb4"
+    }
+  }
 }
