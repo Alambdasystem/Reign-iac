@@ -1,6 +1,7 @@
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
+from fastapi import HTTPException
 
 from fastapi.testclient import TestClient
 from reign.core import app
@@ -26,6 +27,22 @@ class CoreTests(unittest.TestCase):
                     headers={"Authorization": "Bearer " + "x" * 40},
                     json={"url": "https://example.org"})
                 self.assertEqual(response.status_code, 422)
+
+    def test_ready_requires_both_temporal_and_computer(self):
+        token = "x" * 40
+        headers = {"Authorization": "Bearer " + token}
+        with patch.dict(os.environ, {"CORE_TOKEN": token}):
+            with TestClient(app) as client:
+                with patch("reign.core.Client.connect", new_callable=AsyncMock) as connect, \
+                     patch("reign.core.worker", new_callable=AsyncMock) as worker:
+                    connect.return_value.workflow_service.get_system_info = AsyncMock(return_value={})
+                    worker.return_value.status_code = 200
+                    self.assertEqual(client.get("/api/readyz", headers=headers).status_code, 200)
+                    worker.side_effect = HTTPException(503, "Worker unavailable")
+                    self.assertEqual(client.get("/api/readyz", headers=headers).status_code, 503)
+                    worker.side_effect = None
+                    connect.side_effect = ConnectionError("Temporal unavailable")
+                    self.assertEqual(client.get("/api/readyz", headers=headers).status_code, 503)
 
 
 if __name__ == "__main__":
