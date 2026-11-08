@@ -7,6 +7,13 @@ this pilot. Application releases must not add credentials to images or Git.
 
 ## Core and UltraView AX (implemented pilot; release gates still apply)
 
+UltraView now uses the approved v1 visual source recorded in `docs/design/`.
+`GET /api/me` checks the human session and returns explicit capability flags.
+`GET /api/status` uses that session to request real Core dependency readiness.
+Neither exposes Core/Computer credentials. The older Bearer `/api/readyz` remains
+available for deployment verification. The text composer supports explicit
+workspace commands; voice and general AI chat remain unavailable.
+
 - Core consumes `TEMPORAL_ADDRESS`, namespace/task queue, `COMPUTER_URL`,
   `COMPUTER_TOKEN`, `CORE_TOKEN`. Use server-side authenticated requests.
 - AX consumes `CORE_URL`, `CORE_TOKEN`, `AX_SESSION_KEY`. AX owns an authenticated
@@ -63,3 +70,32 @@ the following deployed acceptance or James's human signoff. Frames carry
 7. Store redacted screenshots/trace, timestamps, image digests, workflow IDs,
    checks and failures. Report passed/failed/blocked separately for deployment,
    browser behavior, live viewing and human acceptance.
+
+
+## LangChain / LangGraph agent
+
+Core exposes authenticated `GET /api/agent`, `POST /api/chat`,
+`GET /api/chat/{thread_id}`, `POST /api/chat/{thread_id}/resume`, and
+`DELETE /api/chat/{thread_id}`. AX forwards these only with its signed login
+cookie; writes also require same-origin CSRF verification. The OpenAI key never
+reaches AX or the browser. `/api/agent.configured` is the configuration signal;
+`/api/me.capabilities.ai_chat` identifies endpoint support, not provider readiness.
+
+Chat uses LangChain ChatOpenAI with the OpenAI Responses API, `store=false`,
+serial tool calls and Workmates' configured model. LangGraph maintains messages,
+conditional model/tool execution, checkpoints, and human-control interrupts.
+Tools are `workspace_status`, `browser_status`, `open_browser`, and
+`navigate_browser`. Only the request-bound session can be used; URL allowlisting
+and Temporal/worker epoch fencing are retained. No shell, deployment, arbitrary
+MCP server or database tools are exposed without their required integrations.
+
+Runs are asynchronous and expose actual node/tool events, text results and token
+usage. No hidden reasoning or raw provider exceptions appear in traces. Return
+control and explicitly resume to continue an interrupted navigation. Stop/new
+chat cancels and deletes the conversation; it does not undo completed actions or
+close the browser. Browser controls remain responsive during model requests.
+
+Limits: six tool steps per turn, 240 seconds per run, twelve turns per thread,
+eight threads, two active runs, and thirty minutes idle lifetime. Checkpoints are
+in memory on the single Core instance and reset on restart. Durable PostgreSQL
+checkpoints and MCP data tools remain pending restricted REIGN DB access.

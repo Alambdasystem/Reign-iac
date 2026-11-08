@@ -4,3 +4,6 @@ httpx==0.28.1
 temporalio==1.35.0
 asyncpg==0.31.0
 mcp>=1.20,<2
+langchain-openai==1.7.4
+langgraph==1.2.20
+langchain-core==1.7.6

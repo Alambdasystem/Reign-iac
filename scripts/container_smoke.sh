@@ -49,4 +49,5 @@ run_browser_test initial
 docker restart "$temporal" "$computer" >/dev/null
 wait_ready
 run_browser_test restart
+docker exec "$ax" python -m reign.live_acceptance --ci-local
 echo "PASS: four-service automated acceptance; real human acceptance remains pending."

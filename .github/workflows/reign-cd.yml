@@ -63,4 +63,4 @@ jobs:
             artifacts/smoke/
           retention-days: 14
       - name: Explain promotion gate
-        run: echo "Review the tested release manifest and registry access, then use the protected OpenTofu plan/apply workflow. This workflow never calls deploy hooks or changes Render resources." >> "$GITHUB_STEP_SUMMARY"
+        run: echo "Review the tested release manifest and registry access, then promote reviewed digests through the existing Render Blueprint with auto-sync off. This workflow never calls deploy hooks or changes Render resources." >> "$GITHUB_STEP_SUMMARY"

@@ -1,3 +1,26 @@
+## In progress: approved UltraView and LangGraph rollout (2026-11-08)
+
+User authorized deploying the original UltraView AX design and using Workmates'
+OpenAI connection, with active LangChain/LangGraph orchestration. Implementation
+is in this change; do not label it live until the immutable image promotion and
+Render acceptance receipt below are recorded.
+
+- Original design preserved under `docs/design/UltraView_AX_v1.html`; live UI uses
+  its ruby fluid/orb/canvas and mobile layout, with real browser ownership,
+  reconnect, session restore and expanded remote view.
+- LangChain ChatOpenAI uses Workmates' Responses API pattern. LangGraph runs
+  bounded model/tool loops, memory, trace events, and pause/resume checkpoints.
+- Connect Core's OPENAI_API_KEY and OPENAI_MODEL through Render `fromService`
+  references to existing workmates-api; never copy secrets into source or AX.
+- Keep existing paid resource sizes, Blueprint ownership and autoSync=false.
+  Publish tested images, pin Core/AX digests, review plan, then verify actual
+  OpenAI tools plus live takeover/handback with `reign.live_acceptance`.
+- Voice, durable agent memory, restricted DB permissions and external desktop
+  adapters remain separate unfinished integrations. Remote computers must support
+  both provisioned managed workers and user-supplied endpoints, with credential
+  references, connectivity checks, explicit capability discovery, and the same
+  takeover/epoch fences. Never treat an arbitrary URL as a compatible desktop.
+
 # Continue REIGN from another ChatGPT session
 
 Temporary repository: https://github.com/Alambdasystem/Reign-iac

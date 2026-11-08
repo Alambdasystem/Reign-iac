@@ -1,59 +1,24 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>REIGN • UltraView AX</title>
-<style>
-:root{color-scheme:dark;font:15px system-ui;background:#10131b;color:#e8ecf5}
-*{box-sizing:border-box}body{margin:0;padding:20px;max-width:1200px;margin:auto}
-header,nav,.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}header{justify-content:space-between}
-section{background:#1c2331;border:1px solid #394255;border-radius:12px;padding:18px;margin:16px 0}
-button,input{font:inherit;border-radius:8px;padding:10px}button{background:#536bd8;color:white;border:0;cursor:pointer}button:disabled{opacity:.4;cursor:not-allowed}
-input{background:#111827;color:white;border:1px solid #59637a}#screen{display:block;width:100%;max-width:100%;aspect-ratio:8/5;object-fit:contain;background:#080a0f;border:1px solid #414b60;cursor:crosshair}
-#status{min-height:24px}label{display:block;margin:8px 0}small{color:#adb8cd}
-</style></head><body>
-<header><h1>REIGN · UltraView AX</h1><span id="status" role="status" aria-live="polite">Sign in to begin.</span></header>
-<section id="loginPanel"><h2>Sign in</h2><form id="loginForm"><label>Password <input id="password" type="password" autocomplete="current-password" required></label><button>Sign in</button></form></section>
-<main id="console" hidden>
-<section><div class="row"><button id="open">Open Git High</button><button id="take" disabled>Take control</button><button id="return" disabled>Return control</button><button id="close" disabled>Close session</button><button id="logout">Sign out</button></div>
-<p>Session: <output id="session">None</output> · Controller: <output id="controller">—</output> · Epoch: <output id="epoch">—</output></p>
-<img id="screen" alt="Live remote computer screenshot" draggable="false"><small>Screen refreshes while connected. Clicking the screen sends input only while you control it.</small></section>
-<section><h2>Human input</h2><div class="row"><input id="text" aria-label="Text to type" placeholder="Type into remote computer"><button id="send" disabled>Send text</button><button id="scroll" disabled>Scroll down</button></div></section>
-</main>
-<script>
-'use strict';
-let sid=null, epoch=null, controller=null, poll=null;
-const $=id=>document.getElementById(id);
-const say=msg=>{$('status').textContent=msg};
-function csrf(){return document.cookie.split('; ').find(x=>x.startsWith('ax_csrf='))?.slice(8)||''}
-async function api(path,method='GET',body){
- const headers={};if(method!=='GET'){headers['Content-Type']='application/json';headers['X-CSRF-Token']=csrf()}
- const r=await fetch(path,{method,headers,credentials:'same-origin',body:body===undefined?undefined:JSON.stringify(body),cache:'no-store'});
- if(!r.ok)throw Error('Request failed ('+r.status+')');return r.json()
-}
-function refreshControls(){
- $('open').disabled=!!sid;
- $('take').disabled=!sid||controller!=='agent';$('return').disabled=!sid||controller!=='human';
- $('close').disabled=!sid;$('send').disabled=!sid||controller!=='human';$('scroll').disabled=$('send').disabled;
- $('session').textContent=sid||'None';$('controller').textContent=controller||'—';$('epoch').textContent=epoch??'—'
-}
-function stop(){if(poll)clearInterval(poll);poll=null;sid=null;epoch=null;controller=null;$('screen').removeAttribute('src');refreshControls()}
-async function sync(){
- if(!sid)return;
- try{
- const s=await api('/api/sessions/'+encodeURIComponent(sid));
- controller=s.control_owner??s.controller??s.mode??null;epoch=s.epoch??s.control_epoch??null;
- refreshControls();
- $('screen').src='/api/sessions/'+encodeURIComponent(sid)+'/frame?t='+Date.now();
- }catch(e){say('Connection lost: '+e.message);if(poll)clearInterval(poll);poll=null;controller=null;epoch=null;refreshControls()}
-}
-async function run(fn){try{await fn()}catch(e){say(e.message)}}
-$('loginForm').onsubmit=e=>{e.preventDefault();run(async()=>{await api('/login','POST',{password:$('password').value});$('password').value='';$('loginPanel').hidden=true;$('console').hidden=false;say('Authenticated')})};
-$('open').onclick=()=>run(async()=>{stop();const s=await api('/api/sessions','POST',{url:'https://alambda-forge.onrender.com/'});sid=s.id??s.session_id;if(!sid)throw Error('Core returned no session ID');say('Session opened');await sync();poll=setInterval(sync,1500)});
-async function change(mode){const s=await api('/api/sessions/'+encodeURIComponent(sid)+'/control','POST',{mode,epoch});controller=s.control_owner??s.mode??mode;epoch=s.epoch??epoch;refreshControls();say('Control: '+controller)}
-$('take').onclick=()=>run(()=>change('human'));$('return').onclick=()=>run(()=>change('agent'));
-async function input(data){await api('/api/sessions/'+encodeURIComponent(sid)+'/input','POST',{epoch,...data});await sync()}
-$('screen').onclick=e=>run(async()=>{if(controller!=='human')return;const r=e.currentTarget.getBoundingClientRect();await input({kind:'click',x:Math.max(0,Math.min(1279,(e.clientX-r.left)*1280/r.width)),y:Math.max(0,Math.min(799,(e.clientY-r.top)*800/r.height))})});
-$('send').onclick=()=>run(()=>input({kind:'text',text:$('text').value}));
-$('scroll').onclick=()=>run(()=>input({kind:'scroll',dy:450}));
-$('close').onclick=()=>run(async()=>{await api('/api/sessions/'+encodeURIComponent(sid),'DELETE');stop();say('Session closed')});
-$('logout').onclick=()=>run(async()=>{await api('/logout','POST');stop();$('console').hidden=true;$('loginPanel').hidden=false;say('Signed out')});
-</script></body></html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>REIGN · UltraView AX</title><link rel="stylesheet" href="/assets/ultraview.css"><link rel="stylesheet" href="/assets/live.css"></head>
+<body><canvas id="fluid" aria-label="Animated dark ruby fluid background" aria-hidden="true"></canvas><div class="shade"></div>
+<main class="ui" data-design="ultraview-ax-v1-live">
+<header class="top"><div><div class="brand">REIGN</div><div class="sub">ULTRAVIEW · AGENTIC EXPERIENCE</div></div><span class="preview" id="connection">SIGN IN</span></header>
+<section class="panel login-panel" id="loginPanel"><h1>Your workspace, in view.</h1><p>Sign in to work with REIGN and take control of its browser.</p><form id="loginForm"><label for="password">Workspace password</label><input id="password" type="password" autocomplete="current-password" required><button type="submit">Sign in</button></form><p id="loginMessage" role="status"></p></section>
+<div id="console" hidden>
+<nav class="tabs" aria-label="Workspace"><button class="on" data-tab="Chat" aria-pressed="true">Chat</button><button data-tab="Work" aria-pressed="false">Work</button><button data-tab="Agents" aria-pressed="false">Agents</button><button data-tab="Tools" aria-pressed="false">Tools</button></nav>
+<section class="hero"><div class="orb" data-mode="idle" aria-hidden="true"><div class="glow"></div></div><div class="state" id="state">Ready</div><div class="hint" id="status" role="status" aria-live="polite">Checking your workspace…</div><p class="voice-note">Voice conversation isn’t connected yet.</p></section>
+<section class="panel" id="panel"><div class="panel-head"><b id="panelName">LIVING CANVAS</b><button id="pin" type="button" aria-pressed="false">Pin visible</button></div>
+<div class="screen-card" id="screenCard"><div class="screen-top"><span class="live" id="liveLabel">COMPUTER · NOT CONNECTED</span><button id="expandRemote" type="button" disabled>Expand ↗</button></div><div class="screen-wrap"><img id="screen" alt="Live REIGN browser screen" draggable="false" hidden><div class="empty-screen" id="emptyScreen"><strong>Your live workspace appears here.</strong><span>Open Git High to start a browser session.</span></div></div><div class="screen-footer"><span id="controlLabel">No active session</span><span id="frameStatus">Waiting for a session</span></div></div>
+<div class="work-actions"><button id="open" type="button">Open Git High</button><button id="take" type="button" disabled>Take control</button><button id="return" type="button" disabled>Return control</button><button id="close" type="button" disabled>Close session</button><button id="reconnect" type="button" hidden>Reconnect</button></div>
+<div class="details" id="details" hidden></div>
+<div class="feed" id="feed" role="log" aria-label="Workspace activity" aria-live="polite"></div>
+<div hidden aria-hidden="true"><output id="session">None</output><output id="controller">—</output><output id="epoch">—</output></div>
+</section>
+<div class="actions"><button class="action" id="mute" disabled title="Voice conversation is not connected"><i aria-hidden="true">♩</i>Voice unavailable</button><button class="action end" id="logout"><i aria-hidden="true">↗</i>Sign out</button><button class="action" id="motion"><i aria-hidden="true">◉</i>Pause fluid</button></div>
+<div class="composer"><form id="form"><input id="message" placeholder="Ask REIGN, or give it a task…" aria-label="Message REIGN" maxlength="4000" autocomplete="off"><button type="submit" id="sendCommand">Send</button></form><div class="agent-controls"><span id="agentLabel" role="status">Connecting REIGN…</span><button type="button" id="resumeAgent" hidden>Resume</button><button type="button" id="cancelAgent" hidden>Stop / new chat</button></div><small>Quick commands: open Git High, take control, return control, close session, status.</small></div>
+<nav class="nav" aria-label="Quick navigation"><button class="on" data-tab="Chat">⌂ Home</button><button data-tab="Work">▱ Projects</button><button data-tab="Tools">⌘ MCP</button><button data-tab="Agents">◈ Agents</button></nav>
+<div class="footer">REIGN · UltraView AX · Managed browser workspace</div>
+</div></main>
+<div class="remote-overlay" id="remoteOverlay" role="dialog" aria-modal="true" aria-label="REIGN live computer" hidden><div class="remote-header"><strong>REIGN COMPUTER · LIVE VIEW</strong><button id="closeRemote">✕ Close view</button></div><div class="remote-screen" id="remoteScreen"><img id="fullScreen" alt="Expanded live REIGN browser screen" draggable="false"></div><div class="remote-toolbar"><button id="takeExpanded" disabled>Take control</button><button id="returnExpanded" disabled>Return control</button><button id="tabKey" disabled>Tab</button><button id="enterKey" disabled>Enter</button><button id="scroll" disabled>Scroll down</button><button id="scrollUp" disabled>Scroll up</button></div><form id="inputForm"><input id="text" aria-label="Text to type into remote browser" placeholder="Type into the remote browser" autocomplete="off" disabled><button id="send" disabled>Send text</button></form><div class="remote-status" id="remoteStatus" role="status"></div><div class="remote-note">Take control to click, type, or scroll. Return control when you’re finished.</div></div>
+<script src="/assets/fluid.js" defer></script><script src="/assets/live.js" defer></script></body></html>

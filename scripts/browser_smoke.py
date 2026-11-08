@@ -23,6 +23,8 @@ async def main():
         browser = await p.chromium.launch(args=["--disable-dev-shm-usage"])
         context = await browser.new_context(ignore_https_errors=True)
         page = await context.new_page()
+        page_errors = []
+        page.on("pageerror", lambda error: page_errors.append(str(error)))
         page.set_default_timeout(120000)
         request = context.request
         assert (await request.get(AX + "/api/readyz")).status == 401
@@ -32,9 +34,19 @@ async def main():
         assert (await ready.json())["components"] == {
             "core": "ready", "temporal": "ready", "computer": "ready"}
         await page.goto(AX)
+        await expect(page.locator('main[data-design="ultraview-ax-v1-live"]')).to_be_visible()
+        await page.set_viewport_size({"width": 390, "height": 844})
+        await page.screenshot(path=str(EVIDENCE / "ultraview-mobile-login.png"))
         await page.locator("#password").fill(os.environ["AX_ADMIN_PASSWORD"])
         await page.locator("#loginForm button").click()
-        await expect(page.locator("#console")).to_be_visible()
+        await expect(page.locator("#open")).to_be_visible()
+        assert (await request.get(AX + "/api/me")).status == 200
+        assert (await request.get(AX + "/api/status")).status == 200
+        await expect(page.locator("#mute")).to_be_disabled()
+        for width, height in [(390, 844), (430, 932), (1280, 900)]:
+            await page.set_viewport_size({"width": width, "height": height})
+            assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "Horizontal overflow"
+            await page.screenshot(path=str(EVIDENCE / f"ultraview-{width}.png"))
         cookies = await context.cookies()
         session_cookie = next(c for c in cookies if c["name"] == "ax_session")
         assert session_cookie["secure"] and session_cookie["httpOnly"]
@@ -92,22 +104,41 @@ async def main():
             first = await api(prefix + "/frame")
             assert len(await first.body()) > 100
             assert first.headers["x-session-id"] == sid
+            # Refresh keeps the authenticated session and its existing computer.
+            await page.reload()
+            await expect(page.locator("#session")).to_have_text(sid)
+            await expect(page.locator("#expandRemote")).to_be_enabled()
             await page.locator("#take").click()
             await expect(page.locator("#controller")).to_have_text("human")
             await expect(page.locator("#epoch")).to_have_text("1")
             await api(prefix + "/navigate", "POST", {"url": TARGET, "epoch": 0}, 409)
             await api(prefix + "/input", "POST", {"kind": "key", "key": "Tab", "epoch": 1})
+            await page.locator("#expandRemote").click()
+            await expect(page.locator("#remoteOverlay")).to_be_visible()
+            await page.set_viewport_size({"width": 390, "height": 844})
+            await expect(page.locator("#fullScreen")).to_be_visible()
             await page.locator("#scroll").click()
+            await page.screenshot(path=str(EVIDENCE / "ultraview-mobile-takeover.png"))
             second = await api(prefix + "/frame")
             assert int(second.headers["x-frame-sequence"]) > int(first.headers["x-frame-sequence"])
             assert int(second.headers["x-frame-timestamp"]) > int(first.headers["x-frame-timestamp"])
             assert second.headers["cache-control"] == "no-store"
             await page.screenshot(path=str(EVIDENCE / "ax-takeover.png"))
+            await page.locator("#closeRemote").click()
             await page.locator("#return").click()
             await expect(page.locator("#controller")).to_have_text("agent")
             await expect(page.locator("#epoch")).to_have_text("2")
             await api(prefix + "/input", "POST", {"kind": "key", "key": "Tab", "epoch": 1}, 409)
             await api(prefix + "/navigate", "POST", {"url": TARGET, "epoch": 2})
+            # Inject a frame transport failure: stale images and input must stop.
+            frame_route = "**" + prefix + "/frame"
+            await page.route(frame_route, lambda route: route.fulfill(status=503, body="unavailable"))
+            await expect(page.locator("#reconnect")).to_be_visible()
+            await expect(page.locator("#take")).to_be_disabled()
+            await expect(page.locator("#screen")).to_be_hidden()
+            await page.unroute(frame_route)
+            await page.locator("#reconnect").click()
+            await expect(page.locator("#take")).to_be_enabled()
             await page.locator("#close").click()
             await expect(page.locator("#session")).to_have_text("None")
             await api(prefix + "/frame", status=404)
@@ -121,10 +152,13 @@ async def main():
                 "authenticated_ui": "passed", "live_frames": "passed",
                 "takeover_handback": "passed", "stale_commands": "passed",
                 "cleanup": "passed", "human_acceptance": "not_run",
+                "approved_design": "UltraView AX v1", "responsive_layout": "passed",
+                "reload_reconnect": "passed", "frame_failure_fail_closed": "passed",
                 "target": TARGET,
             }
             (EVIDENCE / "smoke.json").write_text(json.dumps(evidence, indent=2) + "\n")
             print("PASS: real AX login, Core dispatch, Temporal history, browser frames and control")
+        assert not page_errors, page_errors
         await browser.close()
 
 
