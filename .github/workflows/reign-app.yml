@@ -46,3 +46,16 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build service container
         run: docker build --platform linux/amd64 -f services/${{ matrix.service }}/Dockerfile -t reign-${{ matrix.service }}:ci .
+
+  container-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [python-tests, container-build]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Temporal and Computer images for integration smoke
+        run: |
+          docker build --platform linux/amd64 -f services/temporal/Dockerfile -t reign-temporal:ci .
+          docker build --platform linux/amd64 -f services/computer/Dockerfile -t reign-computer:ci .
+      - name: Verify Temporal, authenticated worker, and Chromium screenshot
+        run: bash scripts/container_smoke.sh
