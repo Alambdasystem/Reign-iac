@@ -9,6 +9,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from temporalio.client import Client
+from temporalio.api.workflowservice.v1 import GetSystemInfoRequest
 
 from reign.config import QUEUE, NAMESPACE, checked_url, computer_url, temporal_address
 
@@ -83,7 +84,7 @@ async def health():
 async def ready():
     try:
         client = await Client.connect(temporal_address(), namespace=NAMESPACE)
-        await client.workflow_service.get_system_info({})
+        await client.workflow_service.get_system_info(GetSystemInfoRequest())
         await worker("GET", "/healthz")
     except Exception:
         raise HTTPException(503, "Dependencies not ready")
