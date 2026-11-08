@@ -12,9 +12,12 @@ class AXTests(unittest.TestCase):
         with patch.dict(os.environ, SETTINGS):
             with TestClient(app) as client:
                 self.assertEqual(client.get("/healthz").status_code, 200)
+                self.assertEqual(client.get("/").status_code, 200)
+                self.assertIn("Take control", client.get("/").text)
                 self.assertEqual(client.get("/api/sessions/123").status_code, 401)
                 self.assertEqual(client.post("/login", json={"password": "bad"}).status_code, 401)
                 self.assertEqual(client.post("/login", json={"password": "p" * 40}).status_code, 200)
+                self.assertEqual(client.get("/api/sessions/not-a-uuid").status_code, 422)
                 self.assertEqual(client.post("/api/sessions", json={}).status_code, 403)
                 self.assertEqual(client.post("/api/sessions", headers={"Origin": "https://evil.example",
                     "x-csrf-token": client.cookies.get("ax_csrf")}, json={}).status_code, 403)
