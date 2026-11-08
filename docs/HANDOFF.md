@@ -3,6 +3,24 @@
 Temporary repository: https://github.com/Alambdasystem/Reign-iac
 Long-term destination: https://alambda-forge.onrender.com/
 
+## Pending deployment-method decision
+
+PR #4 prepares a Render-managed alternative to the original OpenTofu path:
+https://github.com/Alambdasystem/Reign-iac/pull/4
+Read `docs/RENDER_MANAGED_PROPOSAL.md` before proceeding. The preview creates four
+new pilot services with the same tested digests and approximately $64.25/month
+base compute/disk cost. No existing services or shared database are changed.
+The initial alternative has no REIGN database persistence. James's existing
+budget approval is recorded; changing the deployment owner and postponing live
+database setup still requires his explicit decision.
+
+Pending Blueprint: `exs-dbofqkm417fc7384kou0`, auto-sync off. It has not been
+applied. The OpenTofu workflow is disabled on this proposed branch, which must
+remain unmerged until that decision. After approval, use this same Blueprint,
+point it to the reviewed main revision and re-plan; never create duplicate pilot
+resources or run both deployment owners. The remainder of this handoff records
+the original OpenTofu path and completed application work.
+
 GitHub write access through the Work session's connector was verified with the
 initial commit `dc88c05d29d9eec6fa9798e928c21e66ec9d99e6`. That does not prove a
 different ChatGPT mode/session has write tools or the same account permissions.

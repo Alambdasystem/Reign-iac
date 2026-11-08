@@ -1,4 +1,6 @@
-name: Plan and approve REIGN infrastructure
+# Retained for migration reference. This proposed branch selects Blueprint ownership.
+# Re-enable only after an explicitly approved ownership/state migration.
+name: Disabled OpenTofu pilot workflow
 on:
   workflow_dispatch:
     inputs:
@@ -20,7 +22,7 @@ env:
   TF_INPUT: 'false'
 jobs:
   plan:
-    if: github.ref == 'refs/heads/main'
+    if: ${{ false }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: reign-plan
@@ -67,7 +69,7 @@ jobs:
         run: rm -f infra/render/release.tfplan "$RUNNER_TEMP/plan.log"
   apply:
     needs: plan
-    if: inputs.operation == 'apply' && inputs.approve_paid_changes && vars.REIGN_APPLY_ENABLED == 'true'
+    if: ${{ false }}
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     # Must have required reviewers and main-only branch policy before enabling.

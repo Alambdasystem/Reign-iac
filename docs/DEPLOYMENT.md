@@ -1,5 +1,21 @@
 # Deployment setup and approval
 
+## Pending Render-managed alternative
+
+This proposed branch prepares the Render Blueprint path described in
+[RENDER_MANAGED_PROPOSAL.md](RENDER_MANAGED_PROPOSAL.md). James must explicitly
+approve the ownership change and initial pilot without REIGN database persistence
+before this branch is merged or its Blueprint is applied. The old OpenTofu
+workflow is disabled in this proposal so the pilot cannot have two deployment
+owners. The sections below retain the original OpenTofu setup for migration
+reference; do not configure or enable that workflow alongside Blueprint ownership.
+
+Use the existing pending Blueprint `exs-dbofqkm417fc7384kou0`; do not create another.
+After approval and successful CI, merge this branch, point that Blueprint to main,
+re-plan the exact merged revision with auto-sync off, and verify create-only scope
+before applying. Render generates the runtime secrets; no HTTP state backend or
+GitHub-to-Render API secret is required for this alternative.
+
 ## What is configured in code
 
 - `validate.yml`: push/PR checks without Render credentials; mocked OpenTofu tests

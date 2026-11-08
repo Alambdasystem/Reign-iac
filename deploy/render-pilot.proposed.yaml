@@ -1,0 +1,119 @@
+# PROPOSAL ONLY: requires explicit approval to replace OpenTofu ownership.
+# Use create_new and autoSync=false when planning. No existing resources adopted.
+previews:
+  generation: 'off'
+services:
+- type: pserv
+  name: reign-temporal-pilot
+  runtime: image
+  plan: 1c-2g
+  region: oregon
+  numInstances: 1
+  image:
+    url: ghcr.io/alambdasystem/reign-temporal@sha256:afbae0626e74adbb7f1b4fab54b11342bc11af12df184b0847a5d6c55089aeb4
+  envVars:
+  - key: PORT
+    value: '7233'
+  disk:
+    name: reign-temporal-data
+    mountPath: /data
+    sizeGB: 1
+- type: pserv
+  name: reign-computer-pilot
+  runtime: image
+  plan: 1c-2g
+  region: oregon
+  numInstances: 1
+  image:
+    url: ghcr.io/alambdasystem/reign-computer@sha256:43e3b319193e0e61ecf2cceb23d3fead868685b1c816d1e47508c402c2d791c8
+  envVars:
+  - key: PORT
+    value: '10000'
+  - key: TEMPORAL_HOST
+    fromService:
+      name: reign-temporal-pilot
+      type: pserv
+      property: host
+  - key: TEMPORAL_NAMESPACE
+    value: default
+  - key: TEMPORAL_TASK_QUEUE
+    value: reign-computer
+  - key: ALLOWED_HOSTS
+    value: alambda-forge.onrender.com
+  - key: COMPUTER_TOKEN
+    generateValue: true
+  - key: MAX_SESSIONS
+    value: '1'
+  dockerCommand: sh -ec 'export TEMPORAL_ADDRESS="${TEMPORAL_HOST}:7233"; exec python -m uvicorn reign.computer:app
+    --host 0.0.0.0 --port "${PORT:-10000}"'
+- type: pserv
+  name: reign-core-pilot
+  runtime: image
+  plan: 0.5c-512mb
+  region: oregon
+  numInstances: 1
+  image:
+    url: ghcr.io/alambdasystem/reign-core@sha256:1259e7c738a11f8385f059c754b1f153829d80d89dbe16bf24a74b710e4d1915
+  envVars:
+  - key: PORT
+    value: '10000'
+  - key: TEMPORAL_HOST
+    fromService:
+      name: reign-temporal-pilot
+      type: pserv
+      property: host
+  - key: TEMPORAL_NAMESPACE
+    value: default
+  - key: TEMPORAL_TASK_QUEUE
+    value: reign-computer
+  - key: ALLOWED_HOSTS
+    value: alambda-forge.onrender.com
+  - key: COMPUTER_HOST
+    fromService:
+      name: reign-computer-pilot
+      type: pserv
+      property: host
+  - key: COMPUTER_TOKEN
+    fromService:
+      name: reign-computer-pilot
+      type: pserv
+      envVarKey: COMPUTER_TOKEN
+  - key: CORE_TOKEN
+    generateValue: true
+  dockerCommand: sh -ec 'export TEMPORAL_ADDRESS="${TEMPORAL_HOST}:7233"; export COMPUTER_URL="http://${COMPUTER_HOST}:10000";
+    exec uvicorn reign.core:app --host 0.0.0.0 --port "${PORT:-10000}"'
+- type: web
+  name: reign-ax-pilot
+  runtime: image
+  plan: 0.5c-512mb
+  region: oregon
+  numInstances: 1
+  image:
+    url: ghcr.io/alambdasystem/reign-ax@sha256:d9c480181f432e3ec26971d530fa3e0c6cf0c5975b77d15f8534b98b97ad4142
+  envVars:
+  - key: PORT
+    value: '10000'
+  - key: CORE_HOST
+    fromService:
+      name: reign-core-pilot
+      type: pserv
+      property: host
+  - key: CORE_TOKEN
+    fromService:
+      name: reign-core-pilot
+      type: pserv
+      envVarKey: CORE_TOKEN
+  - key: AX_SESSION_KEY
+    generateValue: true
+  - key: AX_ADMIN_PASSWORD
+    generateValue: true
+  - key: AX_PUBLIC_ORIGIN
+    fromService:
+      name: reign-ax-pilot
+      type: web
+      envVarKey: RENDER_EXTERNAL_URL
+  - key: AX_ALLOW_INTERNAL_HTTP
+    value: '1'
+  dockerCommand: sh -ec 'export CORE_URL="http://${CORE_HOST}:10000"; exec uvicorn reign.ax:app --host 0.0.0.0 --port
+    "${PORT:-10000}"'
+  healthCheckPath: /healthz
