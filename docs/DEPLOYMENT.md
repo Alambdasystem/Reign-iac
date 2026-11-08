@@ -2,11 +2,16 @@
 
 ## What is configured in code
 
-- `validate.yml`: push/PR checks without Render credentials; mocked OpenTofu tests,
-  safety policy tests, Docker builds, Temporal/Computer/Chromium smoke test.
+- `validate.yml`: push/PR checks without Render credentials; mocked OpenTofu tests
+  plus the reusable `reign-app.yml` application workflow. It runs Python regressions,
+  real PostgreSQL 18 migration/isolation tests in a disposable database, and a
+  four-container AX/Core/Temporal/Computer browser acceptance test.
+- `reign-cd.yml`: after successful validation of the current main push, rebuilds
+  and tests the four exact images, publishes them, and records their registry
+  digests in a disabled release candidate artifact. No deploy hooks or Render
+  mutations occur here. Promote reviewed digests through OpenTofu only.
 - `build-image.yml`: manual per-component build. Publishing to GHCR is opt-in and
-  does not deploy to Render. Core/AX builds fail clearly until their Dockerfiles
-  are implemented. Inspect package visibility and Render pull access before use.
+  does not deploy to Render. Core/AX Dockerfiles are implemented. Inspect package visibility and Render pull access before use.
 - `infrastructure.yml`: manual plan, sanitized review summary, encrypted plan
   artifact, a separately gated apply of that exact plan, live verification.
 
@@ -34,9 +39,12 @@ to `true`. Do not enable it before the following setup is verified.
    default POST update and LOCK/UNLOCK methods. Adapt explicitly for other servers.
 5. Set secrets in the secret UI: `RENDER_API_KEY`, `TF_HTTP_USERNAME`,
    `TF_HTTP_PASSWORD`, `PLAN_ENCRYPTION_KEY` (32+ random characters), and
-   `REIGN_RUNTIME_SECRETS_JSON` containing three distinct random values:
-   `core_token`, `computer_token`, `ax_session_key` (32+ characters each).
-   Use the same values in plan/apply environments. Never paste them into chat or
+   `REIGN_RUNTIME_SECRETS_JSON` containing four distinct random values:
+   `core_token`, `computer_token`, `ax_session_key`, `ax_admin_password` (32+ characters each).
+   Use the same values in plan/apply environments. Set variable
+   `REIGN_AX_PUBLIC_ORIGIN` to the exact AX HTTPS origin. Optional secret
+   `REIGN_DATABASE_URL` must use a verified REIGN-only role and is passed only
+   to Core; leave it unset for the stateless pilot. Never paste them into chat or
    Git, and never include real secrets in screenshots.
 6. Run **plan**. Review the exact source commit, resource names, plans, image
    digests, disk and current pricing. Get James's approval for the concrete cost.

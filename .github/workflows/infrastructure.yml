@@ -27,6 +27,8 @@ jobs:
     env:
       RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
       TF_VAR_runtime_secrets: ${{ secrets.REIGN_RUNTIME_SECRETS_JSON }}
+      TF_VAR_ax_public_origin: ${{ vars.REIGN_AX_PUBLIC_ORIGIN }}
+      TF_VAR_reign_database_url: ${{ secrets.REIGN_DATABASE_URL }}
       TF_HTTP_ADDRESS: ${{ vars.TF_HTTP_ADDRESS }}
       TF_HTTP_LOCK_ADDRESS: ${{ vars.TF_HTTP_LOCK_ADDRESS }}
       TF_HTTP_UNLOCK_ADDRESS: ${{ vars.TF_HTTP_UNLOCK_ADDRESS }}
@@ -74,6 +76,8 @@ jobs:
       PAID_CHANGE_APPROVAL: ${{ inputs.approve_paid_changes }}
       RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
       TF_VAR_runtime_secrets: ${{ secrets.REIGN_RUNTIME_SECRETS_JSON }}
+      TF_VAR_ax_public_origin: ${{ vars.REIGN_AX_PUBLIC_ORIGIN }}
+      TF_VAR_reign_database_url: ${{ secrets.REIGN_DATABASE_URL }}
       TF_HTTP_ADDRESS: ${{ vars.TF_HTTP_ADDRESS }}
       TF_HTTP_LOCK_ADDRESS: ${{ vars.TF_HTTP_LOCK_ADDRESS }}
       TF_HTTP_UNLOCK_ADDRESS: ${{ vars.TF_HTTP_UNLOCK_ADDRESS }}

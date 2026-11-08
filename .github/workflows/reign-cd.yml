@@ -1,0 +1,66 @@
+name: REIGN continuous delivery (gated)
+on:
+  workflow_run:
+    workflows: ["Validate REIGN infrastructure"]
+    types: [completed]
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: reign-cd
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    environment: reign-release
+    permissions:
+      contents: read
+      packages: write
+    env:
+      SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - name: Require current main revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: test "$SOURCE_SHA" = "$(gh api repos/$GITHUB_REPOSITORY/branches/main --jq .commit.sha)"
+      - name: Build the exact images to be tested and published
+        run: |
+          set -euo pipefail
+          for service in core ax computer temporal; do
+            docker build --platform linux/amd64 -f "services/$service/Dockerfile" -t "reign-$service:ci" .
+          done
+      - name: Test all four images before publishing
+        run: bash scripts/container_smoke.sh
+      - name: Publish tested images and record immutable digests
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          for service in core ax computer temporal; do
+            image="ghcr.io/$owner/reign-$service:$SOURCE_SHA"
+            docker tag "reign-$service:ci" "$image"
+            docker push "$image"
+          done
+          python3 scripts/release_manifest.py "$owner" "$SOURCE_SHA"
+          cat artifacts/release/release.json >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tested-release-${{ github.event.workflow_run.head_sha }}
+          path: |
+            artifacts/release/
+            artifacts/smoke/
+          retention-days: 14
+      - name: Explain promotion gate
+        run: echo "Review the tested release manifest and registry access, then use the protected OpenTofu plan/apply workflow. This workflow never calls deploy hooks or changes Render resources." >> "$GITHUB_STEP_SUMMARY"

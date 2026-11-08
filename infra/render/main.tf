@@ -46,7 +46,7 @@ resource "render_private_service" "core" {
   region         = "oregon"
   num_instances  = 1
   runtime_source = { image = var.images["core"] }
-  env_vars = {
+  env_vars = merge({
     PORT                = { value = "10000" }
     TEMPORAL_ADDRESS    = { value = "${local.temporal_host}:7233" }
     TEMPORAL_NAMESPACE  = { value = "default" }
@@ -55,7 +55,9 @@ resource "render_private_service" "core" {
     COMPUTER_TOKEN      = { value = var.runtime_secrets.computer_token }
     CORE_TOKEN          = { value = var.runtime_secrets.core_token }
     ALLOWED_HOSTS       = { value = "alambda-forge.onrender.com" }
-  }
+    }, var.reign_database_url == "" ? {} : {
+    REIGN_DATABASE_URL = { value = var.reign_database_url }
+  })
   previews = { generation = "off" }
   lifecycle { prevent_destroy = true }
 }
@@ -69,10 +71,13 @@ resource "render_web_service" "ax" {
   runtime_source    = { image = var.images["ax"] }
   health_check_path = "/healthz"
   env_vars = {
-    PORT           = { value = "10000" }
-    CORE_URL       = { value = "http://${local.core_host}:10000" }
-    CORE_TOKEN     = { value = var.runtime_secrets.core_token }
-    AX_SESSION_KEY = { value = var.runtime_secrets.ax_session_key }
+    PORT                   = { value = "10000" }
+    CORE_URL               = { value = "http://${local.core_host}:10000" }
+    CORE_TOKEN             = { value = var.runtime_secrets.core_token }
+    AX_SESSION_KEY         = { value = var.runtime_secrets.ax_session_key }
+    AX_ADMIN_PASSWORD      = { value = var.runtime_secrets.ax_admin_password }
+    AX_PUBLIC_ORIGIN       = { value = var.ax_public_origin }
+    AX_ALLOW_INTERNAL_HTTP = { value = "1" }
   }
   previews = { generation = "off" }
   lifecycle { prevent_destroy = true }

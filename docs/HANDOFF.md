@@ -105,7 +105,11 @@ Retain the documented Git High E2E flow and James's actual human acceptance.
 
 - Configurable computer profiles, managed/external adapters and connection setup;
   browser and desktop capabilities must be implemented and verified separately.
-- Core/AX application implementations and Dockerfiles; full Computer tests.
+- Core/AX application implementations and Dockerfiles now exist. CI now includes
+  four-service browser acceptance and disposable PostgreSQL migration/isolation
+  checks; consult the exact commit's run before claiming they passed.
+- Real external-computer adapters and user-owned connection acceptance remain
+  unfinished; the profile/interface types are groundwork only.
 - GitHub protected environments/branch policy, CI secrets, state server and lock
   verification; these require account configuration not accomplished by YAML.
 - Four released container digests; Render private-registry credentials if needed.
@@ -115,3 +119,46 @@ Retain the documented Git High E2E flow and James's actual human acceptance.
 
 Consult live CI for validation results on the current commit. Infrastructure
 validation, mock provider tests and container smoke are separate from deployment.
+
+## Approved deployment direction (2026-11-08)
+
+James selected **Render first, Tailscale second, hybrid long-term**.
+This is a deployment direction, not approval to bypass infrastructure safety gates
+or an authorization to enroll devices, expose ports, or spend an unbounded amount.
+
+1. Complete Core/AX/Computer/Temporal integration and real browser acceptance.
+2. Deploy on Render with OpenTofu, immutable tested images, isolated credentials,
+   protected state, and explicit protection for Workmates and Git High. Reuse an
+   existing PostgreSQL instance only after identifying its workspace, confirming
+   capacity and ownership, and isolating REIGN via a separate database/schema and
+   restricted role. Keep the pilot Temporal disk unless a migration is tested.
+3. Measure CPU, memory, storage, browser session limits and actual monthly cost
+   after live validation. Optimize Render service sizing without silently changing
+   the four-component architecture.
+4. In a separate, reversible migration phase, connect an approved Render-side
+   Tailscale connector with scoped ACLs to authorized worker hosts. Start with
+   Computer workers; consider GPU workloads later. Never expose CDP/RDP/VNC or
+   internal service ports publicly. Test authentication, identity binding,
+   takeover/handback, stale command rejection, reconnect and cleanup over the
+   private path.
+5. Move one workload at a time with measured rollback and preserve the working
+   Render deployment until the replacement passes live acceptance.
+
+**Current blockers to first live apply:** select the Render workspace; confirm
+the existing database's capacity/permissions; configure GitHub deployment
+environments, secrets, locked OpenTofu state backend and registry pull access;
+publish reviewed image digests and inspect an actual costed plan. CI success
+alone is not live deployment evidence.
+
+## Recovery changes (2026-11-08)
+
+The application branch was reconciled with main's four scaffolding commits.
+Two incorrect async HTTP response mocks were fixed. CI is consolidated under
+Validate REIGN infrastructure, calling reusable application validation. The
+four-service smoke exercises the actual AX browser UI and Temporal activities,
+including takeover, stale input and restart recovery. CD publishes tested image
+digests as a disabled candidate; OpenTofu remains the only deployment owner.
+No Render services or live database objects were changed during this recovery.
+Live configuration remains blocked on protected GitHub environment/secrets
+access, a verified locked HTTP state backend, registry pull access and cost
+approval. The hosted DB connector cannot reach the private database.

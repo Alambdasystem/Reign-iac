@@ -1,0 +1,70 @@
+name: REIGN application validation
+on:
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  python-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install application and test dependencies
+        run: pip install -r services/core/requirements.txt -r services/computer/requirements.txt -r services/ax/requirements.txt
+      - run: python -m compileall -q reign scripts tests
+      - run: python -m unittest discover -s tests -v
+  postgres-integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: reign_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: disposable-ci-only
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d reign_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install -r services/core/requirements.txt
+      - name: Migrations, isolation, constraints and effective role permissions
+        env:
+          REIGN_TEST_DATABASE_URL: postgresql://postgres:disposable-ci-only@127.0.0.1:5432/reign_ci
+        run: python -m unittest discover -s tests/integration -v
+  containers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    needs: [python-tests, postgres-integration]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Build all four linux/amd64 images
+        run: |
+          set -euo pipefail
+          for service in core ax computer temporal; do
+            docker build --platform linux/amd64 -f "services/$service/Dockerfile" -t "reign-$service:ci" .
+          done
+      - name: Real AX browser, Core, Temporal and Computer acceptance
+        run: bash scripts/container_smoke.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: four-service-acceptance-${{ github.run_id }}
+          path: artifacts/smoke/
+          if-no-files-found: ignore
+          retention-days: 7

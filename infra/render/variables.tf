@@ -33,18 +33,19 @@ variable "images" {
 
 variable "runtime_secrets" {
   type = object({
-    core_token     = string
-    computer_token = string
-    ax_session_key = string
+    core_token        = string
+    computer_token    = string
+    ax_session_key    = string
+    ax_admin_password = string
   })
-  default   = { core_token = "", computer_token = "", ax_session_key = "" }
+  default   = { core_token = "", computer_token = "", ax_session_key = "", ax_admin_password = "" }
   sensitive = true
   validation {
     condition = !var.provision || (
       alltrue([for secret in values(var.runtime_secrets) : length(secret) >= 32]) &&
-      length(toset(values(var.runtime_secrets))) == 3
+      length(toset(values(var.runtime_secrets))) == 4
     )
-    error_message = "Three distinct random secrets (32+ characters each) are required. Use secret storage."
+    error_message = "Four distinct random secrets (32+ characters each) are required. Use secret storage."
   }
 }
 
@@ -54,5 +55,26 @@ variable "plans" {
   validation {
     condition     = alltrue([for plan in values(var.plans) : contains(["starter", "standard"], plan)])
     error_message = "The pilot permits starter or standard only; review code and costs before increasing capacity."
+  }
+}
+
+variable "ax_public_origin" {
+  type        = string
+  default     = ""
+  description = "Exact HTTPS origin of the public AX console, required for CSRF protection."
+  validation {
+    condition     = !var.provision || can(regex("^https://[^/]+$", var.ax_public_origin))
+    error_message = "Provide the exact HTTPS AX origin before provisioning."
+  }
+}
+
+variable "reign_database_url" {
+  type        = string
+  default     = ""
+  sensitive   = true
+  description = "Optional private DSN for a verified REIGN-only runtime role. Never use Moby Alpha's application credentials."
+  validation {
+    condition     = var.reign_database_url == "" || can(regex("^postgres(ql)?://", var.reign_database_url))
+    error_message = "Supply a PostgreSQL DSN through protected secret storage, or leave database support disabled."
   }
 }

@@ -103,6 +103,10 @@ class BrowserSessions:
             s = self.get(sid)
             if epoch != s["epoch"]:
                 raise HTTPException(409, "Stale control state; refresh the session")
+            if mode == s["mode"]:
+                raise HTTPException(409, "Control already belongs to requested controller")
+            if (s["mode"], mode) not in {("agent", "human"), ("human", "agent")}:
+                raise HTTPException(409, "Invalid control transition")
             s["mode"] = mode
             s["epoch"] += 1
             return await self.info(sid)
@@ -163,6 +167,8 @@ async def navigate_browser(data: dict) -> dict:
     try:
         return await manager.navigate(data["id"], data["url"], data["epoch"])
     except (ValueError, HTTPException) as e:
+        if isinstance(e, HTTPException) and e.status_code == 409:
+            raise ApplicationError("Control changed", type="ControlChanged", non_retryable=True) from e
         raise ApplicationError(str(e), non_retryable=True) from e
 
 
@@ -219,9 +225,14 @@ async def info(sid: str):
 @app.get("/sessions/{sid}/frame", dependencies=[Depends(authorize)])
 async def frame(sid: str):
     async with manager.lock:
-        page = manager.get(sid)["page"]
+        session = manager.get(sid)
+        page = session["page"]
         data = await page.screenshot(type="jpeg", quality=65, timeout=5000)
-    return Response(data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+        session["frame_sequence"] = session.get("frame_sequence", 0) + 1
+        headers = {"Cache-Control": "no-store", "X-Session-ID": sid,
+                   "X-Frame-Sequence": str(session["frame_sequence"]),
+                   "X-Frame-Timestamp": str(time.time_ns())}
+    return Response(data, media_type="image/jpeg", headers=headers)
 
 
 class Control(BaseModel):
