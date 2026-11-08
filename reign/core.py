@@ -92,7 +92,10 @@ async def ready():
 
 @app.post("/api/sessions", dependencies=[Depends(authorize)])
 async def open_session(data: OpenRequest):
-    checked_url(data.url)
+    try:
+        checked_url(data.url)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     sid = str(uuid.uuid4())
     try:
         client = await Client.connect(temporal_address(), namespace=NAMESPACE)
@@ -116,7 +119,10 @@ async def frame(sid: uuid.UUID):
 
 @app.post("/api/sessions/{sid}/navigate", dependencies=[Depends(authorize)])
 async def navigate(sid: uuid.UUID, data: NavigateRequest):
-    checked_url(data.url)
+    try:
+        checked_url(data.url)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     try:
         client = await Client.connect(temporal_address(), namespace=NAMESPACE)
         return await client.execute_workflow("NavigateBrowser",
