@@ -1,0 +1,85 @@
+name: REIGN continuous delivery (gated)
+on:
+  workflow_run:
+    workflows: ["REIGN application validation"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: reign-cd
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.revision.outputs.sha }}
+    steps:
+      - name: Resolve trusted revision
+        id: revision
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          DISPATCH_SHA: ${{ github.sha }}
+        run: |
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then echo "sha=$DISPATCH_SHA" >> "$GITHUB_OUTPUT"; else echo "sha=$RUN_SHA" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.revision.outputs.sha }}
+          persist-credentials: false
+      - name: Require main branch HEAD (no stale deploy)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.revision.outputs.sha }}
+        run: |
+          current="$(gh api repos/$GITHUB_REPOSITORY/branches/main --jq .commit.sha)"
+          test "$SHA" = "$current"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish immutable revision images
+        env:
+          SHA: ${{ steps.revision.outputs.sha }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          owner="$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')"
+          for service in core ax computer temporal; do
+            image="ghcr.io/$owner/reign-$service:$SHA"
+            docker build --platform linux/amd64 -f "services/$service/Dockerfile" -t "$image" .
+            docker push "$image"
+          done
+  deploy:
+    needs: publish
+    runs-on: ubuntu-latest
+    environment: reign-render-production
+    steps:
+      - name: Require explicit existing-service deployment hooks
+        env:
+          CORE_HOOK: ${{ secrets.REIGN_CORE_DEPLOY_HOOK }}
+          AX_HOOK: ${{ secrets.REIGN_AX_DEPLOY_HOOK }}
+          COMPUTER_HOOK: ${{ secrets.REIGN_COMPUTER_DEPLOY_HOOK }}
+          TEMPORAL_HOOK: ${{ secrets.REIGN_TEMPORAL_DEPLOY_HOOK }}
+        run: |
+          set -euo pipefail
+          for name in CORE_HOOK AX_HOOK COMPUTER_HOOK TEMPORAL_HOOK; do
+            value="${!name:-}"
+            if [[ "$value" != https://* ]]; then echo "::error::$name must be a configured HTTPS Render deploy hook"; exit 1; fi
+          done
+      - name: Trigger existing Render services (no infrastructure apply)
+        env:
+          CORE_HOOK: ${{ secrets.REIGN_CORE_DEPLOY_HOOK }}
+          AX_HOOK: ${{ secrets.REIGN_AX_DEPLOY_HOOK }}
+          COMPUTER_HOOK: ${{ secrets.REIGN_COMPUTER_DEPLOY_HOOK }}
+          TEMPORAL_HOOK: ${{ secrets.REIGN_TEMPORAL_DEPLOY_HOOK }}
+        run: |
+          set -euo pipefail
+          for name in TEMPORAL_HOOK COMPUTER_HOOK CORE_HOOK AX_HOOK; do
+            curl --fail --silent --show-error --retry 2 --max-time 30 -X POST "${!name}" >/dev/null
+          done
+          echo "Deploy requests accepted; runtime health and pinned-image verification remain separate release gates."
