@@ -1,20 +1,27 @@
 # Deployment setup and approval
 
-## Pending Render-managed alternative
+## Active Render Blueprint owner
 
-This proposed branch prepares the Render Blueprint path described in
-[RENDER_MANAGED_PROPOSAL.md](RENDER_MANAGED_PROPOSAL.md). James must explicitly
-approve the ownership change and initial pilot without REIGN database persistence
-before this branch is merged or its Blueprint is applied. The old OpenTofu
-workflow is disabled in this proposal so the pilot cannot have two deployment
-owners. The sections below retain the original OpenTofu setup for migration
-reference; do not configure or enable that workflow alongside Blueprint ownership.
+James approved Blueprint ownership, the $64.25/month base four-service pilot and
+initial launch without REIGN database persistence on 2026-11-08. PR #4 is merged.
+Use existing Blueprint `exs-dbofqkm417fc7384kou0` in Jim's workspace
+`tea-dbdccfpsrm7s73b8rugg`, branch main, file `deploy/render-pilot.proposed.yaml`,
+with auto-sync disabled. The original proposal filename is retained to avoid
+unnecessary path changes. See [DEPLOYMENT_RECEIPT.md](DEPLOYMENT_RECEIPT.md) for
+actual deployed resources and verification results.
 
-Use the existing pending Blueprint `exs-dbofqkm417fc7384kou0`; do not create another.
-After approval and successful CI, merge this branch, point that Blueprint to main,
-re-plan the exact merged revision with auto-sync off, and verify create-only scope
-before applying. Render generates the runtime secrets; no HTTP state backend or
-GitHub-to-Render API secret is required for this alternative.
+Render generates runtime credentials and shares only required service values.
+No separate HTTP state backend or GitHub-to-Render API secret is required.
+Never print generated secrets; human AX sign-in uses the password in the owner's
+Render Environment settings. Preserve existing services and shared databases.
+
+For updates: pass required CI, review immutable digests and the exact Blueprint
+plan, then apply changes within the authorized scope and verify terminal deploy
+status plus application behavior. Expanded scope/cost needs explicit approval;
+routine fixes completing the approved deployment do not require repeated approval.
+Use Render's documented `/bin/sh -c PROGRAM` format for custom commands, without
+outer quotes around PROGRAM. Prefer the tested image CMD when it already supports
+service host references. See the first startup failure in the deployment receipt.
 
 ## What is configured in code
 
@@ -25,17 +32,20 @@ GitHub-to-Render API secret is required for this alternative.
 - `reign-cd.yml`: after successful validation of the current main push, rebuilds
   and tests the four exact images, publishes them, and records their registry
   digests in a disabled release candidate artifact. No deploy hooks or Render
-  mutations occur here. Promote reviewed digests through OpenTofu only.
+  mutations occur here. Promote reviewed digests through the Blueprint only.
 - `build-image.yml`: manual per-component build. Publishing to GHCR is opt-in and
   does not deploy to Render. Core/AX Dockerfiles are implemented. Inspect package visibility and Render pull access before use.
-- `infrastructure.yml`: manual plan, sanitized review summary, encrypted plan
-  artifact, a separately gated apply of that exact plan, live verification.
+- `infrastructure.yml`: disabled legacy OpenTofu workflow retained for migration
+  reference. Both jobs are unconditionally disabled to avoid two deployment owners.
 
-These files alone do not configure GitHub environments, secrets or a state
-server. The apply job is disabled unless `REIGN_APPLY_ENABLED` is explicitly set
-to `true`. Do not enable it before the following setup is verified.
+The active Blueprint does not use the legacy plan/apply secrets or state backend.
+Do not enable the old workflow alongside it.
 
-## Required setup and current status
+## Historical OpenTofu setup — inactive migration reference
+
+The following checklist records the old deployment path, not current prerequisites.
+Its pre-apply status statements describe that earlier checkpoint. Do not execute
+this checklist unless an ownership/state migration is separately approved.
 
 1. Four linux/amd64 images have passed automated browser acceptance and were
    published by release run 42527962724 from commit `bd01832f2b29c5587e763adbc6f17481fba74f64`.
@@ -95,11 +105,12 @@ The source repository is public. Deployment secrets must never enter Git.
 
 ## Updates and rollback
 
-Application changes build a new image; review its digest in the release manifest,
-then repeat plan/approve/apply. Roll back by reviewing and applying a prior known
-image digest. Check Temporal database compatibility first; never blindly roll
-back its schema. Do not set `provision=false` after services exist: that requests
-deletion and is blocked by `prevent_destroy` and the plan policy.
+Build/test new images in CI, review their exact digests, update the Blueprint and
+plan/apply only that reviewed change with auto-sync off. A rollback is another
+reviewed deployment of a known compatible digest; it does not undo disk/database
+changes. Check Temporal schema compatibility and plan for its disk-related restart.
+Keep the retired OpenTofu manifest `provision:false`; it does not represent the
+live Blueprint resources. Do not import them into another state without migration.
 
 ## Git High migration
 

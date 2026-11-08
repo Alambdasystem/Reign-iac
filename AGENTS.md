@@ -1,15 +1,16 @@
 # REIGN repository guidance
 
 - Keep the infrastructure milestone separate from the browser/human-takeover E2E milestone.
-- This proposal selects Render Blueprint as the single owner of the four REIGN
-  pilot resources, **only after James explicitly approves this ownership change**.
-  Until then, leave the Blueprint unapplied and this PR unmerged. Never run both
-  deployment methods against the pilot. The legacy OpenTofu plan/apply workflow
-  is disabled in this proposal; re-enabling it requires a reviewed state migration.
-  Keep Blueprint auto-sync off and promote only reviewed, tested image digests.
-  Do not adopt existing
-  Workmates or Git High services, change billing, or perform destructive changes
-  without explicit approval for the concrete plan.
+- Render Blueprint is the single owner of the four REIGN pilot resources.
+  James explicitly approved this ownership change, the $64.25/month base pilot,
+  and initial launch without REIGN database persistence on 2026-11-08.
+  Reuse Blueprint `exs-dbofqkm417fc7384kou0` in Jim's workspace; do not create a
+  duplicate. The legacy OpenTofu plan/apply workflow is disabled. Re-enabling it
+  requires a reviewed ownership/state migration. Keep Blueprint auto-sync off
+  and promote only reviewed, tested image digests. Continue fixes and verification
+  within the existing approved scope without repeatedly requesting approval.
+  Preserve Workmates, Git High, Moby Alpha and the shared database. Scope/cost
+  increases or destructive changes require their own concrete authorization.
 - Never commit credentials, state, raw plans, recordings containing credentials,
   or authenticated browser profiles. This repository is public.
 - Use independent Docker services for Core, Temporal, Computer and UltraView AX.

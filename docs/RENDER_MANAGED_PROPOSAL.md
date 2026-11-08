@@ -1,8 +1,9 @@
 # Proposed Render-managed pilot
 
-This is a reviewable alternative, not an approved ownership change or a live
-deployment. The current main branch still selects OpenTofu as infrastructure
-owner. Do not apply both methods to these services.
+**Approved and applied on 2026-11-08.** James approved replacing OpenTofu ownership
+for this pilot and deferring REIGN database persistence. PR #4 is merged. The
+original proposal filename is retained. Read [DEPLOYMENT_RECEIPT.md](DEPLOYMENT_RECEIPT.md)
+for live rollout and verification results. Do not apply both deployment methods.
 
 ## Why propose it
 
@@ -47,7 +48,7 @@ separate step requiring a verified restricted role and private connection.
 Temporal's pilot workflow history uses its disk. Browser sessions are ephemeral.
 External computer/full-desktop adapters remain unfinished.
 
-## Before applying this alternative
+## Original approval and apply checklist (approval completed)
 
 1. Obtain James's explicit decision to use Render Blueprint ownership instead
    of OpenTofu for this pilot, and to launch the initial pilot without REIGN
@@ -65,8 +66,8 @@ External computer/full-desktop adapters remain unfinished.
 
 Subsequent releases still require CI and digest review. Render syncs must use
 reviewed immutable digests; publishing an image must not silently deploy it.
-If OpenTofu ownership is retained, leave this proposal unapplied and complete
-the original protected HTTP-state and credential setup instead.
+OpenTofu ownership was not retained. Re-enabling it requires a separately reviewed
+ownership and state migration; do not complete the old setup in parallel.
 
 References verified on 2026-11-08:
 - https://render.com/docs/blueprint-spec
