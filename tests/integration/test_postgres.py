@@ -103,6 +103,38 @@ class PostgresIsolationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.db.fetchval("SELECT count(*) FROM reign.conversations"), 0)
         self.assertEqual(await self.db.fetchval("SELECT count(*) FROM reign.trace_spans"), 0)
 
+    async def test_encrypted_history_round_trip_is_owner_scoped(self):
+        from reign.history_crypto import HistoryCipher
+        from reign.history_store import HistoryRepository
+        cipher = HistoryCipher(bytes(range(32)))
+        store = HistoryRepository(self.db, cipher)
+        alice_id, bob_id = str(uuid4()), str(uuid4())
+        await store.create_conversation("alice", alice_id)
+        await store.create_conversation("bob", bob_id)
+        mid = await store.append_message(owner_id="alice", thread_id=alice_id, ordinal=0,
+                                         role="user", text="private fixture for Alice")
+        messages = await store.get_messages(owner_id="alice", thread_id=alice_id)
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0]["message_id"], mid)
+        self.assertEqual(messages[0]["text"], "private fixture for Alice")
+        # The database is storing ciphertext, not a plaintext message.
+        async with self.db.transaction():
+            await self.db.fetchval("SELECT set_config('reign.actor_id',$1,true)", "alice")
+            raw = await self.db.fetchval(
+                "SELECT body_ciphertext FROM reign.conversation_messages WHERE message_id=$1",
+                __import__("uuid").UUID(mid))
+            self.assertNotIn(b"private fixture for Alice", bytes(raw))
+        self.assertEqual(await store.get_messages(owner_id="bob", thread_id=alice_id), [])
+        self.assertEqual(await store.list_conversations("bob"), [
+            dict(thread_id=bob_id, status="idle", created_at=unittest.mock.ANY,
+                 updated_at=unittest.mock.ANY)])
+        # A cross-owner write must not modify the original owner's conversation.
+        with self.assertRaises((asyncpg.InsufficientPrivilegeError,
+                                asyncpg.ForeignKeyViolationError)):
+            await store.append_message(owner_id="bob", thread_id=alice_id, ordinal=1,
+                                       role="user", text="attempted cross-owner write")
+        self.assertEqual(len(await store.get_messages(owner_id="alice", thread_id=alice_id)), 1)
+
     async def test_history_foreign_keys_reject_cross_owner_linkage(self):
         # Migration role creates the fixture, but database-level composite FK
         # prevents a message or checkpoint claiming someone else's thread.
