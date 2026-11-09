@@ -171,7 +171,7 @@ class CheckpointRepository:
                        value_nonce,key_version
                 FROM reign.checkpoint_writes
                 WHERE owner_id=$1 AND thread_id=$2 AND checkpoint_id=$3
-                ORDER BY task_id,write_index
+                ORDER BY task_path,task_id,write_index
             """, owner, tid, cid)
         result = []
         for row in rows:
