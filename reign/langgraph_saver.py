@@ -9,6 +9,7 @@ owner. It is never exposed to an LLM as a tool.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import uuid
@@ -30,6 +31,9 @@ class EncryptedGraphSaver(BaseCheckpointSaver):
             pickle_fallback=False))
         self.repo = repository
         self.owner_id = _owner(owner_id)
+        # Serialized access for the prototype's single asyncpg connection.
+        # LangGraph may commit checkpoints and pending writes concurrently.
+        self._db_lock = asyncio.Lock()
 
     @staticmethod
     def _ids(config: dict, *, require_checkpoint: bool = False) -> tuple[str, str | None]:
@@ -65,8 +69,9 @@ class EncryptedGraphSaver(BaseCheckpointSaver):
 
     async def aget_tuple(self, config: dict) -> CheckpointTuple | None:
         tid, cid = self._ids(config)
-        stored = await self.repo.load(owner_id=self.owner_id, thread_id=tid,
-                                      checkpoint_id=cid)
+        async with self._db_lock:
+            stored = await self.repo.load(owner_id=self.owner_id, thread_id=tid,
+                                          checkpoint_id=cid)
         if stored is None:
             return None
         checkpoint, metadata = self._unpack(stored.payload)
@@ -78,8 +83,9 @@ class EncryptedGraphSaver(BaseCheckpointSaver):
         parent = ({"configurable": {"thread_id": tid, "checkpoint_ns": "",
                                    "checkpoint_id": stored.parent_checkpoint_id}}
                   if stored.parent_checkpoint_id else None)
-        written = await self.repo.load_writes(owner_id=self.owner_id,
-            thread_id=tid, checkpoint_id=stored.checkpoint_id)
+        async with self._db_lock:
+            written = await self.repo.load_writes(owner_id=self.owner_id,
+                thread_id=tid, checkpoint_id=stored.checkpoint_id)
         pending = [(task_id, channel, self._unpack(payload))
                    for task_id, _idx, channel, payload in written]
         return CheckpointTuple(key, checkpoint, metadata, parent, pending)
@@ -88,9 +94,10 @@ class EncryptedGraphSaver(BaseCheckpointSaver):
                    new_versions: dict) -> dict:
         tid, parent = self._ids(config)
         cid = str(checkpoint["id"])
-        await self.repo.save(owner_id=self.owner_id, thread_id=tid,
-            checkpoint_id=cid, parent_checkpoint_id=parent,
-            payload=self._pack((checkpoint, metadata)))
+        async with self._db_lock:
+            await self.repo.save(owner_id=self.owner_id, thread_id=tid,
+                checkpoint_id=cid, parent_checkpoint_id=parent,
+                payload=self._pack((checkpoint, metadata)))
         return {"configurable": {"thread_id": tid, "checkpoint_ns": "",
                                   "checkpoint_id": cid}}
 
@@ -101,8 +108,9 @@ class EncryptedGraphSaver(BaseCheckpointSaver):
             return
         payload = [(WRITES_IDX_MAP.get(channel, idx), channel, self._pack(value))
                    for idx, (channel, value) in enumerate(writes)]
-        await self.repo.save_writes(owner_id=self.owner_id, thread_id=tid,
-            checkpoint_id=cid, task_id=task_id, task_path=task_path, writes=payload)
+        async with self._db_lock:
+            await self.repo.save_writes(owner_id=self.owner_id, thread_id=tid,
+                checkpoint_id=cid, task_id=task_id, task_path=task_path, writes=payload)
 
     async def alist(self, config: dict | None, *, filter: dict | None = None,
                     before: dict | None = None,
@@ -113,8 +121,9 @@ class EncryptedGraphSaver(BaseCheckpointSaver):
         if limit is not None and (type(limit) is not int or not 1 <= limit <= 50):
             raise ValueError("Invalid checkpoint list limit")
         before_id = self._ids(before)[1] if before else None
-        ids = await self.repo.list_ids(owner_id=self.owner_id, thread_id=tid,
-                                       limit=50)
+        async with self._db_lock:
+            ids = await self.repo.list_ids(owner_id=self.owner_id, thread_id=tid,
+                                           limit=50)
         count = 0
         for cid in ids:
             if before_id and cid >= before_id:
@@ -131,9 +140,10 @@ class EncryptedGraphSaver(BaseCheckpointSaver):
 
     async def adelete_thread(self, thread_id: str) -> None:
         tid = uuid.UUID(str(thread_id))
-        async with self.repo.conn.transaction():
-            await self.repo.conn.fetchval(
-                "SELECT set_config('reign.actor_id',$1,true)", self.owner_id)
-            await self.repo.conn.execute(
-                "DELETE FROM reign.conversations WHERE thread_id=$1 AND owner_id=$2",
-                tid, self.owner_id)
+        async with self._db_lock:
+            async with self.repo.conn.transaction():
+                await self.repo.conn.fetchval(
+                    "SELECT set_config('reign.actor_id',$1,true)", self.owner_id)
+                await self.repo.conn.execute(
+                    "DELETE FROM reign.conversations WHERE thread_id=$1 AND owner_id=$2",
+                    tid, self.owner_id)
