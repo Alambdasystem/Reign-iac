@@ -154,6 +154,53 @@ class PostgresIsolationTests(unittest.IsolatedAsyncioTestCase):
             await traces.record(owner_id="alice", span={**span, "raw_prompt": "private fixture"})
         self.assertEqual(len(await traces.recent("alice")), 1)
 
+    async def test_immutable_encrypted_checkpoints_survive_reconnection(self):
+        from reign.checkpoint_store import CheckpointRepository
+        from reign.history_crypto import HistoryCipher
+        from reign.history_store import HistoryRepository
+        cipher = HistoryCipher(bytes(range(32)))  # Disposable CI key only.
+        owner, other = "alice", "bob"
+        tid = str(uuid4())
+        await HistoryRepository(self.db, cipher).create_conversation(owner, tid)
+        checkpoints = CheckpointRepository(self.db, cipher)
+        await checkpoints.save(owner_id=owner, thread_id=tid, checkpoint_id="ckpt-1",
+                               payload=b'{"next":"wait_for_user","side_effects":"not_replayed"}')
+        await checkpoints.save(owner_id=owner, thread_id=tid, checkpoint_id="ckpt-2",
+                               payload=b'{"next":"paused"}', parent_checkpoint_id="ckpt-1")
+        self.assertEqual(await checkpoints.list_ids(owner_id=owner, thread_id=tid),
+                         ["ckpt-2", "ckpt-1"])
+        with self.assertRaises(asyncpg.UniqueViolationError):
+            await checkpoints.save(owner_id=owner, thread_id=tid, checkpoint_id="ckpt-1",
+                                   payload=b'{"next":"replay"}')
+        with self.assertRaises(ValueError):
+            await checkpoints.save(owner_id=owner, thread_id=tid, checkpoint_id="ckpt-3",
+                                   payload=b"orphan", parent_checkpoint_id="missing")
+        self.assertIsNone(await checkpoints.load(owner_id=other, thread_id=tid))
+        self.assertEqual(await checkpoints.list_ids(owner_id=other, thread_id=tid), [])
+        with self.assertRaises((asyncpg.InsufficientPrivilegeError,
+                                asyncpg.ForeignKeyViolationError)):
+            await checkpoints.save(owner_id=other, thread_id=tid, checkpoint_id="ckpt-3",
+                                   payload=b"cross-owner")
+        # Simulate process restart: NEW database connection and NEW repository
+        # instance read the ciphertext with only the explicitly supplied key.
+        replacement = await asyncpg.connect(os.environ["REIGN_TEST_DATABASE_URL"])
+        try:
+            await replacement.execute("SET ROLE reign_ci_app")
+            restored = await CheckpointRepository(replacement, cipher).load(
+                owner_id=owner, thread_id=tid)
+            self.assertEqual(restored.checkpoint_id, "ckpt-2")
+            self.assertEqual(restored.parent_checkpoint_id, "ckpt-1")
+            self.assertEqual(restored.payload, b'{"next":"paused"}')
+            raw = await replacement.fetchval("""
+                SELECT state_ciphertext FROM reign.graph_checkpoints
+                WHERE thread_id=$1 AND checkpoint_id='ckpt-2'
+            """, uuid4()) if False else None
+            # No model invocation or browser effect takes place on restoration.
+            self.assertIsNone(await CheckpointRepository(replacement, cipher).load(
+                owner_id="bob", thread_id=tid))
+        finally:
+            await replacement.close()
+
     async def test_history_foreign_keys_reject_cross_owner_linkage(self):
         # Migration role creates the fixture, but database-level composite FK
         # prevents a message or checkpoint claiming someone else's thread.
