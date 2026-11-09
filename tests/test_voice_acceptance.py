@@ -91,6 +91,7 @@ class ProbeHelperTests(unittest.TestCase):
         session = websocket_session(settings)
         self.assertNotIn("model", session)
         self.assertEqual(session["type"], "realtime")
+        self.assertEqual(session["output_modalities"], ["text"])
         self.assertEqual(session["audio"]["input"]["format"], {"type": "audio/pcm", "rate": 24000})
         self.assertEqual(session["audio"]["output"]["format"], {"type": "audio/pcm", "rate": 24000})
         self.assertIsNone(session["audio"]["input"]["turn_detection"])
@@ -126,11 +127,20 @@ class ProbeHelperTests(unittest.TestCase):
 
 class ProbeEventTests(unittest.IsolatedAsyncioTestCase):
     async def test_delegate_is_deduplicated_and_waits_for_response_done(self):
-        socket = FakeSocket(delegate_events())
+        # Text preambles aren't spoken or treated as a completed graph answer.
+        socket = FakeSocket([{"type": "response.output_text.delta", "delta": "Checking that request."},
+                             *delegate_events()])
         call_id, message = await collect_delegate(EventReader(socket))
         self.assertEqual((call_id, message), ("test-call", MESSAGE))
         self.assertEqual(socket.received[-1]["type"], "response.done")
         self.assertEqual(socket.events, [])
+
+    async def test_audio_before_graph_result_still_fails_the_gate(self):
+        socket = FakeSocket([{"type": "response.output_audio.delta", "delta": base64.b64encode(PCM).decode()},
+                             *delegate_events()])
+        with self.assertRaises(ProbeFailure) as caught:
+            await collect_delegate(EventReader(socket))
+        self.assertEqual(caught.exception.code, "audio_before_graph_result")
 
     async def test_failed_or_multiple_calls_cannot_be_executed(self):
         for events in ([{"type": "response.done", "response": {"status": "failed", "output": [CALL]}}],
@@ -186,6 +196,10 @@ class ProbeEventTests(unittest.IsolatedAsyncioTestCase):
         sent_types = [event["type"] for event in socket.sent]
         self.assertGreater(sent_types.count("input_audio_buffer.append"), 1)
         self.assertEqual(sent_types.count("response.create"), 2)
+        responses = [event["response"] for event in socket.sent if event["type"] == "response.create"]
+        self.assertEqual(responses[0]["output_modalities"], ["text"])
+        self.assertEqual(responses[1]["output_modalities"], ["audio"])
+        self.assertEqual(responses[1]["tool_choice"], "none")
         outputs = [event for event in socket.sent if event["type"] == "conversation.item.create"]
         self.assertEqual(len(outputs), 1)
         self.assertEqual(outputs[0]["item"]["call_id"], "test-call")

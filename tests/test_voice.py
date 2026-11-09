@@ -52,7 +52,7 @@ class BrokerTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(KEY, fields["session"].decode())
             self.assertEqual(session["type"], "realtime")
             self.assertEqual(session["model"], "configured-realtime-model")
-            self.assertEqual(session["output_modalities"], ["audio"])
+            self.assertEqual(session["output_modalities"], ["text"])
             self.assertEqual(session["audio"]["output"]["voice"], "marin")
             self.assertEqual(session["audio"]["input"]["transcription"]["model"], "configured-transcriber")
             self.assertTrue(session["audio"]["input"]["turn_detection"]["interrupt_response"])

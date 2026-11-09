@@ -134,7 +134,9 @@ def capabilities():
 def session_config(settings):
     return {
         "type": "realtime", "model": settings["model"],
-        "output_modalities": ["audio"], "max_output_tokens": 1200,
+        # Named tool choice alone can still emit an audio preamble. Disable
+        # speech during delegation; only the result-narration response enables it.
+        "output_modalities": ["text"], "max_output_tokens": 1200,
         "instructions": (
             "You are REIGN's live voice interface. For EVERY user request, including questions, "
             "greetings and workspace actions, call delegate_to_reign with the complete request. "

@@ -224,6 +224,8 @@ test('the connection greeting must finish the REIGN graph before requesting spee
   const startup = h.channel.sent.filter(event => event.type === 'response.create');
   assert.equal(startup.length, 1);
   assert.deepEqual(startup[0].response.tool_choice, {type: 'function', name: 'delegate_to_reign'});
+  assert.deepEqual(startup[0].response.output_modalities, ['text'],
+    'forced delegation must not permit an unverified spoken preamble');
   assert.ok(h.channel.sent.some(event => event.type === 'conversation.item.create' &&
     event.item?.content?.some(content => /connection check/i.test(content.text || ''))));
   assert.equal(h.turnCalls.length, 0, 'connection signaling alone cannot claim the graph is ready');
@@ -237,11 +239,17 @@ test('the connection greeting must finish the REIGN graph before requesting spee
   await eventually(() => h.turnCalls.length === 1, 'connection check must use the real graph interface');
   assert.equal(h.turnCalls[0].context.connectionCheck, true);
   assert.equal(h.channel.sent.filter(event => event.response?.tool_choice === 'none').length, 0);
+  assert.equal(h.channel.sent.filter(event => event.response?.output_modalities?.includes('audio')).length, 0,
+    'no speech response may be requested while the graph result is pending');
   graph.resolve({status: 'completed', answer: 'REIGN is ready to help you.'});
   await eventually(() => outputs(h.channel, 'connection-check').length === 1, 'verified greeting must return');
   assert.deepEqual(JSON.parse(outputs(h.channel, 'connection-check')[0].item.output),
     {status: 'completed', answer: 'REIGN is ready to help you.'});
-  assert.equal(h.channel.sent.filter(event => event.response?.tool_choice === 'none').length, 1);
+  const narration = h.channel.sent.filter(event => event.response?.tool_choice === 'none');
+  assert.equal(narration.length, 1);
+  assert.deepEqual(narration[0].response.output_modalities, ['audio']);
+  assert.ok(h.channel.sent.indexOf(outputs(h.channel, 'connection-check')[0]) < h.channel.sent.indexOf(narration[0]),
+    'the verified function result must precede the audio response request');
 });
 
 test('delegates a spoken request, returns the verified result and requests narration without tools', async t => {
@@ -346,6 +354,60 @@ test('blocked autoplay exposes recovery and enableSpeaker retries real playback'
   assert.ok(h.audio.plays > plays);
   assert.equal(h.controller.snapshot().speakerBlocked, false);
   assert.equal(h.audio.paused, false);
+});
+
+test('provider prelude media stays muted even when the user enables the speaker', async t => {
+  const h = await harness(t).connect();
+  h.peer.emit('track', {streams: [stream(track('unverified-provider-audio'))]});
+  await settle();
+  assert.equal(h.audio.muted, true, 'a received media track is not a verified answer');
+  h.channel.receive({type: 'response.created', response: {id: 'unverified-prelude'}});
+  h.channel.receive({type: 'output_audio_buffer.started', response_id: 'unverified-prelude'});
+  assert.equal(h.audio.muted, true);
+  assert.notEqual(h.controller.snapshot().phase, 'speaking');
+  await h.controller.enableSpeaker();
+  assert.equal(h.audio.muted, true, 'playback recovery must preserve the graph-result audio gate');
+  h.peer.emit('track', {streams: [stream(track('replacement-unverified-audio'))]});
+  await settle();
+  assert.equal(h.audio.muted, true, 'replacing the incoming track must not bypass the gate');
+  assert.equal(h.turnCalls.length, 0);
+});
+
+test('only a matching verified narration buffer can unmute incoming audio', async t => {
+  const graph = deferred();
+  const h = await harness(t, {runTurn: () => graph.promise}).connect();
+  h.peer.emit('track', {streams: [stream(track('remote-audio'))]});
+  await settle();
+  h.functionCall('verified-audio', 'Check the workspace.');
+  await eventually(() => h.turnCalls.length === 1, 'graph must be pending');
+  h.channel.receive({type: 'output_audio_buffer.started', response_id: 'response-verified-audio'});
+  assert.equal(h.audio.muted, true);
+  await h.controller.enableSpeaker();
+  assert.equal(h.audio.muted, true);
+  graph.resolve({status: 'completed', answer: 'The verified workspace result.'});
+  await eventually(() => outputs(h.channel, 'verified-audio').length === 1, 'verified graph output must return');
+  const narration = h.channel.sent.findLast(event => event.type === 'response.create');
+  assert.deepEqual(narration.response.output_modalities, ['audio']);
+  assert.equal(h.audio.muted, true, 'requesting audio does not verify an incoming playback buffer');
+  h.channel.receive({type: 'output_audio_buffer.started', response_id: 'unrelated-early-buffer'});
+  assert.equal(h.audio.muted, true, 'an uncorrelated buffer cannot borrow the pending narration');
+  h.channel.receive({type: 'response.created', response: {
+    id: 'verified-narration', metadata: narration.response.metadata
+  }});
+  h.channel.receive({type: 'output_audio_buffer.started', response_id: 'unrelated-buffer'});
+  assert.equal(h.audio.muted, true);
+  h.channel.receive({type: 'output_audio_buffer.started', response_id: 'verified-narration'});
+  assert.equal(h.audio.muted, false, 'the verified narration must be audible when playback starts');
+  assert.equal(h.controller.snapshot().phase, 'speaking');
+  h.channel.receive({type: 'response.done', response: {id: 'verified-narration', status: 'completed', output: []}});
+  h.channel.receive({type: 'output_audio_buffer.stopped', response_id: 'verified-narration'});
+  assert.equal(h.audio.muted, false, 'normal provider completion must allow the browser to finish its buffered audio tail');
+  await h.controller.enableSpeaker();
+  assert.equal(h.audio.muted, false);
+  h.channel.receive({type: 'response.created', response: {
+    id: 'next-delegation', metadata: {reign_voice_phase: 'delegation', reign_voice_turn: '0'}
+  }});
+  assert.equal(h.audio.muted, true, 'a new non-narration response must close the verified playback gate');
 });
 
 test('stopping an active turn cancels its ownership and drops late results', async t => {
