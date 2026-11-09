@@ -18,8 +18,9 @@ The downloaded ZIP matches GitHub's SHA-256
 The artifact's provenance and acceptance identify the same source; its tree is
 `2e34035369f2e86722b1ec753fd9ddd19aa88421`.
 
-This receipt selects tested images for promotion. It records no live deployment
-of the session-recovery correction.
+The following sections record tested image selection and its baseline evidence.
+Subsequent rollout results are recorded in the [actual deployment receipt](#actual-deployment-receipt)
+below, with unfinished acceptance kept explicit.
 
 ## Tested acceptance
 
@@ -102,7 +103,104 @@ provider/graph speech probe must pass for the new Core deployment. Its WebSocket
 synthetic-audio check remains distinct from browser WebRTC and physical-device
 audio acceptance.
 
-After promotion, record the actual Render deploy results and provider receipt,
-then verify that a fresh signed-in tab recovers the same browser without page or
-ownership changes. Do not substitute source checks, container smoke, or the
-previous live baseline for that deployment acceptance.
+The deployment and browser results below provide separate live evidence from
+the source checks, container smoke, and pre-correction baseline above.
+
+## Actual deployment receipt
+
+### Promotion and rollout
+
+[PR #16](https://github.com/Alambdasystem/Reign-iac/pull/16), head
+`b79e6eb3c4bfb4c982f7482d5e01fd1ef7d47bf3`, passed all four required checks in
+[promotion validation](https://github.com/Alambdasystem/Reign-iac/actions/runs/42554716169)
+and merged at `c3035f3b30136aefd68ec56c4d4d65d0a9d69912`.
+Blueprint sync `exe-dbojjvbrjlhs73bm4qd0` was accepted on November 9 at
+03:12:13Z. Its plan contained exactly the three image updates above, with no
+manual environment changes.
+
+| Service | Deploy | Observed status | Live time (UTC, November 9) |
+| --- | --- | --- | --- |
+| AX | `dep-dbojk3jrjlhs73bm55s0` | Live | 03:12:27.010927Z |
+| Core | `dep-dbojk3jrjlhs73bm556g` | Live | 03:13:00.857632Z |
+| Computer | `dep-dbojk3jrjlhs73bm55dg` | Live | 03:13:06.743581Z |
+
+All four service image pins and plans were checked against Render service
+metadata. Temporal retained its existing pin; the three corrected services use
+the tested image digests above.
+
+### New Core provider acceptance: passed
+
+The real provider pre-deploy probe passed all nine stages from
+**2026-11-09T03:12:23.570181Z** to **2026-11-09T03:12:35.499682Z**.
+This is a new probe result for this rollout; the earlier
+[voice acceptance JSON](2026-11-09-voice-acceptance.json) is preserved unchanged.
+The exact sanitized result is saved in the
+[new provider JSON](2026-11-09-session-recovery-voice-provider.json).
+
+| Measurement | Observed result |
+| --- | --- |
+| Transport / input | WebSocket / `synthetic_pcm_manual_commit` |
+| Realtime model / voice | `gpt-realtime-2.1` / `marin` |
+| Input fixture | SHA-256 `f37494a5143fb194b212e03ada62400ae5b8432feb8e8f005bbbb3885d5d69eb`; 5.435 seconds; 24 kHz |
+| Actual graph tool | LangGraph `gpt-6-astra`; `workspace_status` |
+| Graph usage | 1,245 input / 36 output tokens |
+| Returned PCM | 292,800 bytes; 6.1 seconds; normalized RMS 0.070144 |
+| Output transcript | Present |
+| Provider event count | 125 |
+| Probe browser WebRTC / physical device | `not_run` / `not_run` |
+
+### Corrected-deployment browser/tool acceptance: passed
+
+The first authenticated AX reload at approximately 03:13:20Z reached the new
+AX but an old Core instance, which returned HTTP 422 for active-session
+discovery. At approximately 03:14:17Z, the new Core reached the retiring
+Computer instance, which returned HTTP 404 for `/sessions/active`. Instance
+correlation in the application logs established mixed-version routing during
+the rolling overlap.
+
+Old AX retired at 03:14:26.945060Z, old Core at 03:15:00.852962Z, and old Computer
+at 03:15:06.658321Z. A reload after retirement reached Ready and enabled Start
+voice. The prior graph thread expired at Core restart, as expected for
+process-local conversation state; this is not evidence of persisted chat.
+
+The completed test used ordinary prompt text through REIGN's LangGraph path:
+
+| Stage | Observed live result |
+| --- | --- |
+| Open and inspect | `open_browser` and `browser_status` opened the Git High root, title GITHI, under agent control; 2,120 input / 80 output tokens |
+| Take control | Owner changed to human, epoch 1, session `04b5a49a-f291-488e-91b3-7df6f57de75a` |
+| Fresh-tab recovery, 03:16:08Z | The same session, page, human owner, epoch 1, and fresh frames appeared; the feed reported that page and control owner were preserved |
+| Navigation while human-controlled, 03:16:30Z | A natural request to navigate to Explore entered a real paused state; Resume was disabled |
+| Handback and resume | Return control restored agent ownership and enabled Resume at 03:16:40Z; Resume was clicked at 03:16:44Z |
+| Resumed navigation | `navigate_browser` completed; actual title “Sign In - GITHI”; 736 input / 56 output tokens |
+| Cleanup | Close session reported “Session closed and browser resources released”; the UI returned to Ready with no active session |
+
+The navigation request targeted
+[Git High Explore](https://alambda-forge.onrender.com/explore/repos) and expressly
+excluded login or registration submission. The actual returned URL was
+[https://alambda-forge.onrender.com/user/login?redirect_to=%2Fexplore%2Frepos](https://alambda-forge.onrender.com/user/login?redirect_to=%2Fexplore%2Frepos).
+No form was submitted and no credentials were entered.
+
+Independent application-log correlation confirmed successful discovery through
+the new AX, Core, and Computer instances, including the fresh-tab request at
+03:16:06.235–03:16:06.237Z. Recovery added no mutation calls. Model opening uses
+internal CoreTools, so an HTTP session-create count is not its execution proof.
+The resumed request returned HTTP 200 at 03:16:44.231Z. Cleanup returned DELETE
+200 through all three layers at 03:17:16.747–03:17:16.752Z; the worker's subsequent
+session GET returned 404 at 03:17:17.923Z, confirming removal.
+
+Evidence: [reviewed final browser screenshot](2026-11-09-session-recovery-browser.jpg),
+captured at **2026-11-09T03:17:16.212Z**, before session cleanup. It contains the
+generic app/browser result and no credentials.
+
+### Remaining boundaries
+
+The live recovery test above used a fresh tab; stale-reference recovery is
+separately covered by the real four-service CI checks. External account login,
+account/repository creation, credential-vault use, and Outlook integration were
+not completed. Reaching a sign-in page does not establish authentication.
+
+The cloud browser's microphone remained unavailable. The real provider probe
+does not establish browser WebRTC, spoken input through the deployed UI, or
+physical microphone/speaker audibility. James's physical-device voice and
+human takeover signoff remain separate from this automated browser acceptance.

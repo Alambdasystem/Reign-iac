@@ -1,4 +1,56 @@
-## Current checkpoint: voice deployed; cloud browser has no microphone (2026-11-09)
+## Current checkpoint: session recovery live; browser/tool acceptance passed (2026-11-09)
+
+Session recovery source `566fab179f50e999f892285760a59d1b88864d7c` (PR #15)
+passed validation and its tested-image release. Promotion PR #16 merged at
+`c3035f3b30136aefd68ec56c4d4d65d0a9d69912` after all four required checks passed.
+Blueprint sync `exe-dbojjvbrjlhs73bm4qd0` was accepted at 03:12:13Z with exactly
+three image updates: Core, AX, and Computer. Temporal, plans, environment
+configuration, disks, and pre-deploy commands remain unchanged.
+
+AX is live at 03:12:27.010927Z, Core at 03:13:00.857632Z, and Computer at
+03:13:06.743581Z. All four service image pins and plans were verified, including
+the retained Temporal pin. Initial recovery requests hit retiring Core/Computer
+instances during rolling overlap; retries succeeded after those instances
+stopped. The old process-local graph thread expired at Core restart. Browser
+session recovery does not provide persisted chat continuity.
+See the [release and rollout receipt](deployments/2026-11-09-session-recovery-release.md#actual-deployment-receipt).
+
+Final live browser/tool acceptance passed. An ordinary prompt ran actual
+`open_browser` and `browser_status` tools against the Git High root (2,120 input /
+80 output tokens). After Take control, a fresh signed-in tab recovered the same
+browser, page, human owner, epoch 1, and fresh frames at 03:16:08Z. A subsequent
+natural navigation request paused under human control with Resume disabled.
+Return control enabled Resume; the resumed `navigate_browser` reached
+“Sign In - GITHI” through the Explore redirect (736 input / 56 output tokens).
+No login or registration form was submitted. UI confirmation plus successful
+delete responses and a subsequent session 404 verified cleanup by 03:17:17.923Z.
+See the [reviewed final browser result](deployments/2026-11-09-session-recovery-browser.jpg).
+
+The new Core's real voice pre-deploy gate passed all nine stages at
+03:12:23.570181–03:12:35.499682Z. Realtime `gpt-realtime-2.1` / `marin` delegated
+to actual LangGraph `gpt-6-astra` execution of `workspace_status` (1,245 input /
+36 output tokens) and returned 6.1 seconds of non-silent PCM speech. This remains
+a WebSocket synthetic-input/manual-commit probe; browser WebRTC and physical
+microphone/speaker acceptance are not run by it. The
+[new sanitized provider receipt](deployments/2026-11-09-session-recovery-voice-provider.json)
+is separate from the unchanged earlier receipt.
+
+The correction reconnects signed-in tabs to the existing browser without
+changing its page, control owner, or epoch. It preserves a distinct occupied
+session error and avoids replaying open requests or cancelling another graph
+run. CI also passed stale-reference recovery, 88 Python tests, 37 Node tests,
+and six PostgreSQL integration tests. That additional stale-reference case is
+CI evidence; the live recovery observation above used a fresh tab.
+
+Remaining: test voice in a browser with an available microphone and complete
+James's physical microphone/speaker check. The cloud browser has no input
+device, so browser WebRTC/voice delivery remain unverified. External login,
+account/repository creation, saved-credential vault use, and Outlook integration
+were not completed; the current agent exposes status and allowlisted browser
+open/navigation tools only. Durable graph checkpoints and external desktop
+adapters remain outstanding.
+
+## Previous checkpoint: voice deployed; cloud browser has no microphone (2026-11-09)
 
 The corrected Core and AX voice release is live at
 [REIGN](https://reign-ax-pilot-d934.onrender.com/). Implementation PR #10 and
