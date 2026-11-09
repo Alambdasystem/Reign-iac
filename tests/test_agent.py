@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 from langchain_core.messages import AIMessage, HumanMessage
-from reign.agent import AgentRuntime, MAX_STEPS, model_client
+from reign.agent import AgentRuntime, MAX_STEPS, MAX_TURNS, model_client
 
 SID = str(uuid.uuid4())
 
@@ -161,3 +161,28 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(bound.bound.openai_api_base, "https://api.openai.com/v1")
             self.assertFalse(bound.kwargs["parallel_tool_calls"])
             self.assertEqual(len(bound.kwargs["tools"]), 4)
+
+    async def test_explicit_provider_base_never_falls_back_to_another_host(self):
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key-never-live",
+                "OPENAI_MODEL": "gpt-4.1-mini",
+                "OPENAI_BASE_URL": "https://voice.example.com/v1/"}, clear=True):
+            self.assertEqual(model_client().bound.openai_api_base, "https://voice.example.com/v1")
+            for invalid in ("", "http://voice.example.com/v1", "https://user:secret@voice.example.com/v1",
+                            "https://voice.example.com/v1?key=secret"):
+                with patch.dict(os.environ, {"OPENAI_BASE_URL": invalid}):
+                    with self.assertRaisesRegex(ValueError, "Invalid OpenAI base URL"):
+                        model_client()
+
+    async def test_voice_can_identify_exhausted_thread_without_retrying_a_task(self):
+        runtime = self.setup_run(*[AIMessage(content="Ready.") for _ in range(MAX_TURNS)])
+        tid = None
+        for count in range(1, MAX_TURNS + 1):
+            thread, result = await self.finish(runtime.submit("status", tid))
+            tid = thread.id
+            self.assertEqual(result["turns"], count)
+            self.assertEqual(result["max_turns"], MAX_TURNS)
+            self.assertEqual(result["continuable"], count < MAX_TURNS)
+        with self.assertRaises(HTTPException) as error:
+            runtime.submit("one more", tid)
+        self.assertEqual(error.exception.status_code, 409)
+        self.assertEqual(len(self.model.seen), MAX_TURNS)

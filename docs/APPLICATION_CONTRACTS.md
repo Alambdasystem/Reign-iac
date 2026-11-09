@@ -12,7 +12,10 @@ UltraView now uses the approved v1 visual source recorded in `docs/design/`.
 `GET /api/status` uses that session to request real Core dependency readiness.
 Neither exposes Core/Computer credentials. The older Bearer `/api/readyz` remains
 available for deployment verification. The text composer supports explicit
-workspace commands and LangGraph conversations; voice remains unavailable.
+workspace commands and LangGraph conversations. The voice implementation uses
+WebRTC Realtime transport with mandatory delegation into that same LangGraph
+conversation. See [VOICE.md](VOICE.md) for the contract and the separate provider,
+browser, and physical-device acceptance requirements.
 
 - Core consumes `TEMPORAL_ADDRESS`, namespace/task queue, `COMPUTER_URL`,
   `COMPUTER_TOKEN`, `CORE_TOKEN`. Use server-side authenticated requests.
@@ -20,6 +23,12 @@ workspace commands and LangGraph conversations; voice remains unavailable.
   browser session; service tokens must not be shipped in JavaScript, localStorage,
   URL query strings, screenshots or logs. Define a proper user login before
   exposing session actions. Use secure HttpOnly cookies and CSRF protection.
+- `GET /api/voice` reports sanitized provider configuration. `configured` means
+  server configuration is present, not that a provider connection has passed.
+  `POST /api/voice/offer` validates and brokers an SDP offer with session/CSRF
+  authorization in AX and service authorization in Core. Permanent OpenAI
+  credentials remain in Core. Voice tool calls use the existing `/api/chat`
+  routes, thread/session identity, and takeover fencing.
 - AX `GET /healthz` returns `{ "status": "ok" }` for process readiness only.
 - AX `GET /api/readyz`, authenticated by Bearer `CORE_TOKEN` for CI, checks actual
   dependencies and returns `{ "status": "ready", "components": {

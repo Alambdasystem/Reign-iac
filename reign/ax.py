@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from pydantic import BaseModel
+from reign.voice import VOICE_ERRORS, VoiceError, read_offer, voice_error_response
 
 def configured(name):
     value = os.environ.get(name, "")
@@ -49,6 +50,7 @@ async def lifespan(app):
     await app.state.http.aclose()
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+app.add_exception_handler(VoiceError, voice_error_response)
 ASSETS = Path(__file__).resolve().parent.parent / "ax_static"
 if not ASSETS.is_dir():
     ASSETS = Path(__file__).resolve().parent.parent / "services" / "ax"
@@ -74,7 +76,7 @@ async def me(request: Request):
     user(request)
     return JSONResponse({"authenticated": True, "capabilities": {
         "managed_browser": True, "external_computer": False,
-        "voice": False, "ai_chat": True}}, headers={"Cache-Control": "no-store"})
+        "voice": True, "ai_chat": True}}, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/status")
@@ -109,16 +111,28 @@ def session_id(value: str) -> str:
         raise HTTPException(422, "Invalid session identifier")
 
 
-async def core(method, path, data=None):
+async def core(method, path, data=None, voice_errors=False):
     base = os.environ.get("CORE_URL", "").rstrip("/")
     if not base.startswith("https://") and not (os.environ.get("AX_ALLOW_INTERNAL_HTTP") == "1" and base.startswith("http://")):
+        if voice_errors:
+            raise VoiceError("voice_core_unavailable")
         raise HTTPException(503, "Core endpoint not configured securely")
     try:
         result = await app.state.http.request(method, base + path,
-            headers={"Authorization": "Bearer " + configured("CORE_TOKEN")}, json=data)
+            headers={"Authorization": "Bearer " + configured("CORE_TOKEN")}, json=data,
+            **({"timeout": 40} if voice_errors else {}))
     except httpx.RequestError:
+        if voice_errors:
+            raise VoiceError("voice_core_unavailable") from None
         raise HTTPException(503, "Core unavailable")
     if result.status_code >= 400:
+        if voice_errors:
+            try:
+                code = result.json().get("code")
+            except (ValueError, AttributeError):
+                code = None
+            # Trust the closed error code, never a downstream error message.
+            raise VoiceError(code if isinstance(code, str) and code in VOICE_ERRORS else "voice_core_unavailable")
         raise HTTPException(result.status_code, "Core request failed")
     return result
 
@@ -166,6 +180,21 @@ async def close(sid: str, request: Request):
 async def agent(request: Request):
     user(request)
     return JSONResponse((await core("GET", "/api/agent")).json(), headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/voice")
+async def voice_status(request: Request):
+    user(request)
+    return JSONResponse((await core("GET", "/api/voice", voice_errors=True)).json(),
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/voice/offer")
+async def voice_offer(request: Request):
+    csrf(request)
+    sdp = await read_offer(request)
+    return JSONResponse((await core("POST", "/api/voice/offer", {"sdp": sdp}, voice_errors=True)).json(),
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/chat")

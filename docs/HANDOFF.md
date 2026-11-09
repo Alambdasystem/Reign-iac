@@ -1,3 +1,17 @@
+## Voice implementation candidate (2026-11-08)
+
+James requested that REIGN's missing voice be implemented using the Workmates
+integration. The new candidate adds a server-only Realtime SDP broker and native
+WebRTC voice controls. Every spoken request is delegated to the existing
+LangGraph conversation, with the same browser session and takeover fences.
+See [VOICE.md](VOICE.md) for configuration, lifecycle, and verification levels.
+
+This section records source work; it is not a deployment or audible-device
+acceptance claim. Publish only after the existing validation/release gates pass,
+then promote the tested Core/AX images through the existing Blueprint. Preserve
+Computer/Temporal digests, resource sizes, Workmates, and the shared database.
+Update this checkpoint with actual release and live-provider receipts.
+
 ## Live: approved UltraView + LangChain/LangGraph (2026-11-08)
 
 Your original UltraView AX design is deployed at
