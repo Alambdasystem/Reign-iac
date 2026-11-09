@@ -135,6 +135,25 @@ class PostgresIsolationTests(unittest.IsolatedAsyncioTestCase):
                                        role="user", text="attempted cross-owner write")
         self.assertEqual(len(await store.get_messages(owner_id="alice", thread_id=alice_id)), 1)
 
+    async def test_trace_sinks_reject_cross_user_read_and_raw_metadata(self):
+        import time
+        from reign.telemetry import safe_span, new_trace_id
+        from reign.trace_store import TraceRepository
+        traces = TraceRepository(self.db)
+        span = safe_span(trace_id=new_trace_id(), service="core",
+                         operation="agent.tool", outcome="ok",
+                         started_monotonic=time.monotonic(),
+                         tool_name="workspace_status", input_tokens=12)
+        await traces.record(owner_id="alice", span=span)
+        alice = await traces.recent("alice")
+        self.assertEqual(len(alice), 1)
+        self.assertEqual(alice[0]["tool_name"], "workspace_status")
+        self.assertEqual(alice[0]["input_tokens"], 12)
+        self.assertEqual(await traces.recent("bob"), [])
+        with self.assertRaises(ValueError):
+            await traces.record(owner_id="alice", span={**span, "raw_prompt": "private fixture"})
+        self.assertEqual(len(await traces.recent("alice")), 1)
+
     async def test_history_foreign_keys_reject_cross_owner_linkage(self):
         # Migration role creates the fixture, but database-level composite FK
         # prevents a message or checkpoint claiming someone else's thread.
