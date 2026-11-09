@@ -1,30 +1,45 @@
-## Current work: interactive MCP and secure vault candidate (2026-11-09)
+## Current work: tested MCP browser and vault release awaiting activation (2026-11-09)
 
 James confirmed **voice works on his own device**. That supersedes the earlier
 remaining user-device acceptance item; the cloud test's missing microphone stays
-recorded as historical evidence. He requested interactive Playwright tools via
-MCP, LangChain/LangGraph integration, saved credentials as a vault tool, and removal
-of the Agents/Tools tabs. Outlook is explicitly deferred until browser login or
-a Graph connection is requested. “SCP” is interpreted as MCP from context.
+recorded as historical evidence. Outlook is explicitly deferred until browser
+login or a Graph connection is requested. “SCP” is interpreted as MCP from context.
 
-The candidate adds fourteen real MCP tools, observed browser interaction,
-encrypted account storage and one-use private credential handoff, plus an Accounts
-dialog under Work. Chat and Work remain. Existing exact Git High destination,
-human takeover and epoch controls are retained. Source and tests are not live
-deployment evidence. See [tool/account guide](TOOL_AND_ACCOUNT_REQUIREMENTS.md)
-and [application contracts](APPLICATION_CONTRACTS.md).
+[PR #18](https://github.com/Alambdasystem/Reign-iac/pull/18) merged the fourteen
+private MCP tools, LangChain/LangGraph integration, interactive Playwright actions,
+encrypted account vault and Work → Accounts dialog. Chat and Work remain; the
+Agents/Tools tabs and shortcuts are removed. The exact Git High destination,
+human takeover and control epochs are retained. Chat checkpoints and browser
+cookies remain process-local; saved-account durability is separate.
 
-Vault readiness requires a dedicated mounted Core disk and separate managed
-keys. The proposed 1 GB disk adds about $0.25/month to the approved base pilot and
-requires the concrete cost approval reserved by AGENTS.md before applying it.
-Prepare tested images and an exact plan through the existing Blueprint first.
-Do not use ephemeral storage, Temporal's disk, Workmates or the shared database.
+Main source `08bad55dc8bd483fe78b13f90ae249872ace71af` passed all four required
+checks in run `42563465419`. Gated release `42563778434` rebuilt, tested and
+published immutable images. Artifact `13650572954` was downloaded and its SHA-256
+verified. The promotion proposal selects that release's Core, AX and Computer
+images while retaining the existing Temporal image. See the
+[verified release receipt](deployments/2026-11-09-browser-vault-release.md),
+[tool/account guide](TOOL_AND_ACCOUNT_REQUIREMENTS.md) and
+[application contracts](APPLICATION_CONTRACTS.md).
 
-Controlled CI acceptance uses a labeled scripted model and local website fixture
-through the real graph/MCP/HTTP/Temporal/Playwright/vault stack. Actual external
-login, registration and repository creation require their own deployed proof.
-Chat checkpoints and browser cookies remain process-local; account durability
-does not change those lifetimes.
+**These changes are not deployed.** The existing Blueprint remains the only
+infrastructure owner with `autoSync=false`. The proposal adds a dedicated 1 GB
+Core disk and two managed keys, with no compute-plan changes. This adds about
+$0.25/month to the previously approved ~$64.25/month base. AGENTS.md reserves
+concrete authorization for that cost increase and Blueprint application.
+Prepare and review the actual plan from main before asking for the final approval;
+do not apply without it. Do not use ephemeral storage, Temporal's disk, Workmates
+or the shared database for the vault.
+
+The passing controlled login and private-repository cases use a scripted model
+and local HTTPS site through real MCP, LangGraph, Temporal and Chromium. Both
+initial and fresh-container restart passed, including saved-account reuse and
+credential-leak checks. The real four-service Accounts UI save/list/remove and
+Core-restart persistence also passed. Actual external account creation, live-model
+login/repository creation and deployed vault readiness still need their own
+proof after activation. The physical-device voice result is James's confirmation,
+not a CI claim. Keep the real voice pre-deploy gate. After approval and rollout,
+verify vault `ready:true` / `durable:true` and let old Computer workers drain before
+exercising the new browser actions.
 
 ## Previous deployed checkpoint: session recovery and browser/tool acceptance (2026-11-09)
 
