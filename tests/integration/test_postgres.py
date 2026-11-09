@@ -191,10 +191,7 @@ class PostgresIsolationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(restored.checkpoint_id, "ckpt-2")
             self.assertEqual(restored.parent_checkpoint_id, "ckpt-1")
             self.assertEqual(restored.payload, b'{"next":"paused"}')
-            raw = await replacement.fetchval("""
-                SELECT state_ciphertext FROM reign.graph_checkpoints
-                WHERE thread_id=$1 AND checkpoint_id='ckpt-2'
-            """, uuid4()) if False else None
+            # RLS and authenticated encryption preserve ownership across reconnects.
             # No model invocation or browser effect takes place on restoration.
             self.assertIsNone(await CheckpointRepository(replacement, cipher).load(
                 owner_id="bob", thread_id=tid))
