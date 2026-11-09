@@ -39,6 +39,34 @@ browser, and physical-device acceptance requirements.
   through Core. Tie each session and frame to the authenticated human owner.
   Establish endpoint schemas before implementing the AX client and its tests.
 
+### Browser session recovery
+
+This pilot has one authenticated administrator and one active managed browser.
+`GET /api/sessions/active` requires the AX login session (Core and Computer use
+their existing service authorization) and returns `{"session":null}` or the
+active session's public metadata. Responses are not cached. This discovery
+contract must be replaced with per-owner filtering before adding multiple users.
+
+On sign-in, AX first checks the tab's stored `reign-session` identifier. A missing,
+invalid, or confirmed expired identifier triggers active-session discovery.
+Recovery attaches a fresh live frame to the existing browser, preserving its
+page, URL, control owner, and epoch. It does not open, navigate, close, or take
+control of that session. Workspace actions stay disabled until restoration
+finishes. A known `browser_occupied` HTTP 409 triggers read-only discovery and an
+explicit explanation; the failed open request is never replayed automatically.
+
+Conversation restoration is separate. If a stored `reign-thread` refers to a
+confirmed expired browser and the run has finished, AX clears only the tab's
+local conversation reference and explains that the next request starts a new
+conversation. It sends no delete or cancel request. Running or paused threads
+remain tracked; recovery never cancels another tab's graph work. Existing
+ownership/epoch checks still govern all subsequent actions.
+
+Acceptance must cover a second signed-in tab with empty session storage, an
+expired stored session, preserved human takeover, fresh frames, and absence of
+session mutations during discovery. These checks are distinct from deployed
+voice and physical-device acceptance.
+
 ## Computer (experimental implementation exists)
 
 The `reign/` code starts a Temporal worker and a private FastAPI service. It

@@ -16,6 +16,7 @@ from temporalio.exceptions import ApplicationError
 from temporalio.worker import Worker
 
 from reign.config import secret, checked_url, temporal_address, QUEUE, NAMESPACE
+from reign.session_errors import BROWSER_OCCUPIED_MESSAGE
 from reign.workflows import OpenBrowser, NavigateBrowser
 
 
@@ -55,6 +56,14 @@ class BrowserSessions:
         return {"id": sid, "mode": s["mode"], "epoch": s["epoch"],
                 "title": await s["page"].title(), "url": s["page"].url,
                 "http_status": s["http_status"], "viewport": {"width": 1280, "height": 800}}
+
+    async def active(self):
+        # This pilot has one authenticated administrator and one browser slot.
+        # Discovery reconnects a lost tab reference without creating a browser
+        # or changing the existing page, control owner, or ownership epoch.
+        async with self.lock:
+            sid = next(iter(self.sessions), None)
+            return {"session": await self.info(sid) if sid is not None else None}
 
     async def open(self, sid, url):
         checked_url(url)
@@ -159,6 +168,8 @@ async def open_browser(data: dict) -> dict:
     try:
         return await manager.open(data["id"], data["url"])
     except (ValueError, HTTPException) as e:
+        if isinstance(e, HTTPException) and e.status_code == 409:
+            raise ApplicationError(BROWSER_OCCUPIED_MESSAGE, type="WorkerOccupied", non_retryable=True) from e
         raise ApplicationError(str(e), non_retryable=True) from e
 
 
@@ -214,6 +225,11 @@ async def health():
     if not manager.worker_ready:
         raise HTTPException(503, "Temporal worker not ready")
     return {"status": "ready", "worker": "reign-computer", "sessions": len(manager.sessions)}
+
+
+@app.get("/sessions/active", dependencies=[Depends(authorize)])
+async def active_session():
+    return await manager.active()
 
 
 @app.get("/sessions/{sid}", dependencies=[Depends(authorize)])

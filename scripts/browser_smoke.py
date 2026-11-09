@@ -258,6 +258,84 @@ async def simulated_voice_ui(browser, storage_state, origin=AX):
             "live_provider_or_audible_audio": "not_tested"}
 
 
+async def recover_browser_tabs(context, api, sid):
+    """Recover the real singleton browser without creating or moving a page."""
+    prefix = "/api/sessions/" + sid
+    original = await (await api(prefix)).json()
+    assert original["mode"] == "human", "Recovery must preserve an existing human takeover"
+    first_frame = await api(prefix + "/frame")
+    cases = [("empty_session_storage", None),
+             ("stale_session_storage", "00000000-0000-4000-8000-000000000099")]
+    for name, stale_sid in cases:
+        tab = await context.new_page()  # Shares sign-in cookies, not sessionStorage.
+        tab.set_default_timeout(15000)
+        observed = []
+        errors = []
+        tab.on("request", lambda request: observed.append(
+            (request.method, urlsplit(request.url).path)))
+        tab.on("pageerror", lambda error: errors.append(str(error)))
+        initial_storage = "window.__reignRecoveryInitial = sessionStorage.getItem('reign-session');"
+        if stale_sid:
+            initial_storage = ("sessionStorage.setItem('reign-session', " + json.dumps(stale_sid) + ");" +
+                               initial_storage)
+        await tab.add_init_script(initial_storage)
+        discovery_started = asyncio.Event()
+        release_discovery = asyncio.Event()
+
+        async def delayed_discovery(route):
+            # Delay only; the response still comes from AX -> Core -> Computer.
+            discovery_started.set()
+            await asyncio.wait_for(release_discovery.wait(), 20)
+            await route.continue_()
+
+        await tab.route(AX + "/api/sessions/active", delayed_discovery)
+        try:
+            await tab.goto(AX, wait_until="domcontentloaded")
+            await asyncio.wait_for(discovery_started.wait(), 15)
+            await expect(tab.locator("#console")).to_be_visible()
+            await expect(tab.locator("#open")).to_be_disabled(timeout=5000)
+            await expect(tab.locator("#sendCommand")).to_be_disabled(timeout=5000)
+            assert await tab.evaluate("window.__reignRecoveryInitial") == stale_sid
+            release_discovery.set()
+            await expect(tab.locator("#session")).to_have_text(sid)
+            await expect(tab.locator("#controller")).to_have_text(original["mode"])
+            await expect(tab.locator("#epoch")).to_have_text(str(original["epoch"]))
+            await expect(tab.locator("#expandRemote")).to_be_enabled()
+            await tab.wait_for_function("document.querySelector('#screen').naturalWidth > 0")
+            await expect(tab.locator("#open")).to_be_disabled()
+            await expect(tab.locator("#take")).to_be_disabled()
+            await expect(tab.locator("#return")).to_be_enabled()
+            assert await tab.evaluate("sessionStorage.getItem('reign-session')") == sid
+            assert ("GET", "/api/sessions/active") in observed
+            if stale_sid:
+                assert ("GET", "/api/sessions/" + stale_sid) in observed
+            assert not [(method, path) for method, path in observed
+                        if path.startswith("/api/sessions") and method != "GET"], \
+                "Recovery must not create, navigate, close, or take control of a browser"
+            active = await (await api("/api/sessions/active")).json()
+            assert active == {"session": original}, (name, active, original)
+            assert await (await api(prefix)).json() == original
+            assert not errors, errors
+        finally:
+            release_discovery.set()
+            await tab.close()
+
+    # Both the current human owner and stale commands remain fenced after discovery.
+    await api(prefix + "/navigate", "POST", {"url": TARGET, "epoch": original["epoch"]}, 409)
+    await api(prefix + "/input", "POST", {"kind": "key", "key": "Tab",
+                                         "epoch": original["epoch"] - 1}, 409)
+    occupied = await api("/api/sessions", "POST", {"url": TARGET}, 409)
+    assert (await occupied.json())["code"] == "browser_occupied"
+    assert await (await api(prefix)).json() == original
+    final_frame = await api(prefix + "/frame")
+    assert final_frame.headers["x-session-id"] == sid
+    assert int(final_frame.headers["x-frame-sequence"]) > int(first_frame.headers["x-frame-sequence"])
+    return {"status": "passed", "mode": "real_four_service", "cases": [name for name, _ in cases],
+            "checks": ["startup_actions_blocked_until_discovery", "same_session_page_owner_and_epoch",
+                       "no_create_navigation_or_control_dispatch", "continuing_live_frames",
+                       "human_takeover_and_stale_input_fences", "occupied_open_is_distinct_409"]}
+
+
 async def main():
     temporal = await Client.connect("temporal:7233")
     async with async_playwright() as p:
@@ -324,6 +402,7 @@ async def main():
             evidence = json.loads((EVIDENCE / "smoke.json").read_text())
             sid = evidence["restart_session"]
             await api("/api/sessions/" + sid, status=404)
+            assert await (await api("/api/sessions/active")).json() == {"session": None}
             current = await completed_history(sid)
             assert current == evidence["restart_workflow"], "History changed after restart"
             # A fresh browser session works after the worker restart.
@@ -340,6 +419,7 @@ async def main():
             # Unauthorized actions and missing CSRF are rejected before dispatch.
             anonymous = await p.request.new_context(ignore_https_errors=True)
             assert (await anonymous.post(AX + "/api/sessions", data={})).status == 401
+            assert (await anonymous.get(AX + "/api/sessions/active")).status == 401
             assert (await anonymous.get(AX + "/api/voice")).status == 401
             assert (await anonymous.post(AX + "/api/voice/offer", data=VOICE_OFFER)).status == 401
             await anonymous.dispose()
@@ -364,6 +444,8 @@ async def main():
             await page.locator("#take").click()
             await expect(page.locator("#controller")).to_have_text("human")
             await expect(page.locator("#epoch")).to_have_text("1")
+            session_recovery = await recover_browser_tabs(context, api, sid)
+            assert await completed_history(sid) == history, "Recovery changed the original open workflow"
             await api(prefix + "/navigate", "POST", {"url": TARGET, "epoch": 0}, 409)
             await api(prefix + "/input", "POST", {"kind": "key", "key": "Tab", "epoch": 1})
             await page.locator("#expandRemote").click()
@@ -395,12 +477,13 @@ async def main():
             await page.locator("#close").click()
             await expect(page.locator("#session")).to_have_text("None")
             await api(prefix + "/frame", status=404)
+            assert await (await api("/api/sessions/active")).json() == {"session": None}
+            # Separate authenticated context with no real browser to recover;
+            # only this scenario uses synthetic media/provider/graph responses.
+            simulated_voice = await simulated_voice_ui(browser, await context.storage_state())
             # Leave a session open to check honest expiry after Computer restarts.
             opened = await api("/api/sessions", "POST", {"url": TARGET})
             restart_sid = (await opened.json())["id"]
-            # Separate authenticated context; only this additional UI scenario
-            # uses synthetic media, voice-provider and graph responses.
-            simulated_voice = await simulated_voice_ui(browser, await context.storage_state())
             evidence = {
                 "status": "awaiting_restart_check", "source_sha": os.environ.get("SOURCE_SHA"),
                 "workflow": history, "restart_session": restart_sid,
@@ -410,6 +493,7 @@ async def main():
                 "cleanup": "passed", "human_acceptance": "not_run",
                 "approved_design": "UltraView AX v1", "responsive_layout": "passed",
                 "reload_reconnect": "passed", "frame_failure_fail_closed": "passed",
+                "session_recovery": session_recovery,
                 "voice_config_unavailable_ui": "passed", "voice_auth_and_csrf": "passed",
                 "live_voice_audio": "not_run_no_provider_key",
                 "simulated_voice_ui": simulated_voice,
