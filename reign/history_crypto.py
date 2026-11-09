@@ -24,7 +24,7 @@ def _uuid(value: str) -> str:
 def _aad(owner_id: str, thread_id: str, record_id: str, purpose: str, version: int) -> bytes:
     if not owner_id or len(owner_id) > 128 or len(purpose) > 32 or not purpose:
         raise ValueError("Invalid history record identity")
-    if purpose not in ("message", "checkpoint"):
+    if purpose not in ("message", "checkpoint", "write"):
         raise ValueError("Invalid record purpose")
     if version != 1:
         raise ValueError("Unknown history encryption version")
