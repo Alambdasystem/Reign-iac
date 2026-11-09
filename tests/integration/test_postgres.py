@@ -235,6 +235,59 @@ class PostgresIsolationTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await fresh.close()
 
+    async def test_real_langgraph_pause_and_restart_does_not_replay_prior_node(self):
+        from typing import TypedDict
+        from langgraph.graph import StateGraph, START, END
+        from langgraph.types import Command, interrupt
+        from reign.history_crypto import HistoryCipher
+        from reign.history_store import HistoryRepository
+        from reign.checkpoint_store import CheckpointRepository
+        from reign.langgraph_saver import EncryptedGraphSaver
+
+        class State(TypedDict):
+            count: int
+            approved: bool
+
+        calls = []
+        def do_once(state):
+            calls.append("effectless-step")
+            return {"count": state["count"] + 1}
+        def approval(state):
+            approved = interrupt("Human approval required")
+            return {"approved": bool(approved)}
+
+        def compile_graph(saver):
+            builder = StateGraph(State)
+            builder.add_node("do_once", do_once)
+            builder.add_node("approval", approval)
+            builder.add_edge(START, "do_once")
+            builder.add_edge("do_once", "approval")
+            builder.add_edge("approval", END)
+            return builder.compile(checkpointer=saver)
+
+        cipher = HistoryCipher(bytes(range(32)))
+        tid = str(uuid4())
+        await HistoryRepository(self.db, cipher).create_conversation("alice", tid)
+        first = compile_graph(EncryptedGraphSaver(
+            CheckpointRepository(self.db, cipher), owner_id="alice"))
+        conf = {"configurable": {"thread_id": tid}}
+        interrupted = await first.ainvoke({"count": 0, "approved": False}, conf)
+        self.assertIn("__interrupt__", interrupted)
+        self.assertEqual(calls, ["effectless-step"])
+        # A fresh database connection represents a restarted Core process.
+        new_connection = await asyncpg.connect(os.environ["REIGN_TEST_DATABASE_URL"])
+        try:
+            await new_connection.execute("SET ROLE reign_ci_app")
+            second = compile_graph(EncryptedGraphSaver(
+                CheckpointRepository(new_connection, cipher), owner_id="alice"))
+            completed = await second.ainvoke(Command(resume=True), conf)
+            self.assertEqual(completed["count"], 1)
+            self.assertTrue(completed["approved"])
+            self.assertEqual(calls, ["effectless-step"],
+                             "Resume must not repeat the previously completed node")
+        finally:
+            await new_connection.close()
+
     async def test_history_foreign_keys_reject_cross_owner_linkage(self):
         # Migration role creates the fixture, but database-level composite FK
         # prevents a message or checkpoint claiming someone else's thread.
