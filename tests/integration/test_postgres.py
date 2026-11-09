@@ -93,6 +93,40 @@ class PostgresIsolationTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncpg.ForeignKeyViolationError):
             await self.db.execute("INSERT INTO reign.tasks(task_id,owner_id,session_id) VALUES ($1,'alice',$2)", uuid4(), uuid4())
 
+    async def test_history_and_traces_fail_closed_until_rls_policies_exist(self):
+        # Proposal migration is deliberately *not* runtime-enabled.
+        # Even a table grant must not permit querying other users' history.
+        with self.assertRaises(asyncpg.InsufficientPrivilegeError):
+            await self.db.execute(
+                "INSERT INTO reign.conversations(thread_id, owner_id) VALUES ($1,'alice')", uuid4()
+            )
+        self.assertEqual(await self.db.fetchval("SELECT count(*) FROM reign.conversations"), 0)
+        self.assertEqual(await self.db.fetchval("SELECT count(*) FROM reign.trace_spans"), 0)
+
+    async def test_history_foreign_keys_reject_cross_owner_linkage(self):
+        # Migration role creates the fixture, but database-level composite FK
+        # prevents a message or checkpoint claiming someone else's thread.
+        await self.db.execute("RESET ROLE")
+        tid = uuid4()
+        try:
+            await self.db.execute(
+                "INSERT INTO reign.conversations(thread_id,owner_id) VALUES ($1,'alice')", tid)
+            with self.assertRaises(asyncpg.ForeignKeyViolationError):
+                await self.db.execute("""
+                    INSERT INTO reign.conversation_messages
+                      (message_id,thread_id,owner_id,ordinal,role,body_ciphertext,
+                       body_nonce,key_version)
+                    VALUES ($1,$2,'bob',0,'user',$3,$4,1)
+                """, uuid4(), tid, b"encrypted-test-only", b"0" * 12)
+            with self.assertRaises(asyncpg.ForeignKeyViolationError):
+                await self.db.execute("""
+                    INSERT INTO reign.graph_checkpoints
+                      (thread_id,checkpoint_id,owner_id,state_ciphertext,state_nonce,key_version)
+                    VALUES ($1,'c1','bob',$2,$3,1)
+                """, tid, b"encrypted-test-only", b"1" * 12)
+        finally:
+            await self.db.execute("SET ROLE reign_ci_app")
+
     async def test_readiness_rejects_missing_table_grant(self):
         await self.db.execute("RESET ROLE; REVOKE UPDATE ON reign.tasks FROM reign_ci_app; SET ROLE reign_ci_app")
         self.assertFalse(await self.probe())
