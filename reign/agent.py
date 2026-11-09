@@ -321,5 +321,14 @@ class AgentRuntime:
         return {"status": "deleted", "browser_session_closed": False}
 
     async def shutdown(self):
-        for tid in list(self.threads):
-            await self.delete(tid)
+        # Shutdown must not call delete/get: get() prunes expired threads and
+        # can raise 404 midway through cleanup. Cancel only still-active work,
+        # then release all in-memory references without replaying tool effects.
+        threads = list(self.threads.values())
+        for thread in threads:
+            if thread.task and not thread.task.done():
+                thread.task.cancel()
+        pending = [thread.task for thread in threads if thread.task and not thread.task.done()]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        self.threads.clear()
