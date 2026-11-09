@@ -1,4 +1,32 @@
-## Current checkpoint: session recovery live; browser/tool acceptance passed (2026-11-09)
+## Current work: interactive MCP and secure vault candidate (2026-11-09)
+
+James confirmed **voice works on his own device**. That supersedes the earlier
+remaining user-device acceptance item; the cloud test's missing microphone stays
+recorded as historical evidence. He requested interactive Playwright tools via
+MCP, LangChain/LangGraph integration, saved credentials as a vault tool, and removal
+of the Agents/Tools tabs. Outlook is explicitly deferred until browser login or
+a Graph connection is requested. “SCP” is interpreted as MCP from context.
+
+The candidate adds fourteen real MCP tools, observed browser interaction,
+encrypted account storage and one-use private credential handoff, plus an Accounts
+dialog under Work. Chat and Work remain. Existing exact Git High destination,
+human takeover and epoch controls are retained. Source and tests are not live
+deployment evidence. See [tool/account guide](TOOL_AND_ACCOUNT_REQUIREMENTS.md)
+and [application contracts](APPLICATION_CONTRACTS.md).
+
+Vault readiness requires a dedicated mounted Core disk and separate managed
+keys. The proposed 1 GB disk adds about $0.25/month to the approved base pilot and
+requires the concrete cost approval reserved by AGENTS.md before applying it.
+Prepare tested images and an exact plan through the existing Blueprint first.
+Do not use ephemeral storage, Temporal's disk, Workmates or the shared database.
+
+Controlled CI acceptance uses a labeled scripted model and local website fixture
+through the real graph/MCP/HTTP/Temporal/Playwright/vault stack. Actual external
+login, registration and repository creation require their own deployed proof.
+Chat checkpoints and browser cookies remain process-local; account durability
+does not change those lifetimes.
+
+## Previous deployed checkpoint: session recovery and browser/tool acceptance (2026-11-09)
 
 Session recovery source `566fab179f50e999f892285760a59d1b88864d7c` (PR #15)
 passed validation and its tested-image release. Promotion PR #16 merged at

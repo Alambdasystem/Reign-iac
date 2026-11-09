@@ -121,10 +121,22 @@ reaches AX or the browser. `/api/agent.configured` is the configuration signal;
 Chat uses LangChain ChatOpenAI with the OpenAI Responses API, `store=false`,
 serial tool calls and Workmates' configured model. LangGraph maintains messages,
 conditional model/tool execution, checkpoints, and human-control interrupts.
-Tools are `workspace_status`, `browser_status`, `open_browser`, and
-`navigate_browser`. Only the request-bound session can be used; URL allowlisting
-and Temporal/worker epoch fencing are retained. No shell, deployment, arbitrary
-MCP server or database tools are exposed without their required integrations.
+Production Core starts a fixed private stdio MCP server using the official MCP
+Python SDK. It verifies the discovered catalog against the same Pydantic schemas
+used to bind LangChain StructuredTools. LangGraph invokes that connection;
+Playwright runs in Computer through Temporal. The model cannot select a server,
+command, owner, session or control epoch. The catalog consists of:
+
+- `workspace_status`, `browser_status`, `open_browser`, `navigate_browser`;
+- `browser_observe`, `browser_click`, `browser_fill`, `browser_press`, `browser_scroll`;
+- `vault_status`, `vault_list_accounts`, `vault_request_account`,
+  `vault_prepare_signup`, `vault_use_account`.
+
+Only the request-bound session can be used. URL allowlisting and Temporal/worker
+epoch fencing remain enforced. The tools do not provide arbitrary selectors,
+JavaScript evaluation, shell commands, server registration or database access.
+Playwright is the implementation behind this restricted MCP catalog, not an
+unrestricted public Playwright MCP server.
 
 Runs are asynchronous and expose actual node/tool events, text results and token
 usage. No hidden reasoning or raw provider exceptions appear in traces. Return
@@ -132,7 +144,90 @@ control and explicitly resume to continue an interrupted navigation. Stop/new
 chat cancels and deletes the conversation; it does not undo completed actions or
 close the browser. Browser controls remain responsive during model requests.
 
-Limits: six tool steps per turn, 240 seconds per run, twelve turns per thread,
+Limits: sixteen tool steps per turn, 480 seconds per run, twelve turns per thread,
 eight threads, two active runs, and thirty minutes idle lifetime. Checkpoints are
-in memory on the single Core instance and reset on restart. Durable PostgreSQL
-checkpoints and MCP data tools remain pending restricted REIGN DB access.
+in memory on the single Core instance and reset on restart. Saved accounts use
+the independent durable vault described below; this does not persist chats or
+browser cookies. Durable PostgreSQL checkpoints remain pending restricted REIGN
+DB access.
+
+## Interactive browser actions
+
+An observation contains bounded visible text and element references, never input
+values. References expire after 60 seconds and are bound to the document, URL,
+DOM state and control epoch. Each effect consumes its observation before acting.
+A changed page or takeover requires a new observation. Generic fill rejects
+password, OTP, token, hidden and file fields; Core performs a no-text preflight
+before putting ordinary text into a Temporal action payload. The worker checks
+again under its session lock immediately before the effect.
+
+Browser activities have one attempt. An unknown action outcome halts the
+graph turn instead of repeating a click or submission. Human verification,
+credential reveal, account-registration submission and terms acceptance stop
+for Take control. Sign-in and requested repository form submission can proceed
+when their controls are unambiguous; success must be verified from a subsequent
+observation. No tool treats filled credentials as an authenticated login.
+
+Native Playwright routing groups HTTP redirects into one chain, so routing alone
+is not the network boundary. Every managed context also uses a private loopback
+CONNECT proxy that permits only approved HTTPS host/port pairs, including native
+redirect connections. Credential injection narrows that proxy to the credential
+origin and closes incompatible existing/in-flight tunnels. Chromium's implicit
+loopback proxy bypass, HTTP/2 coalescing, QUIC and non-proxied WebRTC UDP are disabled. TLS stays
+between the browser and website; the proxy never decrypts or records page data.
+The existing BROWSER_PROXY override is rejected instead of replacing this gate.
+
+Stop/end-call cancellation crosses the standard MCP cancellation notification
+into the uniquely owned Temporal workflow. Cleanup is bounded and never cancels
+another operation or retries the original effect. Already-dispatched browser
+actions may complete; cancellation does not establish that an action was undone.
+
+## Secure saved accounts
+
+AX retains only Chat and Work navigation. Work includes an Accounts dialog with
+Add, Use saved login, and Remove. The agent can request that secure dialog; it
+cannot accept a password as a tool argument. Opening the dialog mutes an active
+microphone and prevents starting or unmuting voice until it closes. Closing it
+does not unmute automatically. Inputs are cleared after capture, closure,
+authentication loss and page exit. Passwords do not enter chat or browser storage.
+
+Authenticated account endpoints are `GET/POST /api/accounts`,
+`DELETE /api/accounts/{id}` and `POST /api/accounts/{id}/use`. AX enforces the
+existing signed cookie and same-origin CSRF rules, bounded bodies, no redirects
+and fixed errors. Core derives the single administrator identity server-side.
+Metadata returned to AX includes username; model metadata omits it. Duplicate
+labels never silently overwrite credentials. Remove deletes only the vault
+entry, not the external website account. Use saved login joins the same graph
+thread and execution lease used by text and voice.
+
+Vault persistence requires an actual dedicated mounted directory specified by
+`REIGN_VAULT_DIR` and a separately managed base64 256-bit `REIGN_VAULT_KEY`.
+Missing disk, invalid key, wrong key, corruption or unsafe filesystem objects
+fail closed. There is no ephemeral fallback, automatic key generation or shared
+database migration. AES-GCM authenticates encrypted account fields and their
+record bindings. SQLite files are 0600 beneath a 0700 directory. Core's fixed-path
+entrypoint prepares mount ownership and drops root before starting the service.
+
+The model receives account IDs. A trusted MCP handler issues a one-use, 60-second
+grant bound to account revision, owner, browser session, observation, origin and
+epoch. Only that reference enters Temporal. Computer redeems it at the private
+Core endpoint with its service authorization; the response is encrypted using a
+separate `CREDENTIAL_CHANNEL_KEY` and authenticated context. The worker fills one
+unambiguous, same-origin POST form under its control lock. It does not submit the
+form as part of credential injection. Secret-bearing sessions restrict all
+requests to the credential origin. Screenshots mask form fields and known
+password echoes; public URLs omit queries/fragments, and model observations
+redact known passwords, including normalized whitespace and encoded variants.
+
+`vault_prepare_signup` creates a generated private credential in the vault,
+returning metadata plus `external_account_created:false`. Required registration
+submission, terms, MFA, CAPTCHA, passkeys and recovery still use human takeover.
+Outlook and Microsoft Graph are deferred at James's request. The existing exact
+Git High hostname restriction remains in place.
+
+Acceptance distinguishes real browser/transport integration against a controlled
+fixture with a scripted model, public Git High navigation, real provider tests,
+and actual external account/repository creation. CI also tests Accounts UI,
+one-use and wrong-context grants, secret exclusions, and account persistence
+across new service/container and browser instances. Controlled fixture success
+does not assert that a live external account or repository was created.

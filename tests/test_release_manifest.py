@@ -1,11 +1,21 @@
 import unittest
-from scripts.release_manifest import manifest, SERVICES
+from scripts.release_manifest import manifest, workspace_acceptance, SERVICES
 
 SHA = "a" * 40
 SMOKE = {"status": "passed", "source_sha": SHA}
 
 
 class ReleaseManifestTests(unittest.TestCase):
+    def test_workspace_gate_requires_both_matching_phases_and_restart_durability(self):
+        initial = {"passed": True, "phase": "initial", "source_sha": SHA,
+                   "evidence_kind": "controlled_workspace_acceptance", "model": "scripted_model", "website": "controlled_site"}
+        restart = {**initial, "phase": "restart", "checks": {"account_survived_process_restart": True}}
+        self.assertEqual(workspace_acceptance(SHA, initial, restart)["restart"], restart)
+        for changed in ({"passed": False}, {"source_sha": "c" * 40}, {"phase": "initial"},
+                        {"checks": {"account_survived_process_restart": False}}):
+            with self.subTest(changed=changed), self.assertRaises(ValueError):
+                workspace_acceptance(SHA, initial, {**restart, **changed})
+
     def inspect(self, image):
         return [image.rsplit(":", 1)[0] + "@sha256:" + "b" * 64]
 

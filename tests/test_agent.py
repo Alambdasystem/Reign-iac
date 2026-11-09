@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from langchain_core.messages import AIMessage, HumanMessage
 from reign.agent import AgentRuntime, MAX_STEPS, MAX_TURNS, model_client
 from reign.session_errors import BROWSER_OCCUPIED_CODE, BROWSER_OCCUPIED_MESSAGE, BrowserOccupied
+from reign.tool_errors import BrowserActionError
 
 SID = str(uuid.uuid4())
 
@@ -120,6 +121,90 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["session_id"], SID)
         self.assertEqual(self.adapter.opens, 1)
 
+    async def test_interactive_action_uses_observed_target_and_trusted_epoch(self):
+        observation = str(uuid.uuid4())
+        self.adapter.epoch = 4
+        self.adapter.observe = AsyncMock(return_value={
+            "id": SID, "observation_id": observation, "text": "Repository form",
+            "elements": [{"ref": "e1", "role": "textbox", "name": "Name"}],
+        })
+        self.adapter.action = AsyncMock(return_value={"id": SID, "acted": "fill"})
+        runtime = self.setup_run(call("browser_observe"), call("browser_fill", {
+            "observation_id": observation, "ref": "e1", "text": "disposable-repository",
+        }), AIMessage(content="Repository name entered; nothing submitted."))
+        _, result = await self.finish(runtime.submit("Enter a repository name", sid=SID))
+        self.assertEqual(result["status"], "completed")
+        self.adapter.observe.assert_awaited_once_with(SID, 4)
+        self.adapter.action.assert_awaited_once_with("browser_fill", SID, {
+            "observation_id": observation, "ref": "e1", "text": "disposable-repository",
+        }, 4)
+        self.assertIn("Repository form", str(self.model.seen[-1]))
+
+    async def test_uncertain_action_or_human_verification_halts_without_model_retry(self):
+        for code in ("action_uncertain", "human_verification_required"):
+            with self.subTest(code=code):
+                self.adapter.action = AsyncMock(side_effect=BrowserActionError(code))
+                runtime = self.setup_run(call("browser_click", {
+                    "observation_id": str(uuid.uuid4()), "ref": "e1",
+                }), call("browser_click", {
+                    "observation_id": str(uuid.uuid4()), "ref": "e1",
+                }))
+                thread, result = await self.finish(runtime.submit("Submit", sid=SID))
+                self.assertEqual(result["status"], "completed")
+                self.assertEqual(result["answer"], BrowserActionError(code).detail)
+                self.assertEqual(len(self.model.seen), 1)
+                self.adapter.action.assert_awaited_once()
+                # A later explicit user turn can proceed after checking the page.
+                self.model.answers = [AIMessage(content="Waiting for your next instruction.")]
+                _, continued = await self.finish(runtime.submit("Wait", thread.id))
+                self.assertEqual(continued["answer"], "Waiting for your next instruction.")
+                await runtime.shutdown()
+
+    async def test_secure_account_entry_event_contains_only_safe_form_metadata(self):
+        self.adapter.vault = AsyncMock(return_value={
+            "status": "secure_entry_required", "label": "Git High",
+            "origin": "https://alambda-forge.onrender.com",
+        })
+        runtime = self.setup_run(call("vault_request_account", {
+            "label": "Git High", "origin": "https://alambda-forge.onrender.com",
+        }), AIMessage(content="Enter your login in Accounts."))
+        _, result = await self.finish(runtime.submit("Save my login"))
+        events = [event for event in result["events"] if event["kind"] == "account_entry_requested"]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(set(events[0]), {"sequence", "kind", "origin", "label"})
+        self.assertEqual(events[0]["label"], "Git High")
+
+    async def test_lost_mcp_creation_response_stops_the_actual_graph_loop(self):
+        from types import SimpleNamespace
+        from reign.mcp_client import MCPTools, WorkspaceMCP
+        for name, args in (("open_browser", {}), ("vault_prepare_signup", {
+                "label": "Fixture", "origin": "https://alambda-forge.onrender.com", "username": "fixture"})):
+            with self.subTest(tool=name):
+                connection = WorkspaceMCP()
+                connection.session = SimpleNamespace(call_tool=AsyncMock(side_effect=ConnectionError("private diagnostic")))
+                self.adapter = MCPTools(connection)
+                runtime = self.setup_run(call(name, args), call(name, args))
+                _, result = await self.finish(runtime.submit("Run the requested operation"))
+                self.assertEqual(result["status"], "completed")
+                self.assertEqual(result["answer"], BrowserActionError("action_uncertain").detail)
+                self.assertEqual(len(self.model.seen), 1)
+                connection.session.call_tool.assert_awaited_once()
+                self.assertNotIn("private diagnostic", str(result))
+                await runtime.shutdown()
+
+    async def test_vault_use_pauses_before_dispatch_and_rechecks_current_epoch(self):
+        self.adapter.mode = "human"
+        self.adapter.vault = AsyncMock(return_value={"filled": True, "status": "credentials_filled"})
+        args = {"account_id": str(uuid.uuid4()), "observation_id": str(uuid.uuid4())}
+        runtime = self.setup_run(call("vault_use_account", args), AIMessage(content="Filled; sign-in is not yet verified."))
+        thread, result = await self.finish(runtime.submit("Use the saved login", sid=SID))
+        self.assertEqual(result["status"], "paused")
+        self.adapter.vault.assert_not_awaited()
+        self.adapter.mode, self.adapter.epoch = "agent", 2
+        await self.finish(await runtime.resume(thread.id))
+        self.adapter.vault.assert_awaited_once_with("vault_use_account", args, SID, 2)
+        self.assertEqual(thread.status, "completed")
+
     async def test_recovered_session_is_reused_without_open_or_navigation(self):
         runtime = self.setup_run(call("open_browser"), call("browser_status"), AIMessage(content="Existing browser recovered."))
         _, result = await self.finish(runtime.submit("Open the browser, then report its status", sid=SID))
@@ -184,7 +269,10 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(bound.bound.store)
             self.assertEqual(bound.bound.openai_api_base, "https://api.openai.com/v1")
             self.assertFalse(bound.kwargs["parallel_tool_calls"])
-            self.assertEqual(len(bound.kwargs["tools"]), 4)
+            self.assertEqual({tool["function"]["name"] for tool in bound.kwargs["tools"]}, {
+                "workspace_status", "browser_status", "open_browser", "navigate_browser",
+                "browser_observe", "browser_click", "browser_fill", "browser_press", "browser_scroll",
+                "vault_status", "vault_list_accounts", "vault_request_account", "vault_prepare_signup", "vault_use_account"})
 
     async def test_explicit_provider_base_never_falls_back_to_another_host(self):
         with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key-never-live",
