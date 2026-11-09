@@ -82,6 +82,14 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.adapter.statuses, 1)
         self.assertEqual(result["usage"]["input_tokens"], 10)
         self.assertEqual([e["kind"] for e in result["events"]], ["model_started", "model_completed", "tool_started", "tool_completed", "model_started", "model_completed", "completed"])
+        # Instrumentation is sanitized metadata, never the user's prompt or model answer.
+        self.assertEqual(len(result["trace_spans"]), 3)
+        self.assertEqual([span["operation"] for span in result["trace_spans"]],
+                         ["agent.model", "agent.tool", "agent.model"])
+        self.assertEqual(result["trace_spans"][1]["tool_name"], "workspace_status")
+        self.assertEqual({span["trace_id"] for span in result["trace_spans"]}, {result["trace_id"]})
+        self.assertNotIn("My name is James", str(result["trace_spans"]))
+        self.assertNotIn("Ready.", str(result["trace_spans"]))
         await self.finish(runtime.submit("What is my name?", thread.id))
         self.assertTrue(any(isinstance(m, HumanMessage) and "James" in m.content for m in self.model.seen[-1]))
 
