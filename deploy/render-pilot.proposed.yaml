@@ -53,7 +53,7 @@ services:
   region: oregon
   numInstances: 1
   image:
-    url: ghcr.io/alambdasystem/reign-core@sha256:2e6f8eb970480b0e02b7c901a119f71687de984640cb5fb1b8f320817c4b1cd5
+    url: ghcr.io/alambdasystem/reign-core@sha256:9a771a6bf2c415f70d715dc385baa6fd5fdcd2db9442e24e9dd2ea12302cdab6
   envVars:
   - key: PORT
     value: '10000'
@@ -93,6 +93,9 @@ services:
       envVarKey: OPENAI_MODEL
   # Core derives both private endpoints from the referenced host variables.
   dockerCommand: ''
+  # Block promotion unless real provider speech reaches the LangGraph status
+  # tool and returns non-silent audio. Synthetic input; no device-audio claim.
+  preDeployCommand: python -m reign.voice_acceptance
 - type: web
   name: reign-ax-pilot
   runtime: image
@@ -100,7 +103,7 @@ services:
   region: oregon
   numInstances: 1
   image:
-    url: ghcr.io/alambdasystem/reign-ax@sha256:661590b743bcaed777fb8f17f3142e44fccce034543bddeca44f21ec1ef53543
+    url: ghcr.io/alambdasystem/reign-ax@sha256:d3fa8117b740a26f705b88bbfb55d8c26ec39d73533ee20188f475e1157b4241
   envVars:
   - key: PORT
     value: '10000'
