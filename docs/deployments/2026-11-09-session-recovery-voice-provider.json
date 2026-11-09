@@ -1,0 +1,55 @@
+{
+  "recorded_from": "Render Core pre-deploy acceptance log",
+  "source_commit": "566fab179f50e999f892285760a59d1b88864d7c",
+  "promotion_commit": "c3035f3b30136aefd68ec56c4d4d65d0a9d69912",
+  "service_id": "srv-dbog273rjlhs73bb4t90",
+  "deploy_id": "dep-dbojk3jrjlhs73bm556g",
+  "log_timestamp": "2026-11-09T03:12:35.499889188Z",
+  "verification": "reign_voice_provider",
+  "status": "passed",
+  "stage": "complete",
+  "stages": {
+    "configuration": "passed",
+    "fixture": "passed",
+    "connection": "passed",
+    "session": "passed",
+    "audio_input": "passed",
+    "delegation": "passed",
+    "langgraph": "passed",
+    "narration": "passed",
+    "audio_validation": "passed"
+  },
+  "transport": "websocket",
+  "input": "synthetic_pcm_manual_commit",
+  "physical_device": "not_run",
+  "webrtc_browser": "not_run",
+  "input_transcript_present": true,
+  "started_at": "2026-11-09T03:12:23.570181+00:00",
+  "provider": {
+    "model": "gpt-realtime-2.1",
+    "voice": "marin"
+  },
+  "fixture": {
+    "sha256": "f37494a5143fb194b212e03ada62400ae5b8432feb8e8f005bbbb3885d5d69eb",
+    "duration_seconds": 5.435,
+    "sample_rate": 24000
+  },
+  "graph": {
+    "model": "gpt-6-astra",
+    "tools": [
+      "workspace_status"
+    ],
+    "usage": {
+      "input_tokens": 1245,
+      "output_tokens": 36
+    }
+  },
+  "output_audio": {
+    "bytes": 292800,
+    "duration_seconds": 6.1,
+    "rms_normalized": 0.070144,
+    "transcript_present": true
+  },
+  "event_count": 125,
+  "finished_at": "2026-11-09T03:12:35.499682+00:00"
+}
