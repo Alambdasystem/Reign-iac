@@ -1,4 +1,31 @@
-## Current work: tested MCP browser and vault release awaiting activation (2026-11-09)
+## Current checkpoint: live browser/vault acceptance; source fixes pending (2026-11-09)
+
+Deployed application source `08bad55dc8bd483fe78b13f90ae249872ace71af` has now
+executed live prompt-driven `workspace_status` and `vault_status` checks through
+the authenticated AX interface. The vault reported `ready:true` and
+`durable:true`. Live browser prompts opened and observed Git High, then used a
+visible Sign In control to reach its login page. Further live checks completed
+navigation, scrolling, ordinary fill/key input, private test-login fill, reuse
+of the same vault entry in a fresh browser, human takeover/handback/resume,
+stale-observation rejection and recovery, and paused-task cancellation.
+Disallowed destinations and invalid vault requests were rejected. A signed-out
+account-list request required login. The disposable vault entry was removed and
+the managed browser was closed after testing. These observations do not establish
+external account authentication or creation, repository creation, live at-rest
+cryptographic inspection, or cancellation of an already dispatched activity.
+
+Two narrow source corrections are prepared and **pending deployment**: ordinary
+requested links may use fresh element references with the existing destination
+guard, and a confirmed expired chat clears only the tab's conversation reference
+while preserving its recovered browser. Recovery does not cancel or replay work;
+running/paused conversations and temporary lookup failures remain tracked.
+Focused local validation passed 41 Node tests and 19 agent tests. The detailed
+live acceptance report and browser evidence remain outside this public repository.
+
+## Previous release-planning checkpoint: before vault activation (2026-11-09)
+
+The following section records the pre-activation plan. Its deployment and
+approval status is historical; the live checkpoint above records later evidence.
 
 James confirmed **voice works on his own device**. That supersedes the earlier
 remaining user-device acceptance item; the cloud test's missing microphone stays
