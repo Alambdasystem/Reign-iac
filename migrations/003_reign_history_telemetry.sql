@@ -6,7 +6,14 @@ CREATE SCHEMA IF NOT EXISTS reign;
 CREATE TABLE IF NOT EXISTS reign.conversations (
     thread_id uuid PRIMARY KEY,
     owner_id text NOT NULL,
-    title text NOT NULL DEFAULT '',
+    -- Human titles can contain private content; never store plaintext.
+    title_ciphertext bytea,
+    title_nonce bytea CHECK (title_nonce IS NULL OR octet_length(title_nonce)=12),
+    title_key_version integer CHECK (title_key_version IS NULL OR title_key_version > 0),
+    CONSTRAINT title_sealed_together CHECK (
+      (title_ciphertext IS NULL AND title_nonce IS NULL AND title_key_version IS NULL)
+      OR (title_ciphertext IS NOT NULL AND title_nonce IS NOT NULL AND title_key_version IS NOT NULL)
+    ),
     status text NOT NULL DEFAULT 'idle'
         CHECK (status IN ('idle','running','paused','completed','failed','archived')),
     created_at timestamptz NOT NULL DEFAULT now(),
