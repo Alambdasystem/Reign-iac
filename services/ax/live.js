@@ -451,11 +451,21 @@ async function pollChat({restore=false}={}){
     }else if(chatState==='running')chatPoll=setTimeout(pollChat,750);
   }catch(error){
     if(threadId!==activeThread||generation!==chatGeneration)return;
+    if(error.status===404){
+      // A confirmed expired conversation does not disconnect the recovered
+      // browser. Drop only this tab's chat reference; never cancel server work.
+      const interrupted=!!chatPending;
+      error.message=interrupted?'The conversation expired. Check the browser before starting a new task; an action already sent may have completed.':'The previous conversation expired. Your next message will start a new conversation.';
+      threadId=null;chatRun=null;chatSeen=0;chatInfo=null;chatState='idle';rememberChat();
+      settleChatJob(chatPending,null,error);chatOwner=null;notifyChatWaiters();
+      entry('CONVERSATION',error.message,interrupted);refreshControls();
+      $('agentLabel').textContent='New conversation · previous chat expired';
+      return;
+    }
     chatState='disconnected';entry('AGENT',error.message,true);
-    if(error.status===404){threadId=null;chatState='idle';chatInfo=null;rememberChat();settleChatJob(chatPending,null,error);notifyChatWaiters()}
-    else if(error.status===401){settleChatJob(chatPending,null,error);voiceController?.stop({reason:'Your sign-in expired. Sign in to continue.',failed:true})}
+    if(error.status===401){settleChatJob(chatPending,null,error);voiceController?.stop({reason:'Your sign-in expired. Sign in to continue.',failed:true})}
     refreshControls();$('agentLabel').textContent='Agent connection interrupted';
-    if(error.status!==404&&error.status!==401)chatPoll=setTimeout(pollChat,2000);
+    if(error.status!==401)chatPoll=setTimeout(pollChat,2000);
   }
 }
 async function clearChat(expectedOwner){
