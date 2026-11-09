@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS reign.conversations (
         CHECK (status IN ('idle','running','paused','completed','failed','archived')),
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
-    archived_at timestamptz
+    archived_at timestamptz,
+    UNIQUE (thread_id, owner_id)
 );
 CREATE INDEX IF NOT EXISTS reign_conversations_owner_recent
     ON reign.conversations(owner_id, updated_at DESC);
@@ -20,8 +21,9 @@ CREATE INDEX IF NOT EXISTS reign_conversations_owner_recent
 -- prompts, browser screenshots and secrets MUST NOT enter this table.
 CREATE TABLE IF NOT EXISTS reign.conversation_messages (
     message_id uuid PRIMARY KEY,
-    thread_id uuid NOT NULL REFERENCES reign.conversations(thread_id) ON DELETE CASCADE,
+    thread_id uuid NOT NULL,
     owner_id text NOT NULL,
+    FOREIGN KEY (thread_id, owner_id) REFERENCES reign.conversations(thread_id, owner_id) ON DELETE CASCADE,
     ordinal bigint NOT NULL CHECK (ordinal >= 0),
     role text NOT NULL CHECK (role IN ('system','user','assistant','tool')),
     body_ciphertext bytea NOT NULL,
@@ -36,9 +38,10 @@ CREATE INDEX IF NOT EXISTS reign_messages_thread_order
 -- LangGraph checkpoint blobs require authenticated encryption, an explicit
 -- serializer allowlist, and per-thread authorization before this is activated.
 CREATE TABLE IF NOT EXISTS reign.graph_checkpoints (
-    thread_id uuid NOT NULL REFERENCES reign.conversations(thread_id) ON DELETE CASCADE,
+    thread_id uuid NOT NULL,
     checkpoint_id text NOT NULL,
     owner_id text NOT NULL,
+    FOREIGN KEY (thread_id, owner_id) REFERENCES reign.conversations(thread_id, owner_id) ON DELETE CASCADE,
     parent_checkpoint_id text,
     state_ciphertext bytea NOT NULL,
     state_nonce bytea NOT NULL CHECK (octet_length(state_nonce)=12),
@@ -57,7 +60,9 @@ CREATE TABLE IF NOT EXISTS reign.trace_spans (
     span_id text NOT NULL CHECK (span_id ~ '^[0-9a-f]{16}$'),
     parent_span_id text CHECK (parent_span_id IS NULL OR parent_span_id ~ '^[0-9a-f]{16}$'),
     owner_id text NOT NULL,
-    thread_id uuid REFERENCES reign.conversations(thread_id) ON DELETE SET NULL,
+    thread_id uuid,
+    -- Keep owner identity aligned whenever this span belongs to a conversation.
+    FOREIGN KEY (thread_id, owner_id) REFERENCES reign.conversations(thread_id, owner_id) ON DELETE SET NULL (thread_id),
     service text NOT NULL CHECK (service IN ('ax','core','computer','temporal','mcp')),
     operation text NOT NULL,
     tool_name text,
@@ -76,7 +81,8 @@ CREATE INDEX IF NOT EXISTS reign_trace_spans_owner_time
 CREATE INDEX IF NOT EXISTS reign_trace_spans_thread_time
     ON reign.trace_spans(thread_id, started_at DESC);
 
--- RLS is enabled and forced; without reviewed per-owner policies and a
+-- Compound owner/thread foreign keys prevent cross-owner references even by
+-- a privileged migration client. RLS is enabled and forced; without reviewed per-owner policies and a
 -- restricted runtime role, the application MUST fail closed.
 ALTER TABLE reign.conversations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE reign.conversations FORCE ROW LEVEL SECURITY;
