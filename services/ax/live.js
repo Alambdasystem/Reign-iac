@@ -29,7 +29,10 @@ async function request(path,method='GET',body,options={}){
       if(error.status===401&&authenticated){authenticated=false;lost(error)}
       throw error;
     }
-    return response;
+    // fetch resolves at headers; retain the deadline until the entire body is
+    // available so a stalled JSON response cannot strand task cancellation.
+    const responseBody=await response.arrayBuffer();
+    return new Response([204,205].includes(response.status)?null:responseBody,{status:response.status,statusText:response.statusText,headers:response.headers});
   }catch(error){
     if(timedOut)throw Object.assign(new Error('The workspace request timed out. Its outcome could not be confirmed.'),{status:504});
     throw error;
