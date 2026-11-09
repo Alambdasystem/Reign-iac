@@ -6,13 +6,14 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 from temporalio.client import Client
 from temporalio.exceptions import ApplicationError
 from temporalio.api.workflowservice.v1 import GetSystemInfoRequest
 
 from reign.config import QUEUE, NAMESPACE, checked_url, computer_url, temporal_address
+from reign.voice import VoiceBroker, VoiceError, capabilities as voice_capabilities, read_offer, voice_error_response
 
 
 def authorize(request: Request):
@@ -27,12 +28,18 @@ async def lifespan(app: FastAPI):
     app.state.http = httpx.AsyncClient(timeout=60.0, trust_env=False)
     from reign.agent import AgentRuntime
     app.state.agent = AgentRuntime()
-    yield
-    await app.state.agent.shutdown()
-    await app.state.http.aclose()
+    app.state.voice = VoiceBroker(app.state.http)
+    try:
+        yield
+    finally:
+        try:
+            await app.state.agent.shutdown()
+        finally:
+            await app.state.http.aclose()
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+app.add_exception_handler(VoiceError, voice_error_response)
 
 
 class OpenRequest(BaseModel):
@@ -190,6 +197,17 @@ class ChatRequest(BaseModel):
 @app.get("/api/agent", dependencies=[Depends(authorize)])
 async def agent_capabilities():
     return app.state.agent.capabilities()
+
+
+@app.get("/api/voice", dependencies=[Depends(authorize)])
+async def voice_status():
+    return JSONResponse(voice_capabilities(), headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/voice/offer", dependencies=[Depends(authorize)])
+async def voice_offer(request: Request):
+    return JSONResponse(await app.state.voice.offer(await read_offer(request)),
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/chat", dependencies=[Depends(authorize)])
