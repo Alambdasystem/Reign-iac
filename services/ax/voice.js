@@ -270,7 +270,7 @@
         if (providerBusy) trySend({type:'response.cancel'});
         trySend({type:'output_audio_buffer.clear'});
         update({phase:'listening',audioPlaying:false,
-          status: activeTurn ? 'The current task is still running. New requests queue; Stop / new chat cancels unfinished work.' : listeningStatus()});
+          status: activeTurn ? 'The current task is still running. New requests queue; Stop / new chat requests cancellation. Already sent actions may complete.' : listeningStatus()});
       }
       if (value.type === 'input_audio_buffer.speech_stopped') update({phase:'thinking',status:'Understanding your request…'});
       if (value.type === 'conversation.item.input_audio_transcription.completed') {
@@ -334,7 +334,7 @@
         providerId = null;
         if (value.response?.status === 'failed') update({status:'The voice response failed. The verified text remains in the conversation.'});
         if (pendingNarration) narrate(pendingNarration);
-        else if(!outputActive) update({phase:activeTurn ? 'thinking' : 'listening',status:activeTurn ? 'REIGN is still working. You can take control or stop the task.' : listeningStatus()});
+        else if(!outputActive) update({phase:activeTurn ? 'thinking' : 'listening',status:activeTurn ? 'REIGN is still working. You can take control or request a stop.' : listeningStatus()});
       }
       if (value.type === 'error') {
         const code = String(value.error?.code || '').replace(/[^a-z0-9_-]/gi,'').slice(0,70);
@@ -455,14 +455,14 @@
       for(const item of [micMeter,outputMeter]){try{item?.source.disconnect();}catch(_){}}micMeter=outputMeter=null;
       try{audioContext?.close().catch(()=>{});}catch(_){}audioContext=null;deps.onLevel?.(0);
       update({phase:job?'ending':options.failed?'failed':'ended',active:false,muted:false,speakerBlocked:false,audioPlaying:false,
-        status:job?'Microphone off. Stopping this call’s unfinished task…':reason});
+        status:job?'Microphone off. Requesting cancellation of this call’s unfinished task…':reason});
       const finish = async () => {
         let failure=false;
         if(job){try{await deps.cancelTurn?.(job.id);}catch(_){failure=true;}}
         if(activeTurn===job)activeTurn=null;
         update({phase:failure||options.failed?'failed':'ended',graphStatus:null,
           status:failure?'Microphone is off. Task cancellation could not be confirmed; use Stop / new chat before continuing.':
-            job?reason+' Unfinished voice work was stopped; completed actions remain.':reason});
+            job?reason+' Voice request stopped. Check the browser; an action already sent may have completed.':reason});
         return snapshot();
       };
       stopPromise=finish().finally(()=>{stopPromise=null;});

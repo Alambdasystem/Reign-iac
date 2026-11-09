@@ -161,12 +161,26 @@ password, OTP, token, hidden and file fields; Core performs a no-text preflight
 before putting ordinary text into a Temporal action payload. The worker checks
 again under its session lock immediately before the effect.
 
-New browser activities have one attempt. An unknown action outcome halts the
+Browser activities have one attempt. An unknown action outcome halts the
 graph turn instead of repeating a click or submission. Human verification,
 credential reveal, account-registration submission and terms acceptance stop
 for Take control. Sign-in and requested repository form submission can proceed
 when their controls are unambiguous; success must be verified from a subsequent
 observation. No tool treats filled credentials as an authenticated login.
+
+Native Playwright routing groups HTTP redirects into one chain, so routing alone
+is not the network boundary. Every managed context also uses a private loopback
+CONNECT proxy that permits only approved HTTPS host/port pairs, including native
+redirect connections. Credential injection narrows that proxy to the credential
+origin and closes incompatible existing/in-flight tunnels. Chromium's implicit
+loopback proxy bypass, HTTP/2 coalescing, QUIC and non-proxied WebRTC UDP are disabled. TLS stays
+between the browser and website; the proxy never decrypts or records page data.
+The existing BROWSER_PROXY override is rejected instead of replacing this gate.
+
+Stop/end-call cancellation crosses the standard MCP cancellation notification
+into the uniquely owned Temporal workflow. Cleanup is bounded and never cancels
+another operation or retries the original effect. Already-dispatched browser
+actions may complete; cancellation does not establish that an action was undone.
 
 ## Secure saved accounts
 

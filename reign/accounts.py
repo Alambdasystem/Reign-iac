@@ -11,6 +11,7 @@ from temporalio.client import Client
 
 from reign.config import NAMESPACE, QUEUE, temporal_address
 from reign.credential_transport import context, seal_credentials
+from reign.owned_workflow import execute_owned_workflow
 from reign.vault import VaultError, canonical_origin, get_vault
 
 
@@ -114,7 +115,7 @@ async def vault_tool(name, arguments, owner=OWNER, sid=None, epoch=None):
         sid, arguments["observation_id"], epoch, origin)
     try:
         client = await Client.connect(temporal_address(), namespace=NAMESPACE)
-        return await client.execute_workflow("FillAccount", {
+        return await execute_owned_workflow(client, "FillAccount", {
             "id": sid, "grant_id": grant["grant_id"],
             "observation_id": arguments["observation_id"], "epoch": epoch},
             id="reign-account-" + str(uuid.uuid4()), task_queue=QUEUE)

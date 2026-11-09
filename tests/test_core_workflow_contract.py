@@ -6,7 +6,7 @@ Git High browser acceptance test on deployed Render services.
 import os
 import unittest
 from httpx import Response
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -31,13 +31,13 @@ class CoreWorkflowContractTests(unittest.TestCase):
         with patch.dict(os.environ, {"CORE_TOKEN": self.token}):
             with TestClient(app) as client:
                 with patch("reign.core.Client.connect", new_callable=AsyncMock) as connect:
-                    connect.return_value.execute_workflow = AsyncMock(
-                        return_value={"id": sid, "mode": "agent", "epoch": 0})
+                    connect.return_value.start_workflow = AsyncMock(return_value=Mock(result=AsyncMock(
+                        return_value={"id": sid, "mode": "agent", "epoch": 0})))
                     result = client.post("/api/sessions", headers=self.headers,
                         json={"url": "https://alambda-forge.onrender.com/"})
                     self.assertEqual(result.status_code, 200)
                     self.assertEqual(result.json()["id"], sid)
-                    args = connect.return_value.execute_workflow.await_args
+                    args = connect.return_value.start_workflow.await_args
                     self.assertEqual(args.args[0], "OpenBrowser")
                     self.assertEqual(args.args[1]["url"], "https://alambda-forge.onrender.com/")
                     self.assertEqual(args.kwargs["task_queue"], "reign-computer")
@@ -81,7 +81,7 @@ class CoreWorkflowContractTests(unittest.TestCase):
         with patch.dict(os.environ, {"CORE_TOKEN": self.token}), TestClient(app) as client:
             with patch("reign.core.Client.connect", new_callable=AsyncMock) as connect:
                 execute = AsyncMock(side_effect=WrappedFailure(WrappedFailure(occupied)))
-                connect.return_value.execute_workflow = execute
+                connect.return_value.start_workflow = AsyncMock(return_value=Mock(result=execute))
                 result = client.post("/api/sessions", headers=self.headers, json={})
                 self.assertEqual(result.status_code, 409)
                 self.assertEqual(result.json(), {"code": BROWSER_OCCUPIED_CODE, "detail": BROWSER_OCCUPIED_MESSAGE})

@@ -95,6 +95,13 @@ whitespace-normalized variants. Screenshots conservatively mask all form fields
 and known password echoes. Filled credentials are never proof of authentication.
 Full contracts are in [APPLICATION_CONTRACTS.md](APPLICATION_CONTRACTS.md).
 
+Redirect protection also runs below Playwright's page-routing API, using a
+per-context loopback CONNECT proxy. It checks the allowed HTTPS destination on
+every new connection and closes incompatible tunnels before credential entry.
+This keeps native login redirects functional while preventing a redirected
+credential POST from reaching another site. Stop cancellation reaches the
+operation's own Temporal workflow; it cannot undo an action already sent.
+
 ## Durable storage and deployment
 
 The proposed vault uses AES-GCM encrypted SQLite records on a dedicated **1 GB

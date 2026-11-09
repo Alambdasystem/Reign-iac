@@ -9,7 +9,7 @@ class OpenBrowser:
     async def run(self, request: dict) -> dict:
         return await workflow.execute_activity(
             "open_browser", request, start_to_close_timeout=timedelta(seconds=90),
-            retry_policy=RetryPolicy(maximum_attempts=2),
+            retry_policy=RetryPolicy(maximum_attempts=1),
         )
 
 

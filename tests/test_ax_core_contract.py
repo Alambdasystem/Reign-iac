@@ -6,7 +6,7 @@ mocked Computer/Temporal boundary. It does not claim live Render acceptance.
 import os
 import unittest
 from httpx import Response
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -43,14 +43,16 @@ class AXCoreContractTests(unittest.TestCase):
                     self.assertEqual(response.headers["cache-control"], "no-store")
                     worker.assert_awaited_with("GET", "/sessions/active")
                 with patch("reign.core.Client.connect", new_callable=AsyncMock) as connect:
-                    connect.return_value.execute_workflow = AsyncMock(side_effect=ApplicationError(
+                    result = AsyncMock(side_effect=ApplicationError(
                         "private worker error", type="WorkerOccupied", non_retryable=True))
+                    connect.return_value.start_workflow = AsyncMock(return_value=Mock(result=result))
                     response = ax.post("/api/sessions", json={}, headers={"Origin": self.settings["AX_PUBLIC_ORIGIN"],
                         "X-CSRF-Token": ax.cookies.get("ax_csrf")})
                     self.assertEqual(response.status_code, 409)
                     self.assertEqual(response.json(), {"code": BROWSER_OCCUPIED_CODE, "detail": BROWSER_OCCUPIED_MESSAGE})
                     self.assertNotIn("private", response.text)
-                    connect.return_value.execute_workflow.assert_awaited_once()
+                    connect.return_value.start_workflow.assert_awaited_once()
+                    result.assert_awaited_once()
 
     def test_occupied_proxy_uses_only_allowlisted_code_not_downstream_body(self):
         with patch.dict(os.environ, self.settings), TestClient(ax_app, base_url="https://ax.example.com") as ax:

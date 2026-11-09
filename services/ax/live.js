@@ -431,7 +431,7 @@ async function pollChat({restore=false}={}){
     chatState=result.status;
     if(detachExpiredConversation())return;
     if(restore&&expiredSessions.has(result.session_id)&&['running','paused'].includes(chatState)){
-      entry('CONVERSATION','The restored task refers to an expired browser session. Its run remains tracked; use Stop / new chat only if you want to cancel it.',true);
+      entry('CONVERSATION','The restored task refers to an expired browser session. Its run remains tracked; use Stop / new chat only if you want to request cancellation.',true);
     }
     for(const event of result.events){
       if(event.sequence<=chatSeen)continue;chatSeen=event.sequence;
@@ -474,7 +474,7 @@ async function clearChat(expectedOwner){
     if(target){try{await api('/api/chat/'+encodeURIComponent(target),'DELETE',undefined,{keepalive:true})}catch(error){if(error.status!==404)throw error}}
     threadId=null;chatRun=null;chatSeen=0;chatInfo=null;chatState='idle';rememberChat();
     settleChatJob(job,null,abortError());chatOwner=null;refreshControls();notifyChatWaiters();
-    $('agentLabel').textContent='New conversation · browser session stays open';
+    $('agentLabel').textContent='New conversation · check the browser; an action already sent may have completed.';
   }catch(error){
     if(job){job.cancelled=false;job.generation=chatGeneration;if(job.threadId){threadId=job.threadId;rememberChat()}}
     chatState='disconnected';refreshControls();
@@ -484,7 +484,7 @@ async function clearChat(expectedOwner){
 }
 async function runVoiceTurn(message,options){return startChatRun(message,{...options,owner:options.voiceCallId})}
 async function cancelVoiceTurn(owner){if(chatPending?.owner===owner)await clearChat(owner)}
-$('cancelAgent').onclick=async()=>{try{if(voiceUi.active)await voiceController.stop({reason:'Call ended and the unfinished voice task was stopped.'});await clearChat()}catch(error){entry('AGENT',error.message,true)}};
+$('cancelAgent').onclick=async()=>{try{if(voiceUi.active)await voiceController.stop({reason:'Call ended. Microphone off.'});await clearChat()}catch(error){entry('AGENT',error.message,true)}};
 $('resumeAgent').onclick=async()=>{if(!threadId)return;try{await api('/api/chat/'+encodeURIComponent(threadId)+'/resume','POST');chatRun=null;await pollChat()}catch(error){entry('AGENT','Return browser control before resuming. '+error.message,true)}};
 
 function refreshVoiceControls(){

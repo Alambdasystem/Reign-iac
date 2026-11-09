@@ -15,6 +15,7 @@ from temporalio.exceptions import ApplicationError
 
 from reign.browser_actions import ActionRequest, Observation
 from reign.computer import BrowserSessions, app, browser_action, fill_account, frame
+from reign.browser_proxy import BrowserProxy
 from reign.tool_errors import BrowserActionError
 from reign.workflows import BrowserAction, FillAccount
 
@@ -42,7 +43,7 @@ class ActionBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.page.url = URL
         self.page.title.return_value = "Public title"
         self.manager.sessions[SID] = {"page": self.page, "mode": "agent", "epoch": 0,
-                                      "http_status": 200, "last_access": 0}
+                                      "http_status": 200, "last_access": 0, "proxy": AsyncMock()}
 
     def observation(self):
         handle = AsyncMock()
@@ -163,12 +164,15 @@ class OfflineBrowserActionTests(unittest.IsolatedAsyncioTestCase):
             if os.getenv("REIGN_REQUIRE_BROWSER_TESTS") == "1":
                 self.fail("Required Chromium browser fixture is unavailable")
             self.skipTest("Chromium is not installed; CI must run with REIGN_REQUIRE_BROWSER_TESTS=1")
-        self.context = await self.browser.new_context(viewport={"width": 1280, "height": 800})
+        self.proxy = BrowserProxy()
+        await self.proxy.start()
+        self.context = await self.browser.new_context(viewport={"width": 1280, "height": 800},
+                                                     proxy=self.proxy.playwright_settings)
         self.html = ""
         await self.context.route("**/*", lambda route: route.fulfill(status=200, content_type="text/html", body=self.html))
         self.page = await self.context.new_page()
         self.manager = BrowserSessions()
-        self.manager.sessions[SID] = {"page": self.page, "context": self.context, "mode": "agent", "epoch": 0,
+        self.manager.sessions[SID] = {"page": self.page, "context": self.context, "proxy": self.proxy, "mode": "agent", "epoch": 0,
                                       "http_status": 200, "last_access": 0}
         await self.load('<label>Note<input id="note" name="note" value="ordinary-input-value"></label><button id="increment" onclick="window.count++">Increment</button><div style="height:2400px">Scrollable page</div>')
 

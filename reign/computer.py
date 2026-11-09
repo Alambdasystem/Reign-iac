@@ -21,6 +21,7 @@ from temporalio.worker import Worker
 from reign.config import secret, checked_url, temporal_address, QUEUE, NAMESPACE
 from reign.browser_actions import (ACTION_TIMEOUT_MS, ActionRequest, Observation,
                                    allowed_origin, validate_target)
+from reign.browser_proxy import BrowserProxy, BrowserProxyError
 from reign.session_errors import BROWSER_OCCUPIED_MESSAGE
 from reign.tool_errors import BrowserActionError, browser_action_error_response
 from reign.workflows import OpenBrowser, NavigateBrowser, BrowserAction, FillAccount
@@ -35,12 +36,13 @@ class BrowserSessions:
         self.worker_ready = False
 
     async def launch(self):
+        if os.getenv("BROWSER_PROXY"):
+            raise ValueError("An external proxy cannot replace the required browser destination boundary")
         self.playwright = await async_playwright().start()
-        launch = {"headless": True, "args": ["--disable-dev-shm-usage"]}
+        launch = {"headless": True, "args": ["--disable-dev-shm-usage", "--disable-quic", "--disable-http2",
+                   "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"]}
         # The container is dedicated to allowlisted Git High pages only. Render's
         # container runtime does not expose custom Chromium seccomp configuration.
-        if os.getenv("BROWSER_PROXY"):
-            launch["proxy"] = {"server": os.environ["BROWSER_PROXY"]}
         self.browser = await self.playwright.chromium.launch(**launch)
 
     async def guard(self, route, context=None):
@@ -270,6 +272,19 @@ class BrowserSessions:
                 # not authorize filling a different form or refreshing the grant.
                 observation.check_context(s["page"], epoch)
                 await observation.account()
+                proxy = s.get("proxy")
+                if proxy is None:
+                    raise BrowserActionError("credential_unavailable")
+                # Native Playwright routing does not inspect redirected hops.
+                # The CONNECT boundary governs every new HTTPS connection and
+                # closes other-origin tunnels before any secret reaches a page.
+                try:
+                    await proxy.pin_origin(observation.origin)
+                except BrowserProxyError as error:
+                    raise BrowserActionError("origin_blocked" if error.code == "origin_blocked"
+                                             else "credential_unavailable") from None
+                observation.check_context(s["page"], epoch)
+                await observation.account()
                 user_field, password_fields = await observation.account_fields()
                 # Usernames may be ordinary public account labels; passwords
                 # must also be removed if a page echoes them outside a field.
@@ -321,24 +336,29 @@ class BrowserSessions:
                 raise HTTPException(409, "Worker is occupied; close the active session first")
             if self.browser is None:
                 await self.launch()
-            context = await self.browser.new_context(viewport={"width": 1280, "height": 800},
-                                                     accept_downloads=False, service_workers="block")
-            await context.route("**/*", lambda route: self.guard(route, context))
-            # This pilot has no websocket applications; block sockets as well as HTTP.
-            await context.route_web_socket("**/*", lambda ws: ws.close())
-            page = await context.new_page()
-            page.on("popup", lambda popup: asyncio.create_task(popup.close()))
-            page.on("dialog", lambda dialog: asyncio.create_task(dialog.dismiss()))
+            proxy, context = BrowserProxy(), None
             try:
+                await proxy.start()
+                context = await self.browser.new_context(viewport={"width": 1280, "height": 800},
+                    accept_downloads=False, service_workers="block", proxy=proxy.playwright_settings)
+                await context.route("**/*", lambda route: self.guard(route, context))
+                # This pilot has no websocket applications; block sockets as well as HTTP.
+                await context.route_web_socket("**/*", lambda ws: ws.close())
+                page = await context.new_page()
+                page.on("popup", lambda popup: asyncio.create_task(popup.close()))
+                page.on("dialog", lambda dialog: asyncio.create_task(dialog.dismiss()))
                 response = await page.goto(url, wait_until="domcontentloaded", timeout=45000)
                 checked_url(page.url)
                 if response is None or response.status >= 400:
                     raise ValueError("Target did not return a successful HTTP response")
-                self.sessions[sid] = {"context": context, "page": page, "mode": "agent", "epoch": 0,
+                self.sessions[sid] = {"context": context, "page": page, "proxy": proxy, "mode": "agent", "epoch": 0,
                                       "last_access": time.monotonic(), "http_status": response.status}
                 return await self.info(sid)
             except BaseException:
-                await context.close()
+                if context is not None:
+                    with contextlib.suppress(Exception):
+                        await context.close()
+                await proxy.close()
                 raise
 
     async def navigate(self, sid, url, epoch):
@@ -398,7 +418,11 @@ class BrowserSessions:
                     with contextlib.suppress(Exception):
                         await element.dispose()
                 s.pop("redactions", None)
-                await s["context"].close()
+                try:
+                    await s["context"].close()
+                finally:
+                    if s.get("proxy"):
+                        await s["proxy"].close()
 
     async def reap(self):
         while True:

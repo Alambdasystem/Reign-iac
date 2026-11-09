@@ -10,13 +10,46 @@ import sys
 from datetime import timedelta
 from pathlib import Path
 
+import anyio
 from fastapi import HTTPException
-from mcp import ClientSession, StdioServerParameters
+from mcp import ClientSession, StdioServerParameters, types
 from mcp.client.stdio import stdio_client
+from mcp.shared.exceptions import McpError
 
 from reign.session_errors import BrowserOccupied
 from reign.tool_contracts import CATALOG, EFFECT_TOOLS
 from reign.tool_errors import ACTION_MESSAGES, BrowserActionError
+
+
+class CancellableClientSession(ClientSession):
+    """Forward local tools/call cancellation through the pinned MCP1.30 SDK.
+
+    BaseSession.send_request allocates _request_id before its first await but
+    does not notify the server when its waiter is cancelled. Capture that ID at
+    this narrow, covered boundary; ordinary SDK requests remain unchanged.
+    """
+    async def send_request(self, request, result_type, *args, **kwargs):
+        tool_call = isinstance(request.root, types.CallToolRequest)
+        request_id = self._request_id if tool_call else None
+        try:
+            return await super().send_request(request, result_type, *args, **kwargs)
+        except asyncio.CancelledError:
+            if request_id is not None:
+                await self._cancel_tool_request(request_id)
+            raise
+        except McpError as error:
+            if request_id is not None and error.error.code == 408:
+                await self._cancel_tool_request(request_id)
+            raise
+
+    async def _cancel_tool_request(self, request_id):
+        with anyio.move_on_after(1.0, shield=True):
+            try:
+                await self.send_notification(types.ClientNotification(types.CancelledNotification(
+                    params=types.CancelledNotificationParams(requestId=request_id,
+                        reason="REIGN caller cancelled; completed actions are not undone"))))
+            except (Exception, asyncio.CancelledError):
+                pass
 
 
 class WorkspaceMCP:
@@ -40,7 +73,7 @@ class WorkspaceMCP:
         # stderr private; expose only our closed public error result instead.
         with open(os.devnull, "w") as errlog:
             async with stdio_client(params, errlog=errlog) as (reader, writer):
-                async with ClientSession(reader, writer, read_timeout_seconds=timedelta(seconds=110)) as session:
+                async with CancellableClientSession(reader, writer, read_timeout_seconds=timedelta(seconds=110)) as session:
                     await session.initialize()
                     discovered = await session.list_tools()
                     actual = {tool.name: tool.inputSchema for tool in discovered.tools}

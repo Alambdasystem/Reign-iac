@@ -7,6 +7,7 @@ core="${network}-core"
 ax="${network}-ax"
 vault_volume="${network}-vault"
 fixture_volume="${network}-fixture-vault"
+fixture_network="${network}-fixture"
 certs="$(mktemp -d)"
 evidence="${REIGN_SMOKE_OUTPUT:-$PWD/artifacts/smoke}"
 mkdir -p "$evidence"
@@ -25,6 +26,7 @@ cleanup() {
   fi
   docker rm -f "$ax" "$core" "$computer" "$temporal" >/dev/null 2>&1 || true
   docker network rm "$network" >/dev/null 2>&1 || true
+  docker network rm "$fixture_network" >/dev/null 2>&1 || true
   docker volume rm "$vault_volume" "$fixture_volume" >/dev/null 2>&1 || true
   rm -rf "$certs"
 }
@@ -38,7 +40,7 @@ docker volume create "$vault_volume" >/dev/null
 docker volume create "$fixture_volume" >/dev/null
 # These cases run real Chromium inside the pinned Computer image. Missing browser
 # binaries are a gate failure here, rather than a skipped local development test.
-docker run --rm --ipc=host -v "$PWD/tests:/app/tests:ro" -e REIGN_REQUIRE_BROWSER_TESTS=1 reign-computer:ci python -m unittest tests.test_browser_actions -v
+docker run --rm --network none --ipc=host -v "$PWD/tests:/app/tests:ro" -e REIGN_REQUIRE_BROWSER_TESTS=1 reign-computer:ci python -m unittest tests.test_browser_actions tests.test_browser_proxy -v
 docker build -f scripts/workspace-fixture.Dockerfile -t reign-workspace-fixture:ci .
 docker run -d --name "$temporal" --network "$network" --network-alias temporal reign-temporal:ci >/dev/null
 docker run -d --name "$computer" --network "$network" --network-alias computer -e TEMPORAL_ADDRESS=temporal:7233 -e CORE_URL=http://core:10000 -e COMPUTER_TOKEN -e CREDENTIAL_CHANNEL_KEY reign-computer:ci >/dev/null
@@ -64,7 +66,11 @@ docker restart "$temporal" "$computer" "$core" >/dev/null
 wait_ready
 run_browser_test restart
 docker exec "$ax" python -m reign.live_acceptance --ci-local
+# The controlled site must have no external network fallback, even if a browser
+# regression bypasses request interception. Only Temporal is reachable here.
+docker network create --internal "$fixture_network" >/dev/null
+docker network connect --alias temporal "$fixture_network" "$temporal"
 for phase in initial restart; do
-  docker run --rm --network "$network" --ipc=host -v "$fixture_volume:/fixture-vault" -v "$evidence:/evidence" -e TEMPORAL_ADDRESS=temporal:7233 -e TEMPORAL_TASK_QUEUE="reign-workspace-fixture-${network}" -e SOURCE_SHA="${SOURCE_SHA:-${GITHUB_SHA:-local}}" -e SMOKE_PHASE="$phase" reign-workspace-fixture:ci
+  docker run --rm --network "$fixture_network" --ipc=host -v "$fixture_volume:/fixture-vault" -v "$evidence:/evidence" -e TEMPORAL_ADDRESS=temporal:7233 -e TEMPORAL_TASK_QUEUE="reign-workspace-fixture-${network}" -e SOURCE_SHA="${SOURCE_SHA:-${GITHUB_SHA:-local}}" -e SMOKE_PHASE="$phase" reign-workspace-fixture:ci
 done
 echo "PASS: four-service automated acceptance; real human acceptance remains pending."

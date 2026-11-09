@@ -15,6 +15,7 @@ from temporalio.api.workflowservice.v1 import GetSystemInfoRequest
 
 from reign.config import QUEUE, NAMESPACE, checked_url, computer_url, temporal_address
 from reign.session_errors import BrowserOccupied, browser_occupied_response
+from reign.owned_workflow import execute_owned_workflow
 from reign.tool_errors import ACTION_MESSAGES, BrowserActionError, browser_action_error_response
 from reign.voice import VoiceBroker, VoiceError, capabilities as voice_capabilities, read_offer, voice_error_response
 
@@ -166,7 +167,7 @@ async def open_session(data: OpenRequest):
     sid = str(uuid.uuid4())
     try:
         client = await Client.connect(temporal_address(), namespace=NAMESPACE)
-        result = await client.execute_workflow("OpenBrowser", {"id": sid, "url": data.url},
+        result = await execute_owned_workflow(client, "OpenBrowser", {"id": sid, "url": data.url},
                                                id="reign-open-" + sid, task_queue=QUEUE)
         return result
     except Exception as error:
@@ -210,7 +211,7 @@ async def browser_effect(sid: uuid.UUID, data: BrowserEffectRequest):
     await worker("POST", f"/sessions/{sid}/validate-action", preflight)
     try:
         client = await Client.connect(temporal_address(), namespace=NAMESPACE)
-        return await client.execute_workflow("BrowserAction", {"id": str(sid), **payload},
+        return await execute_owned_workflow(client, "BrowserAction", {"id": str(sid), **payload},
             id="reign-action-" + str(uuid.uuid4()), task_queue=QUEUE)
     except Exception as error:
         raise workflow_http_error(error, uncertain=True) from None
@@ -224,7 +225,7 @@ async def navigate(sid: uuid.UUID, data: NavigateRequest):
         raise HTTPException(422, str(exc)) from exc
     try:
         client = await Client.connect(temporal_address(), namespace=NAMESPACE)
-        return await client.execute_workflow("NavigateBrowser",
+        return await execute_owned_workflow(client, "NavigateBrowser",
             {"id": str(sid), "url": data.url, "epoch": data.epoch},
             id="reign-navigate-" + str(uuid.uuid4()), task_queue=QUEUE)
     except Exception as error:
