@@ -1,4 +1,44 @@
-## Voice implementation candidate (2026-11-08)
+## Current checkpoint: voice deployed; browser acceptance blocked (2026-11-09)
+
+The corrected Core and AX voice release is live at
+[REIGN](https://reign-ax-pilot-d934.onrender.com/). Implementation PR #10 and
+correction PR #12 produced application source
+`322089a80640441808e439c7e5a6d6cf4adb9311`. Promotion PR #13 merged at
+`6ab1e83413473ac65b22c9b4d45cda3d69ea4177`. Required validation and the tested-image
+release passed; AX became live at 01:24:23Z and Core at 01:25:01Z on November 9.
+See the [deployment and acceptance receipt](deployments/2026-11-09-voice-acceptance.md)
+and [sanitized provider receipt](deployments/2026-11-09-voice-acceptance.json).
+
+The real provider gate passed all nine stages at 01:24:24–01:24:36Z. Synthetic
+speech reached `gpt-realtime-2.1` / `marin`, delegated to actual LangGraph
+`gpt-6-astra` execution of `workspace_status`, and returned 5.6 seconds of
+non-silent PCM speech. The first attempt failed because audio preceded the graph
+result. The correction uses text-only delegation and enables audio explicitly
+for verified result narration; the premature-audio failure check remains intact.
+
+This proves the provider/graph speech path over WebSocket with synthetic PCM and
+manual turn commitment. It does not prove deployed browser WebRTC or physical
+microphone/speaker behavior. The browser session expired before the final UI
+test of the corrected release. A secure sign-in attempt was rejected by the
+site with “That password wasn’t accepted. Try again.” Final deployed WebRTC,
+microphone, and playback acceptance therefore remain blocked by sign-in. No
+password, token, or other authentication value is recorded here.
+
+Next action: James completes secure sign-in; then test Start voice,
+verify the spoken greeting and a shared-conversation request, test Mute and
+End call, and record actual connection/playback/cleanup results. James's phone
+microphone and speaker have not been tested. CI passed 78 Python tests, 37 Node
+voice tests, six PostgreSQL integration tests, and seven simulated voice UI
+checks; those simulations do not replace this final browser/device pass.
+
+The existing Blueprint remains the sole owner with `autoSync=false`. Only Core
+and AX image pins changed. Computer/Temporal pins, instance plans, Workmates,
+and the shared database remain unchanged. Durable checkpoints, restricted REIGN
+database access, and external computer adapters are still outstanding.
+
+## Historical voice implementation candidate (2026-11-08)
+
+This source-only checkpoint predates the deployed release above.
 
 James requested that REIGN's missing voice be implemented using the Workmates
 integration. The new candidate adds a server-only Realtime SDP broker and native
@@ -6,13 +46,13 @@ WebRTC voice controls. Every spoken request is delegated to the existing
 LangGraph conversation, with the same browser session and takeover fences.
 See [VOICE.md](VOICE.md) for configuration, lifecycle, and verification levels.
 
-This section records source work; it is not a deployment or audible-device
-acceptance claim. Publish only after the existing validation/release gates pass,
-then promote the tested Core/AX images through the existing Blueprint. Preserve
+This checkpoint recorded source work without claiming deployment or audible
+device acceptance. Its promotion requirements were passing validation/release
+gates and tested Core/AX images applied through the existing Blueprint, preserving
 Computer/Temporal digests, resource sizes, Workmates, and the shared database.
-Update this checkpoint with actual release and live-provider receipts.
+The current checkpoint above records the subsequent deployment and provider test.
 
-## Live: approved UltraView + LangChain/LangGraph (2026-11-08)
+## Historical live checkpoint: UltraView + LangChain/LangGraph (2026-11-08)
 
 Your original UltraView AX design is deployed at
 https://reign-ax-pilot-d934.onrender.com/. Source cf95a713, PR7; promotion PR8.
@@ -32,8 +72,9 @@ The Blueprint uses normal AX startup, with the temporary verifier removed.
 Human acceptance by James has not yet been performed. CI tested the authenticated UI at mobile and desktop
 sizes; live verification exercised the public authenticated API chain.
 
-Remaining: voice, durable LangGraph checkpoints, restricted REIGN DB access and
-external desktop adapters. Current conversation memory is process-local. Keep
+Remaining at this checkpoint: voice, durable LangGraph checkpoints, restricted
+REIGN DB access and external desktop adapters. The current checkpoint above
+supersedes the voice status. Conversation memory is process-local. Keep
 the existing Blueprint as sole owner, autoSync=false, and the same resource sizes.
 The shared database and unrelated services remain unchanged.
 
@@ -51,9 +92,10 @@ The existing Blueprint `exs-dbofqkm417fc7384kou0` was applied from main with
 auto-sync off. Do not ask for the same approval again or create a second pilot.
 The legacy OpenTofu workflow is disabled; do not run both owners.
 
-Read [DEPLOYMENT_RECEIPT.md](DEPLOYMENT_RECEIPT.md) for the latest live service,
-deploy, startup-fix and verification evidence. That receipt supersedes the
-historical pre-deployment recovery notes below. The shared database and existing
+Read [DEPLOYMENT_RECEIPT.md](DEPLOYMENT_RECEIPT.md) for the initial live service,
+deploy, startup-fix and verification evidence; use the current checkpoint above
+for subsequent releases. The initial receipt supersedes the historical
+pre-deployment recovery notes below. The shared database and existing
 Workmates, Git High and Moby Alpha services are outside this deployment.
 
 GitHub write access through the Work session's connector was verified with the
@@ -186,10 +228,12 @@ Retain the documented Git High E2E flow and James's actual human acceptance.
 - Jim's Render workspace is `tea-dbdccfpsrm7s73b8rugg`. No REIGN pilot services
   exist there. No live Render services or shared database objects were changed.
 
-## Still outstanding
+## Remaining work after the 2026-11-09 voice release
 
-- Authenticated live dependency readiness and actual Render browser acceptance,
-  including restart recovery; consult the receipt for which checks have run.
+- Fresh authenticated browser voice acceptance on the corrected live release,
+  currently blocked by sign-in, followed by James's physical-device audio check.
+  Consult the deployment receipts for completed dependency checks and which
+  deployed browser/restart acceptance remains unverified.
 - James's real takeover and handback signoff, distinct from automated CI checks.
 - Configurable managed/external profiles and connection setup. External browser
   and full-desktop adapters remain unsupported until implemented and tested.
