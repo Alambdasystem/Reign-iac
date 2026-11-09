@@ -1,5 +1,6 @@
 # Approved pilot: Render Blueprint is the single infrastructure owner.
 # Keep the existing Blueprint and autoSync=false. No unrelated resources adopted.
+# Vault disk activation requires the concrete scope/cost approval in AGENTS.md.
 previews:
   generation: 'off'
 services:
@@ -25,7 +26,7 @@ services:
   region: oregon
   numInstances: 1
   image:
-    url: ghcr.io/alambdasystem/reign-computer@sha256:b14eb99a2386a9080227b248a41ba5e30736a02699a8a0cd18a9bfdbcc1e1b52
+    url: ghcr.io/alambdasystem/reign-computer@sha256:b2dbbefe732e56d2526391dcb9116051c3c10f5bc674e3751f91ebc1f0128faa
   envVars:
   - key: PORT
     value: '10000'
@@ -44,6 +45,16 @@ services:
     generateValue: true
   - key: MAX_SESSIONS
     value: '1'
+  - key: CORE_HOST
+    fromService:
+      name: reign-core-pilot
+      type: pserv
+      property: host
+  - key: CREDENTIAL_CHANNEL_KEY
+    fromService:
+      name: reign-core-pilot
+      type: pserv
+      envVarKey: CREDENTIAL_CHANNEL_KEY
   # Clear the failed override; the image CMD and TEMPORAL_HOST fallback suffice.
   dockerCommand: ''
 - type: pserv
@@ -53,7 +64,7 @@ services:
   region: oregon
   numInstances: 1
   image:
-    url: ghcr.io/alambdasystem/reign-core@sha256:a69575f23ad6dbae9dc03ecad615b04e36ed78132eea6b58133932b8d520b03f
+    url: ghcr.io/alambdasystem/reign-core@sha256:88df97143dfdea2796dd9035a54cec7fe0defbbfdee3a7f55cdd4ed4ad9e8046
   envVars:
   - key: PORT
     value: '10000'
@@ -91,11 +102,21 @@ services:
       name: workmates-api
       type: web
       envVarKey: OPENAI_MODEL
+  - key: REIGN_VAULT_DIR
+    value: /var/data/reign-vault
+  - key: REIGN_VAULT_KEY
+    generateValue: true
+  - key: CREDENTIAL_CHANNEL_KEY
+    generateValue: true
   # Core derives both private endpoints from the referenced host variables.
   dockerCommand: ''
   # Block promotion unless real provider speech reaches the LangGraph status
   # tool and returns non-silent audio. Synthetic input; no device-audio claim.
   preDeployCommand: python -m reign.voice_acceptance
+  disk:
+    name: reign-account-vault
+    mountPath: /var/data/reign-vault
+    sizeGB: 1
 - type: web
   name: reign-ax-pilot
   runtime: image
@@ -103,7 +124,7 @@ services:
   region: oregon
   numInstances: 1
   image:
-    url: ghcr.io/alambdasystem/reign-ax@sha256:59377ed4706d8063db10c6a55ad7e199a2602eb49d6cf63347218491b955e1b6
+    url: ghcr.io/alambdasystem/reign-ax@sha256:86a2805e6f07da294c084fd994d4f3b7a662b91cad4ce88a599f9e46dfd73ba1
   envVars:
   - key: PORT
     value: '10000'

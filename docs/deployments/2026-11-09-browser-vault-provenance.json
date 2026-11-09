@@ -1,0 +1,379 @@
+{
+  "source_sha": "08bad55dc8bd483fe78b13f90ae249872ace71af",
+  "source_tree": "82ab68e4935cd95c70d66b184200dc5414f55e8c",
+  "main_validation_run": 42563465419,
+  "release_run": 42563778434,
+  "release_job": 128985712829,
+  "artifact": {
+    "id": 13650572954,
+    "name": "tested-release-08bad55dc8bd483fe78b13f90ae249872ace71af",
+    "size_in_bytes": 1148723,
+    "sha256": "fe6cea1369411d12da7aeff053f3f9fc5429cd079846e1add598056f85408f15",
+    "locally_verified": true
+  },
+  "tested_manifest": {
+    "provision": false,
+    "images": {
+      "core": {
+        "image_url": "ghcr.io/alambdasystem/reign-core",
+        "digest": "sha256:88df97143dfdea2796dd9035a54cec7fe0defbbfdee3a7f55cdd4ed4ad9e8046"
+      },
+      "ax": {
+        "image_url": "ghcr.io/alambdasystem/reign-ax",
+        "digest": "sha256:86a2805e6f07da294c084fd994d4f3b7a662b91cad4ce88a599f9e46dfd73ba1"
+      },
+      "computer": {
+        "image_url": "ghcr.io/alambdasystem/reign-computer",
+        "digest": "sha256:b2dbbefe732e56d2526391dcb9116051c3c10f5bc674e3751f91ebc1f0128faa"
+      },
+      "temporal": {
+        "image_url": "ghcr.io/alambdasystem/reign-temporal",
+        "digest": "sha256:e05a038870ed3c213c977691d87f09ac22453d64c6112def50b03be075fd7864"
+      }
+    }
+  },
+  "selected_for_promotion": {
+    "core": {
+      "image_url": "ghcr.io/alambdasystem/reign-core",
+      "digest": "sha256:88df97143dfdea2796dd9035a54cec7fe0defbbfdee3a7f55cdd4ed4ad9e8046"
+    },
+    "ax": {
+      "image_url": "ghcr.io/alambdasystem/reign-ax",
+      "digest": "sha256:86a2805e6f07da294c084fd994d4f3b7a662b91cad4ce88a599f9e46dfd73ba1"
+    },
+    "computer": {
+      "image_url": "ghcr.io/alambdasystem/reign-computer",
+      "digest": "sha256:b2dbbefe732e56d2526391dcb9116051c3c10f5bc674e3751f91ebc1f0128faa"
+    }
+  },
+  "retained_temporal_image": "ghcr.io/alambdasystem/reign-temporal@sha256:afbae0626e74adbb7f1b4fab54b11342bc11af12df184b0847a5d6c55089aeb4",
+  "provenance": {
+    "source_sha": "08bad55dc8bd483fe78b13f90ae249872ace71af",
+    "acceptance": {
+      "status": "passed",
+      "source_sha": "08bad55dc8bd483fe78b13f90ae249872ace71af",
+      "workflow": {
+        "workflow_id": "reign-open-9d77c7d7-a373-44ac-af87-4e113b718996",
+        "run_id": "01a1bea4-2dcd-7d7e-b7b8-459e3f6d7d6a",
+        "completed_activities": 1
+      },
+      "restart_session": "893da340-aa8e-44e7-8e06-ff317ba302e1",
+      "restart_workflow": {
+        "workflow_id": "reign-open-893da340-aa8e-44e7-8e06-ff317ba302e1",
+        "run_id": "01a1bea4-78fd-75d0-b7e4-4ae310e2755a",
+        "completed_activities": 1
+      },
+      "authenticated_ui": "passed",
+      "live_frames": "passed",
+      "takeover_handback": "passed",
+      "stale_commands": "passed",
+      "cleanup": "passed",
+      "human_acceptance": "not_run",
+      "approved_design": "UltraView AX v1",
+      "responsive_layout": "passed",
+      "reload_reconnect": "passed",
+      "frame_failure_fail_closed": "passed",
+      "session_recovery": {
+        "status": "passed",
+        "mode": "real_four_service",
+        "cases": [
+          "empty_session_storage",
+          "stale_session_storage"
+        ],
+        "checks": [
+          "startup_actions_blocked_until_discovery",
+          "same_session_page_owner_and_epoch",
+          "no_create_navigation_or_control_dispatch",
+          "continuing_live_frames",
+          "human_takeover_and_stale_input_fences",
+          "occupied_open_is_distinct_409"
+        ]
+      },
+      "voice_config_unavailable_ui": "passed",
+      "voice_auth_and_csrf": "passed",
+      "live_voice_audio": "not_run_no_provider_key",
+      "simulated_voice_ui": {
+        "status": "passed",
+        "mode": "simulated_provider_graph_and_microphone",
+        "checks": [
+          "graph_completion_before_narration",
+          "shared_graph_lock_and_thread",
+          "start_mute_end_and_track_cleanup",
+          "configured_reload",
+          "owned_graph_cancellation",
+          "microphone_denial",
+          "expired_session_returns_to_sign_in"
+        ],
+        "live_provider_or_audible_audio": "not_tested"
+      },
+      "accounts_ui": {
+        "status": "awaiting_restart_check",
+        "mode": "real_ax_core_durable_vault_dom",
+        "navigation_removed": "passed",
+        "readiness_pending_and_transport_failure": "passed",
+        "secure_save_list": "passed",
+        "duplicate_preserves_original": "passed",
+        "remove_requires_confirmation": "passed",
+        "password_clear_close_and_real_401": "passed",
+        "no_account_data_in_storage_history_chat": "passed",
+        "mobile_dialog": "passed",
+        "fixture_account": {
+          "id": "8f7fa5da-21b0-4276-baaf-987b5d541f0d",
+          "label": "CI saved login ed3f6bd67f6d",
+          "origin": "https://alambda-forge.onrender.com",
+          "username": "ci-ui-user-ed3f6bd67f6d",
+          "created_at": "2026-11-09T04:50:07.849809+00:00",
+          "updated_at": "2026-11-09T04:50:07.849809+00:00"
+        },
+        "voice_interlock": {
+          "status": "passed",
+          "mode": "synthetic_provider_graph_and_microphone",
+          "microphone_muted_for_entry": "passed",
+          "password_cleared": "passed",
+          "secure_entry_event_presets_only_metadata": "passed",
+          "no_automatic_unmute": "passed",
+          "physical_device": "not_run",
+          "webrtc_provider": "not_run",
+          "account_api": "real_ax_core_vault"
+        },
+        "external_website_account": "not_created"
+      },
+      "target": "https://alambda-forge.onrender.com/",
+      "restart_expiry": "passed",
+      "temporal_persistence": "passed",
+      "accounts_restart": {
+        "status": "passed",
+        "mode": "real_ax_core_durable_vault_dom",
+        "navigation_removed": "passed",
+        "readiness_pending_and_transport_failure": "passed",
+        "secure_save_list": "passed",
+        "duplicate_preserves_original": "passed",
+        "remove_requires_confirmation": "passed",
+        "password_clear_close_and_real_401": "passed",
+        "no_account_data_in_storage_history_chat": "passed",
+        "mobile_dialog": "passed",
+        "fixture_account": {
+          "id": "8f7fa5da-21b0-4276-baaf-987b5d541f0d",
+          "label": "CI saved login ed3f6bd67f6d",
+          "origin": "https://alambda-forge.onrender.com",
+          "username": "ci-ui-user-ed3f6bd67f6d",
+          "created_at": "2026-11-09T04:50:07.849809+00:00",
+          "updated_at": "2026-11-09T04:50:07.849809+00:00"
+        },
+        "voice_interlock": {
+          "status": "passed",
+          "mode": "synthetic_provider_graph_and_microphone",
+          "microphone_muted_for_entry": "passed",
+          "password_cleared": "passed",
+          "secure_entry_event_presets_only_metadata": "passed",
+          "no_automatic_unmute": "passed",
+          "physical_device": "not_run",
+          "webrtc_provider": "not_run",
+          "account_api": "real_ax_core_vault"
+        },
+        "external_website_account": "not_created",
+        "metadata_after_core_restart": "passed",
+        "disposable_account_cleanup": "passed"
+      }
+    },
+    "controlled_workspace_acceptance": {
+      "initial": {
+        "passed": true,
+        "phase": "initial",
+        "evidence_kind": "controlled_workspace_acceptance",
+        "model": "scripted_model",
+        "website": "controlled_site",
+        "live_provider_tested": false,
+        "external_accounts_created": 0,
+        "external_repositories_created": 0,
+        "source_sha": "08bad55dc8bd483fe78b13f90ae249872ace71af",
+        "real_components": [
+          "core_http",
+          "computer_http",
+          "mcp_stdio",
+          "langgraph",
+          "temporal",
+          "playwright",
+          "browser_proxy",
+          "fixture_https",
+          "encrypted_sqlite_vault"
+        ],
+        "checks": {
+          "durable_vault": true,
+          "login_authenticated_dom": true,
+          "password_absent_from_vault_files": true,
+          "native_login_redirect_followed": true,
+          "native_repository_redirect_followed": true,
+          "account_survived_process_restart": false,
+          "credential_save_requests": 1,
+          "private_repository_dom": true,
+          "repository_creations": 1,
+          "human_takeover_paused": true,
+          "human_resume_rejected": true,
+          "handback_resumed_once": true,
+          "production_request_guard": true,
+          "production_proxy": true,
+          "password_absent_from_model_and_tool_messages": true,
+          "password_absent_from_graph_checkpoints": true,
+          "password_absent_from_temporal_histories": true
+        },
+        "workflow_count": 7,
+        "workflow_types": {
+          "BrowserAction": 4,
+          "NavigateBrowser": 1,
+          "FillAccount": 1,
+          "OpenBrowser": 1
+        },
+        "history_events_scanned": 77,
+        "model_messages_scanned": 380,
+        "public_responses_scanned": 31,
+        "tool_calls": [
+          "open_browser",
+          "vault_list_accounts",
+          "browser_observe",
+          "vault_use_account",
+          "browser_observe",
+          "browser_click",
+          "browser_observe",
+          "navigate_browser",
+          "browser_observe",
+          "browser_observe",
+          "browser_fill",
+          "browser_observe",
+          "browser_click",
+          "browser_observe",
+          "browser_click",
+          "browser_observe"
+        ],
+        "site_requests": [
+          {
+            "method": "GET",
+            "path_category": "login"
+          },
+          {
+            "method": "POST",
+            "path_category": "session"
+          },
+          {
+            "method": "GET",
+            "path_category": "workspace"
+          },
+          {
+            "method": "GET",
+            "path_category": "workspace"
+          },
+          {
+            "method": "POST",
+            "path_category": "repository_create"
+          },
+          {
+            "method": "GET",
+            "path_category": "repository_detail"
+          }
+        ],
+        "proxy_tunnels": 2,
+        "duration_seconds": 4.28
+      },
+      "restart": {
+        "passed": true,
+        "phase": "restart",
+        "evidence_kind": "controlled_workspace_acceptance",
+        "model": "scripted_model",
+        "website": "controlled_site",
+        "live_provider_tested": false,
+        "external_accounts_created": 0,
+        "external_repositories_created": 0,
+        "source_sha": "08bad55dc8bd483fe78b13f90ae249872ace71af",
+        "real_components": [
+          "core_http",
+          "computer_http",
+          "mcp_stdio",
+          "langgraph",
+          "temporal",
+          "playwright",
+          "browser_proxy",
+          "fixture_https",
+          "encrypted_sqlite_vault"
+        ],
+        "checks": {
+          "durable_vault": true,
+          "login_authenticated_dom": true,
+          "password_absent_from_vault_files": true,
+          "native_login_redirect_followed": true,
+          "native_repository_redirect_followed": true,
+          "account_survived_process_restart": true,
+          "credential_save_requests": 0,
+          "private_repository_dom": true,
+          "repository_creations": 1,
+          "human_takeover_paused": true,
+          "human_resume_rejected": true,
+          "handback_resumed_once": true,
+          "production_request_guard": true,
+          "production_proxy": true,
+          "password_absent_from_model_and_tool_messages": true,
+          "password_absent_from_graph_checkpoints": true,
+          "password_absent_from_temporal_histories": true
+        },
+        "workflow_count": 7,
+        "workflow_types": {
+          "BrowserAction": 4,
+          "NavigateBrowser": 1,
+          "FillAccount": 1,
+          "OpenBrowser": 1
+        },
+        "history_events_scanned": 77,
+        "model_messages_scanned": 380,
+        "public_responses_scanned": 29,
+        "tool_calls": [
+          "open_browser",
+          "vault_list_accounts",
+          "browser_observe",
+          "vault_use_account",
+          "browser_observe",
+          "browser_click",
+          "browser_observe",
+          "navigate_browser",
+          "browser_observe",
+          "browser_observe",
+          "browser_fill",
+          "browser_observe",
+          "browser_click",
+          "browser_observe",
+          "browser_click",
+          "browser_observe"
+        ],
+        "site_requests": [
+          {
+            "method": "GET",
+            "path_category": "login"
+          },
+          {
+            "method": "POST",
+            "path_category": "session"
+          },
+          {
+            "method": "GET",
+            "path_category": "workspace"
+          },
+          {
+            "method": "GET",
+            "path_category": "workspace"
+          },
+          {
+            "method": "POST",
+            "path_category": "repository_create"
+          },
+          {
+            "method": "GET",
+            "path_category": "repository_detail"
+          }
+        ],
+        "proxy_tunnels": 2,
+        "duration_seconds": 4.2
+      }
+    },
+    "promotion": "Promote reviewed digests through the existing Render Blueprint with autoSync=false; never apply the legacy OpenTofu manifest."
+  },
+  "deployment": "not_applied",
+  "authorization": "Additional 1 GB Core vault disk and reviewed Blueprint application require concrete cost approval."
+}

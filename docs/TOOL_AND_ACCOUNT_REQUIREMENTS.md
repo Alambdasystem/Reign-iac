@@ -1,7 +1,9 @@
 # Interactive tools and saved accounts
 
-Implementation candidate, 2026-11-09. Deployment and external-site acceptance
-must be recorded separately. James confirmed voice works on his device. The
+Implementation merged and exact-source release tested, 2026-11-09. Activation
+awaits the reviewed Blueprint and added-storage cost approval. Deployment and
+external-site acceptance must be recorded separately. See the
+[release receipt](deployments/2026-11-09-browser-vault-release.md). James confirmed voice works on his device. The
 earlier cloud browser's missing microphone is a historical test limitation.
 Outlook is deferred until a deliberate browser-login or Microsoft Graph task.
 “SCP” in the latest request is interpreted as MCP from context.
