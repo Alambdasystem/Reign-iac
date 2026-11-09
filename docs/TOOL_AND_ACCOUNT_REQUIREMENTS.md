@@ -105,6 +105,25 @@ public-network destination boundary. This change does not broaden that policy.
 
 ## Durable storage and Outlook
 
+### Reuse available in Workmates
+
+Workmates API source `15b268a0502bc983a8ad835d8707e7d7148163e9` already
+implements Google Drive OAuth in
+[drive.py](https://github.com/Alambdasystem/workmates-api/blob/15b268a0502bc983a8ad835d8707e7d7148163e9/drive.py):
+one-time state tied to the initiating admin session, PKCE, account labels,
+encrypted refresh-token persistence, server-side refresh, and scoped mounts.
+This is a reusable connection pattern. It is not a Microsoft implementation or
+a generic website-password vault.
+
+Its SQLite path comes from `DB_PATH`, and its Fernet key is created beside that
+database. Adapt persistence and key management to REIGN's own boundary rather
+than sharing Workmates records or copying that storage layout unchanged. Use
+Microsoft's account/cache lifecycle for Outlook. The inspected Google tests
+substitute provider HTTP responses; this audit does not establish a live OAuth
+connection. Workmates services and data remain untouched.
+
+### Required durable storage
+
 A reusable login must survive a new browser context and service restart. Use an
 existing dedicated vault where available, or an encrypted durable REIGN store
 with its encryption key managed separately. An in-memory dictionary or ephemeral
