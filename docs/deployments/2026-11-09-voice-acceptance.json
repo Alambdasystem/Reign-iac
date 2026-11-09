@@ -1,0 +1,144 @@
+{
+  "verification": "reign_voice_deployment",
+  "recorded_at": "2026-11-09",
+  "source_sha": "322089a80640441808e439c7e5a6d6cf4adb9311",
+  "promotion_sha": "6ab1e83413473ac65b22c9b4d45cda3d69ea4177",
+  "implementation_pr": 10,
+  "correction_pr": 12,
+  "promotion_pr": 13,
+  "release": {
+    "validation_run": 42544283495,
+    "release_run": 42544521523,
+    "artifact_id": 13643390090
+  },
+  "deployments": {
+    "core": {
+      "id": "dep-dboi1ebrjlhs73bh6nog",
+      "status": "live",
+      "image": "ghcr.io/alambdasystem/reign-core@sha256:41ad398a769d7227f3cf4179fa61df1cfba50196cf8bfb0a6095191dce1259b1",
+      "finished_at": "2026-11-09T01:25:01.366366Z"
+    },
+    "ax": {
+      "id": "dep-dboi1ebrjlhs73bh6nng",
+      "status": "live",
+      "image": "ghcr.io/alambdasystem/reign-ax@sha256:7340c6defcf91123ddee15b5c232d8d6527901580a65f29ebbf00564e300877b",
+      "finished_at": "2026-11-09T01:24:23.837733Z"
+    }
+  },
+  "blueprint": {
+    "id": "exs-dbofqkm417fc7384kou0",
+    "sync_id": "exe-dboi19dg1s2s73f8s8qg",
+    "auto_sync": false,
+    "changes": [
+      "Core image",
+      "AX image"
+    ],
+    "other_resources_changed": false
+  },
+  "tests": {
+    "python": {
+      "passed": 78
+    },
+    "voice_controller": {
+      "passed": 37,
+      "media_provider_graph": "simulated"
+    },
+    "postgres": {
+      "passed": 6
+    },
+    "four_service_initial_and_restart": "passed",
+    "configured_voice_ui": {
+      "passed": 7,
+      "media_provider_graph": "simulated"
+    }
+  },
+  "provider": {
+    "verification": "reign_voice_provider",
+    "status": "passed",
+    "stage": "complete",
+    "stages": {
+      "configuration": "passed",
+      "fixture": "passed",
+      "connection": "passed",
+      "session": "passed",
+      "audio_input": "passed",
+      "delegation": "passed",
+      "langgraph": "passed",
+      "narration": "passed",
+      "audio_validation": "passed"
+    },
+    "transport": "websocket",
+    "input": "synthetic_pcm_manual_commit",
+    "physical_device": "not_run",
+    "webrtc_browser": "not_run",
+    "input_transcript_present": true,
+    "started_at": "2026-11-09T01:24:24.542541+00:00",
+    "provider": {
+      "model": "gpt-realtime-2.1",
+      "voice": "marin"
+    },
+    "fixture": {
+      "sha256": "f37494a5143fb194b212e03ada62400ae5b8432feb8e8f005bbbb3885d5d69eb",
+      "duration_seconds": 5.435,
+      "sample_rate": 24000
+    },
+    "graph": {
+      "model": "gpt-6-astra",
+      "tools": [
+        "workspace_status"
+      ],
+      "usage": {
+        "input_tokens": 1089,
+        "output_tokens": 30
+      }
+    },
+    "output_audio": {
+      "bytes": 268800,
+      "duration_seconds": 5.6,
+      "rms_normalized": 0.070712,
+      "transcript_present": true
+    },
+    "event_count": 122,
+    "finished_at": "2026-11-09T01:24:36.638678+00:00"
+  },
+  "browser": {
+    "environment": "cloud_browser",
+    "authentication": "passed",
+    "previous_sign_in_blocker": "resolved",
+    "deployed_voice_controls": "observed_on_corrected_deployment",
+    "final_signed_in_test": "live_chat_passed_voice_blocked_no_microphone",
+    "start_voice": "attempted",
+    "site_error": "No microphone was found. Connect or enable a microphone and try again.",
+    "failure_recovery": "Start voice restored; Mute and End call removed",
+    "microphone": "unavailable_in_cloud_browser",
+    "offer_negotiation": "not_started",
+    "webrtc_connection": "not_run",
+    "audio_received": "not_run",
+    "speaker_playback": "not_run",
+    "mute_interruption_end_call": "not_run",
+    "physical_device": "not_run",
+    "live_chat": {
+      "status": "passed",
+      "tool": "workspace_status",
+      "tool_completed": true,
+      "components": {
+        "core": "ready",
+        "temporal": "ready",
+        "computer": "ready"
+      },
+      "usage": {
+        "input_tokens": 1087,
+        "output_tokens": 38
+      }
+    },
+    "evidence_captured_at": "2026-11-09T02:23:05.838Z",
+    "screenshot": "2026-11-09-voice-browser.jpg",
+    "next_step": "Use a browser with an available microphone; verify Start voice, greeting, spoken input and audio delivery, Mute, interruption, End and cleanup. Test James's phone microphone/speaker separately."
+  },
+  "previous_gate_attempt": {
+    "core_deploy": "dep-dbohna3rjlhs73bg6gt0",
+    "status": "pre_deploy_failed",
+    "error_code": "audio_before_graph_result",
+    "corrected_in_pr": 12
+  }
+}
