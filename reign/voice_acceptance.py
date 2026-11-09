@@ -340,6 +340,7 @@ async def run_acceptance(receipt):
             passed(receipt)
             stage(receipt, "delegation")
             await socket.send(json.dumps({"type": "response.create", "response": {
+                "output_modalities": ["text"],
                 "tool_choice": {"type": "function", "name": "delegate_to_reign"}}}))
             call_id, message = await collect_delegate(reader)
             receipt["input_transcript_present"] = reader.input_transcript_present

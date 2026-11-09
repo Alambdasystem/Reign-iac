@@ -35,6 +35,8 @@
       audioReceived: false, audioPlaying: false, audioEnergy: false, graphStatus: null
     };
     const snapshot = () => ({...state});
+    const verifiedPlayback = () => state.active && narrationAllowed &&
+      !!narrationId && outputId === narrationId;
     function update(change) {
       state = {...state, ...change, queueLength: pending.length, delegating: !!activeTurn};
       deps.onState?.(snapshot());
@@ -125,7 +127,7 @@
       const e = epoch;
       try { await audioContext?.resume(); } catch (_) {}
       if (!current(e)) return false;
-      audio.muted = false; audio.volume = 1;
+      audio.muted = !verifiedPlayback(); audio.volume = 1;
       const ok = await play(e);
       if (!current(e)) return false;
       if (ok) update({status: activeTurn ? 'REIGN is working on your request.' : 'Speaker enabled. Speak naturally.'});
@@ -138,7 +140,7 @@
       if (!item || item.turn !== turnEpoch || !state.active) return;
       if (providerBusy) { pendingNarration = item; return; }
       pendingNarration = null; narrationAllowed = true; narrationId = null;
-      audio.muted = false;
+      outputActive = false; outputId = null; audio.muted = true;
       send({type: 'response.create', response: {
         output_modalities: ['audio'], tool_choice: 'none',
         metadata: {reign_voice_turn:String(item.turn),reign_voice_phase:'narration'},
@@ -256,7 +258,7 @@
         greetingSent = true; greetingPending = true;
         send({type:'conversation.item.create',item:{type:'message',role:'user',content:[{type:'input_text',
           text:'Voice connection check: greet me briefly and say you are ready to help. Do not run workspace actions.'}]}});
-        send({type:'response.create',response:{output_modalities:['audio'],tool_choice:{type:'function',name:'delegate_to_reign'},
+        send({type:'response.create',response:{output_modalities:['text'],tool_choice:{type:'function',name:'delegate_to_reign'},
           metadata:{reign_voice_turn:String(turnEpoch),reign_voice_phase:'connection_check'}}});
         providerBusy = true;
         update({phase:'thinking',status:'Connected. Checking REIGN’s spoken greeting…'});
@@ -290,27 +292,35 @@
         }
         providerBusy = true;
         providerId = id;
-        if (narrationAllowed) { narrationId = value.response?.id || null; deps.onCaption?.({role:'assistant',text:'',final:true}); }
+        const created=responses.get(id);
+        if (narrationAllowed && created.phase==='narration' && created.turn===turnEpoch) {
+          narrationId = id; deps.onCaption?.({role:'assistant',text:'',final:true});
+        } else {
+          narrationAllowed=false;narrationId=null;outputActive=false;outputId=null;audio.muted=true;
+        }
       }
       if (value.type === 'response.function_call_arguments.done') stageCandidate(responses.get(value.response_id),value);
       if (value.type === 'response.output_item.done'&&value.item?.type==='function_call') stageCandidate(responses.get(value.response_id),value.item);
-      if (value.type === 'response.output_audio_transcript.delta' && narrationAllowed &&
-          (!narrationId || !value.response_id || narrationId === value.response_id)) {
+      if (value.type === 'response.output_audio_transcript.delta' && narrationAllowed && narrationId &&
+          narrationId === value.response_id) {
         deps.onCaption?.({role:'assistant',text:String(value.delta || ''),final:false});
         update({phase:outputActive?'speaking':'thinking',status:state.speakerBlocked ? 'Tap Enable speaker to hear REIGN.' : outputActive?'REIGN is speaking. You can interrupt.':'REIGN is preparing the spoken answer.'});
       }
-      if (value.type === 'response.output_audio_transcript.done' && narrationAllowed &&
-          (!narrationId || !value.response_id || narrationId === value.response_id)) {
+      if (value.type === 'response.output_audio_transcript.done' && narrationAllowed && narrationId &&
+          narrationId === value.response_id) {
         deps.onCaption?.({role:'assistant',text:String(value.transcript || '').slice(0,20000),final:true});
       }
-      if (value.type === 'output_audio_buffer.started' && narrationAllowed &&
-          (!narrationId || !value.response_id || narrationId === value.response_id)) {
-        outputActive=true; outputId=value.response_id || narrationId;
+      if (value.type === 'output_audio_buffer.started' && narrationAllowed && narrationId &&
+          narrationId === value.response_id) {
+        outputActive=true; outputId=value.response_id; audio.muted=false; play(e);
         update({phase:'speaking',status:state.speakerBlocked?'Tap Enable speaker to hear REIGN.':'REIGN is speaking. You can interrupt.'});
       }
       if (['output_audio_buffer.stopped','output_audio_buffer.cleared'].includes(value.type) &&
           (!outputId || !value.response_id || outputId === value.response_id)) {
-        outputActive=false;outputId=null;
+        outputActive=false;
+        // A normal server stop can precede the last browser-buffered samples.
+        // Preserve that verified tail; clearing/interruption revokes playback.
+        if(value.type==='output_audio_buffer.cleared'){outputId=null;audio.muted=true;}
         update({phase:activeTurn||providerBusy?'thinking':'listening',audioPlaying:false,
           status:activeTurn?'REIGN is working on your request.':listeningStatus()});
       }
@@ -353,6 +363,7 @@
       responses=new Map();finishedResponses=new Set();
       pendingNarration = null; providerBusy = false; providerId=null;outputActive=false;outputId=null;
       greetingSent = false; greetingPending = false; narrationAllowed = false; narrationId = null;
+      audio.muted=true;
       callAbort = new Abort(); lastBytes = lastEnergy = lastAudioTime = 0;
       update({active:true,phase:'checking',status:'Checking your voice connection…',muted:false,speakerBlocked:false,
         audioReceived:false,audioPlaying:false,audioEnergy:false,graphStatus:null});
@@ -388,7 +399,7 @@
         target.ontrack = event => {
           if (!current(e)) return;
           audio.srcObject = event.streams?.[0] || (Stream ? new Stream([event.track]) : null);
-          audio.autoplay = true; audio.playsInline = true; audio.muted = false; audio.volume = 1;
+          audio.autoplay = true; audio.playsInline = true; audio.muted = !verifiedPlayback(); audio.volume = 1;
           outputMeter?.source.disconnect(); outputMeter = meter(audio.srcObject); play(e);
         };
         target.onconnectionstatechange = () => {
@@ -440,7 +451,7 @@
       stream?.getTracks().forEach(track=>{track.onended=null;track.stop();});stream=null;
       if(channel){channel.onmessage=channel.onopen=channel.onclose=channel.onerror=null;try{channel.close();}catch(_){}}channel=null;
       if(peer){peer.ontrack=peer.onconnectionstatechange=null;try{peer.close();}catch(_){}}peer=null;
-      audio.pause();audio.srcObject=null;audio.muted=false;
+      audio.muted=true;audio.pause();audio.srcObject=null;
       for(const item of [micMeter,outputMeter]){try{item?.source.disconnect();}catch(_){}}micMeter=outputMeter=null;
       try{audioContext?.close().catch(()=>{});}catch(_){}audioContext=null;deps.onLevel?.(0);
       update({phase:job?'ending':options.failed?'failed':'ended',active:false,muted:false,speakerBlocked:false,audioPlaying:false,

@@ -13,9 +13,18 @@ tool for every normal user turn. The browser sends its request through the same
 LangGraph conversation used by typed messages. There is no separate voice agent
 allowed to navigate the computer or perform workspace actions.
 
+Delegation responses use `output_modalities: ["text"]`, with microphone audio
+still enabled as input. Named tool choice alone does not prevent a model from
+emitting an audio preamble: the first live release probe observed that behavior
+and blocked Core promotion. Keeping delegation in text output mode prevents
+speech before the graph supplies a verified result. Text preambles are not
+presented as a graph answer.
+
 Only a completed, failed, or paused graph result can be returned as the tool
-result. A following `response.create` overrides tool choice to `none` for that
-single narration response. Subsequent user turns again require delegation.
+result. A following `response.create` explicitly enables
+`output_modalities: ["audio"]` and overrides tool choice to `none` for that
+single narration response. Subsequent user turns again use text output and
+require delegation. The startup connection check follows the same phase rules.
 Spoken narration is model-generated; the on-screen LangGraph result remains the
 authoritative record of actual tool actions.
 
@@ -96,6 +105,8 @@ are diagnostics; none independently proves a physical speaker was audible.
    and verifies non-silent returned PCM audio. It runs only in an authorized
    runtime containing the existing key and emits a sanitized receipt. Its
    WebSocket/manual-commit transport is explicitly distinct from browser WebRTC.
+   Audio emitted before the graph result fails the gate; that check is retained
+   even though delegation now explicitly disables audio output.
 5. Live UltraView acceptance must verify WebRTC connection, greeting/audio
    delivery, shared text/voice conversation, mute, interruption, and cleanup.
    Android microphone/speaker acceptance is a separate physical-device check.
