@@ -65,7 +65,21 @@ jobs:
           for service in core ax computer temporal; do
             image="ghcr.io/$owner/reign-$service:$SOURCE_SHA"
             docker tag "reign-$service:ci" "$image"
-            docker push "$image"
+            # A registry-side interruption can occur after some layers upload.
+            # Retry the SAME immutable release tag; do not rebuild or alter it.
+            published=false
+            for attempt in 1 2 3; do
+              if docker push "$image"; then
+                published=true
+                break
+              fi
+              echo "::warning::GHCR push for $service failed on attempt $attempt of 3"
+              if [ "$attempt" -lt 3 ]; then sleep 10; fi
+            done
+            if [ "$published" != true ]; then
+              echo "::error::GHCR did not publish $service; release receipt withheld. Verify package Actions write permissions and registry status."
+              exit 1
+            fi
           done
           python3 scripts/release_manifest.py "$owner" "$SOURCE_SHA"
           cat artifacts/release/release.json >> "$GITHUB_STEP_SUMMARY"
