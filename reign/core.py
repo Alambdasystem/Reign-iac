@@ -13,6 +13,7 @@ from temporalio.exceptions import ApplicationError
 from temporalio.api.workflowservice.v1 import GetSystemInfoRequest
 
 from reign.config import QUEUE, NAMESPACE, checked_url, computer_url, temporal_address
+from reign.session_errors import BrowserOccupied, browser_occupied_response
 from reign.voice import VoiceBroker, VoiceError, capabilities as voice_capabilities, read_offer, voice_error_response
 
 
@@ -40,6 +41,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.add_exception_handler(VoiceError, voice_error_response)
+app.add_exception_handler(BrowserOccupied, browser_occupied_response)
 
 
 class OpenRequest(BaseModel):
@@ -50,8 +52,11 @@ def workflow_http_error(error):
     """Preserve expected worker rejections across Temporal's exception wrappers."""
     cause = error
     for _ in range(5):
-        if isinstance(cause, ApplicationError) and cause.type == "ControlChanged":
-            return HTTPException(409, "Control changed; refresh the session")
+        if isinstance(cause, ApplicationError):
+            if cause.type == "ControlChanged":
+                return HTTPException(409, "Control changed; refresh the session")
+            if cause.type == "WorkerOccupied":
+                return BrowserOccupied()
         cause = getattr(cause, "cause", None)
         if cause is None:
             break
@@ -139,8 +144,14 @@ async def open_session(data: OpenRequest):
         result = await client.execute_workflow("OpenBrowser", {"id": sid, "url": data.url},
                                                id="reign-open-" + sid, task_queue=QUEUE)
         return result
-    except Exception:
-        raise HTTPException(503, "Could not open computer session")
+    except Exception as error:
+        raise workflow_http_error(error) from error
+
+
+@app.get("/api/sessions/active", dependencies=[Depends(authorize)])
+async def active_session():
+    return JSONResponse((await worker("GET", "/sessions/active")).json(),
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/sessions/{sid}", dependencies=[Depends(authorize)])

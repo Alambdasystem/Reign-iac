@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from pydantic import BaseModel
+from reign.session_errors import BROWSER_OCCUPIED_CODE, BrowserOccupied, browser_occupied_response
 from reign.voice import VOICE_ERRORS, VoiceError, read_offer, voice_error_response
 
 def configured(name):
@@ -51,6 +52,7 @@ async def lifespan(app):
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.add_exception_handler(VoiceError, voice_error_response)
+app.add_exception_handler(BrowserOccupied, browser_occupied_response)
 ASSETS = Path(__file__).resolve().parent.parent / "ax_static"
 if not ASSETS.is_dir():
     ASSETS = Path(__file__).resolve().parent.parent / "services" / "ax"
@@ -133,6 +135,13 @@ async def core(method, path, data=None, voice_errors=False):
                 code = None
             # Trust the closed error code, never a downstream error message.
             raise VoiceError(code if isinstance(code, str) and code in VOICE_ERRORS else "voice_core_unavailable")
+        if method == "POST" and path == "/api/sessions" and result.status_code == 409:
+            try:
+                code = result.json().get("code")
+            except (ValueError, AttributeError):
+                code = None
+            if code == BROWSER_OCCUPIED_CODE:
+                raise BrowserOccupied()
         raise HTTPException(result.status_code, "Core request failed")
     return result
 
@@ -142,6 +151,13 @@ async def ready(request: Request):
     if not secrets.compare_digest(supplied, configured("CORE_TOKEN")):
         raise HTTPException(401, "Unauthorized")
     return (await core("GET", "/api/readyz")).json()
+
+@app.get("/api/sessions/active")
+async def active_session(request: Request):
+    user(request)
+    return JSONResponse((await core("GET", "/api/sessions/active")).json(),
+                        headers={"Cache-Control": "no-store"})
+
 
 @app.get("/api/sessions/{sid}")
 async def session(sid: str, request: Request):

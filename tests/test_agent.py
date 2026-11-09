@@ -1,12 +1,14 @@
 import asyncio
+import json
 import os
 import unittest
 import uuid
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 from langchain_core.messages import AIMessage, HumanMessage
 from reign.agent import AgentRuntime, MAX_STEPS, MAX_TURNS, model_client
+from reign.session_errors import BROWSER_OCCUPIED_CODE, BROWSER_OCCUPIED_MESSAGE, BrowserOccupied
 
 SID = str(uuid.uuid4())
 
@@ -117,6 +119,28 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         _, result = await self.finish(runtime.submit("open"))
         self.assertEqual(result["session_id"], SID)
         self.assertEqual(self.adapter.opens, 1)
+
+    async def test_recovered_session_is_reused_without_open_or_navigation(self):
+        runtime = self.setup_run(call("open_browser"), call("browser_status"), AIMessage(content="Existing browser recovered."))
+        _, result = await self.finish(runtime.submit("Open the browser, then report its status", sid=SID))
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["session_id"], SID)
+        self.assertEqual(self.adapter.opens, 0)
+        self.assertEqual(self.adapter.navigations, 0)
+        self.assertEqual((self.adapter.mode, self.adapter.epoch), ("agent", 0))
+
+    async def test_occupied_browser_is_not_reported_as_outage_or_control_change(self):
+        self.adapter.open = AsyncMock(side_effect=BrowserOccupied())
+        runtime = self.setup_run(call("open_browser"), AIMessage(content="Reconnect to the existing browser."))
+        _, result = await self.finish(runtime.submit("Open a browser"))
+        self.assertEqual(result["status"], "completed")
+        self.assertIsNone(result["session_id"])
+        self.adapter.open.assert_awaited_once()
+        tool_messages = [message for message in self.model.seen[-1] if message.type == "tool"]
+        self.assertEqual(json.loads(tool_messages[0].content), {
+            "error": BROWSER_OCCUPIED_MESSAGE, "status": 409, "code": BROWSER_OCCUPIED_CODE,
+        })
+        self.assertTrue(any(event.get("tool") == "open_browser" and event.get("ok") is False for event in result["events"]))
 
     async def test_loop_budget_stops_rogue_model(self):
         runtime = self.setup_run(*[call("workspace_status") for _ in range(MAX_STEPS + 1)])
