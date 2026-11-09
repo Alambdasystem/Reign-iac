@@ -14,7 +14,9 @@ CREATE TABLE IF NOT EXISTS reign.checkpoint_writes (
     key_version integer NOT NULL CHECK (key_version > 0),
     created_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (thread_id,checkpoint_id,task_id,write_index),
-    -- Pending writes may legitimately arrive before their checkpoint row.\n    -- Owner-bound conversation FK below protects the authorization boundary.\n    FOREIGN KEY (thread_id,owner_id)
+    -- Pending writes may legitimately arrive before their checkpoint row.
+    -- Owner-bound conversation FK below protects the authorization boundary.
+    FOREIGN KEY (thread_id,owner_id)
         REFERENCES reign.conversations(thread_id,owner_id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS reign_checkpoint_writes_owner
