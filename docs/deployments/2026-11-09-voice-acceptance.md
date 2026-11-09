@@ -50,16 +50,42 @@ keeps delegation output text-only while accepting microphone audio input, then
 explicitly requests audio narration after the verified graph result. The gate
 still rejects premature audio; its acceptance condition was not relaxed.
 
-## Final deployed browser acceptance: blocked
+## Final deployed browser acceptance: input device unavailable
 
-The browser session expired before the final UI test against the corrected
-Core. A secure sign-in submission reached the site, which visibly returned
-“That password wasn’t accepted. Try again.” No authentication value is included
-in this receipt. Final deployed WebRTC connection, microphone capture, and
-speaker playback have not been verified. James's phone hardware was not tested.
+Secure reauthentication succeeded, resolving the earlier sign-in blocker. The
+signed-in workspace displayed Ready and enabled Start voice. Clicking it first
+showed Connecting / “Checking your voice connection…”, then Voice needs
+attention / “No microphone was found. Connect or enable a microphone and try
+again.” Start voice returned; Mute and End call were removed.
 
-Next action: complete secure user sign-in, then exercise Start voice, confirm
-the spoken greeting and a request through the shared LangGraph conversation,
-test Mute and End call, and record actual playback and resource cleanup. Test
-James's phone microphone/speaker separately. The passed WebSocket provider
-probe and simulated UI checks do not establish either of those outcomes.
+The controller awaits `getUserMedia` before creating the peer connection,
+gathering SDP, or posting `/api/voice/offer`. Its missing-microphone error therefore
+establishes that this attempt stopped before offer negotiation. No Realtime
+session-created, WebRTC connection, or audio playback was observed.
+
+| Browser check | Observed result |
+| --- | --- |
+| Secure sign-in and corrected live workspace | Passed |
+| Start voice | Attempted; blocked by missing microphone in the cloud browser |
+| Failure recovery | Start voice restored; Mute and End call removed |
+| SDP offer negotiation | Not started |
+| WebRTC connection, incoming audio, speaker playback | Not run |
+| Mute, interruption, End call during an active call | Not run |
+| Physical microphone/speaker audibility | Not run |
+
+Afterward, a typed request asked whether Core, Temporal, and Computer were ready.
+The actual live UI logged “Using workspace status”, then “workspace status
+completed”, and reported all three components Ready. This authenticated
+LangGraph/tool run used 1,087 input / 38 output tokens. It establishes the live
+chat and tool path; it does not establish browser voice delivery.
+
+Evidence: [reviewed browser screenshot](2026-11-09-voice-browser.jpg), captured
+at **2026-11-09T02:23:05.838Z**. The image contains the generic app/status
+interaction and no authentication values.
+
+Next action: use a browser with an available microphone, exercise Start voice,
+confirm the spoken greeting and a spoken request through the shared LangGraph
+conversation, then test Mute, interruption, End call, and resource cleanup.
+James's phone microphone/speaker remain untested. The passed WebSocket provider
+probe and simulated UI checks do not establish physical audibility or the
+remaining browser WebRTC/media checks.

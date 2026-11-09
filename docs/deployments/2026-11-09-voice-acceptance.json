@@ -102,14 +102,38 @@
     "finished_at": "2026-11-09T01:24:36.638678+00:00"
   },
   "browser": {
-    "deployed_voice_controls": "observed_before_core_promotion",
-    "final_signed_in_test": "blocked_by_sign_in",
-    "site_error": "That password wasn’t accepted. Try again.",
-    "webrtc_connection": "not_run_on_corrected_deployment",
-    "microphone": "not_run_on_corrected_deployment",
-    "speaker_playback": "not_run_on_corrected_deployment",
+    "environment": "cloud_browser",
+    "authentication": "passed",
+    "previous_sign_in_blocker": "resolved",
+    "deployed_voice_controls": "observed_on_corrected_deployment",
+    "final_signed_in_test": "live_chat_passed_voice_blocked_no_microphone",
+    "start_voice": "attempted",
+    "site_error": "No microphone was found. Connect or enable a microphone and try again.",
+    "failure_recovery": "Start voice restored; Mute and End call removed",
+    "microphone": "unavailable_in_cloud_browser",
+    "offer_negotiation": "not_started",
+    "webrtc_connection": "not_run",
+    "audio_received": "not_run",
+    "speaker_playback": "not_run",
+    "mute_interruption_end_call": "not_run",
     "physical_device": "not_run",
-    "next_step": "Complete secure sign-in, then verify Start voice, actual audio delivery, Mute, interruption, End and resource cleanup."
+    "live_chat": {
+      "status": "passed",
+      "tool": "workspace_status",
+      "tool_completed": true,
+      "components": {
+        "core": "ready",
+        "temporal": "ready",
+        "computer": "ready"
+      },
+      "usage": {
+        "input_tokens": 1087,
+        "output_tokens": 38
+      }
+    },
+    "evidence_captured_at": "2026-11-09T02:23:05.838Z",
+    "screenshot": "2026-11-09-voice-browser.jpg",
+    "next_step": "Use a browser with an available microphone; verify Start voice, greeting, spoken input and audio delivery, Mute, interruption, End and cleanup. Test James's phone microphone/speaker separately."
   },
   "previous_gate_attempt": {
     "core_deploy": "dep-dbohna3rjlhs73bg6gt0",

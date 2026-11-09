@@ -1,4 +1,4 @@
-## Current checkpoint: voice deployed; browser acceptance blocked (2026-11-09)
+## Current checkpoint: voice deployed; cloud browser has no microphone (2026-11-09)
 
 The corrected Core and AX voice release is live at
 [REIGN](https://reign-ax-pilot-d934.onrender.com/). Implementation PR #10 and
@@ -17,19 +17,26 @@ result. The correction uses text-only delegation and enables audio explicitly
 for verified result narration; the premature-audio failure check remains intact.
 
 This proves the provider/graph speech path over WebSocket with synthetic PCM and
-manual turn commitment. It does not prove deployed browser WebRTC or physical
-microphone/speaker behavior. The browser session expired before the final UI
-test of the corrected release. A secure sign-in attempt was rejected by the
-site with “That password wasn’t accepted. Try again.” Final deployed WebRTC,
-microphone, and playback acceptance therefore remain blocked by sign-in. No
-password, token, or other authentication value is recorded here.
+manual turn commitment. Secure browser reauthentication subsequently succeeded,
+resolving the earlier sign-in blocker. The corrected live workspace displayed
+Ready and enabled Start voice. Starting voice reported “No microphone was
+found. Connect or enable a microphone and try again.” Start voice returned;
+Mute and End call were removed. This input-device failure occurs before peer
+creation, SDP gathering, or the offer request. Browser WebRTC, media delivery,
+Mute/End call, and physical audibility remain untested.
 
-Next action: James completes secure sign-in; then test Start voice,
-verify the spoken greeting and a shared-conversation request, test Mute and
-End call, and record actual connection/playback/cleanup results. James's phone
-microphone and speaker have not been tested. CI passed 78 Python tests, 37 Node
-voice tests, six PostgreSQL integration tests, and seven simulated voice UI
-checks; those simulations do not replace this final browser/device pass.
+A subsequent typed request ran the actual `workspace_status` tool through the
+authenticated live UI. Core, Temporal, and Computer all reported Ready; usage
+was 1,087 input / 38 output tokens. The
+[reviewed screenshot](deployments/2026-11-09-voice-browser.jpg), captured at
+02:23:05.838Z, records the browser outcome without authentication values.
+
+Next action: use a browser with an available microphone to test Start voice,
+the spoken greeting, a spoken shared-conversation request, Mute, interruption,
+and End call, recording actual playback and cleanup. James's phone microphone
+and speaker have not been tested. CI passed 78 Python tests, 37 Node voice tests,
+six PostgreSQL integration tests, and seven simulated voice UI checks; those
+simulations do not replace this browser/device pass.
 
 The existing Blueprint remains the sole owner with `autoSync=false`. Only Core
 and AX image pins changed. Computer/Temporal pins, instance plans, Workmates,
@@ -230,8 +237,9 @@ Retain the documented Git High E2E flow and James's actual human acceptance.
 
 ## Remaining work after the 2026-11-09 voice release
 
-- Fresh authenticated browser voice acceptance on the corrected live release,
-  currently blocked by sign-in, followed by James's physical-device audio check.
+- Browser voice acceptance on the corrected live release using an available
+  microphone; the cloud browser's missing input device blocked this attempt
+  before SDP negotiation. James's physical-device audio check remains pending.
   Consult the deployment receipts for completed dependency checks and which
   deployed browser/restart acceptance remains unverified.
 - James's real takeover and handback signoff, distinct from automated CI checks.
