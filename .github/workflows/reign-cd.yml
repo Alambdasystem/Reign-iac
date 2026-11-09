@@ -42,11 +42,25 @@ jobs:
         run: bash scripts/container_smoke.sh
       - name: Publish tested images and record immutable digests
         env:
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
-          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          # Use the job-scoped token with packages:write; never print credentials.
+          # Retry only transient registry/auth service errors, then fail closed.
+          authenticated=false
+          for attempt in 1 2 3; do
+            if printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin; then
+              authenticated=true
+              break
+            fi
+            echo "::warning::GHCR authentication failed on attempt $attempt of 3"
+            if [ "$attempt" -lt 3 ]; then sleep 5; fi
+          done
+          if [ "$authenticated" != true ]; then
+            echo "::error::GHCR rejected the GitHub Actions token despite packages:write. Check organization/package Actions access and registry availability; do not bypass the publish gate."
+            exit 1
+          fi
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           for service in core ax computer temporal; do
             image="ghcr.io/$owner/reign-$service:$SOURCE_SHA"
