@@ -198,6 +198,43 @@ class PostgresIsolationTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await replacement.close()
 
+    async def test_pending_writes_survive_restart_with_owner_and_replay_fences(self):
+        from reign.checkpoint_store import CheckpointRepository
+        from reign.history_crypto import HistoryCipher
+        from reign.history_store import HistoryRepository
+        cipher = HistoryCipher(bytes(reversed(range(32))))
+        tid = str(uuid4())
+        await HistoryRepository(self.db, cipher).create_conversation("alice", tid)
+        store = CheckpointRepository(self.db, cipher)
+        await store.save(owner_id="alice", thread_id=tid, checkpoint_id="step-1",
+                         payload=b"paused at human takeover")
+        await store.save_writes(owner_id="alice", thread_id=tid,
+            checkpoint_id="step-1", task_id="tool-1", writes=[
+                (0, "tool_result", b"browser click completed"),
+                (-1, "__interrupt__", b"waiting for human")])
+        self.assertEqual(len(await store.load_writes(owner_id="alice",
+                             thread_id=tid, checkpoint_id="step-1")), 2)
+        with self.assertRaises(asyncpg.UniqueViolationError):
+            await store.save_writes(owner_id="alice", thread_id=tid,
+                checkpoint_id="step-1", task_id="tool-1",
+                writes=[(0, "tool_result", b"replay attempt")])
+        with self.assertRaises(ValueError):
+            await store.save_writes(owner_id="alice", thread_id=tid,
+                checkpoint_id="step-1", task_id="tool-2",
+                writes=[(0, "a", b"one"), (0, "b", b"two")])
+        fresh = await asyncpg.connect(os.environ["REIGN_TEST_DATABASE_URL"])
+        try:
+            await fresh.execute("SET ROLE reign_ci_app")
+            restarted = CheckpointRepository(fresh, cipher)
+            writes = await restarted.load_writes(owner_id="alice", thread_id=tid,
+                                                 checkpoint_id="step-1")
+            self.assertEqual(writes[0], ("tool-1", -1, "__interrupt__", b"waiting for human"))
+            self.assertEqual(writes[1], ("tool-1", 0, "tool_result", b"browser click completed"))
+            self.assertEqual(await restarted.load_writes(owner_id="bob",
+                thread_id=tid, checkpoint_id="step-1"), [])
+        finally:
+            await fresh.close()
+
     async def test_history_foreign_keys_reject_cross_owner_linkage(self):
         # Migration role creates the fixture, but database-level composite FK
         # prevents a message or checkpoint claiming someone else's thread.
