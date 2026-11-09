@@ -2,18 +2,20 @@
 import os
 import secrets
 import uuid
+from typing import Literal
 from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from temporalio.client import Client
 from temporalio.exceptions import ApplicationError
 from temporalio.api.workflowservice.v1 import GetSystemInfoRequest
 
 from reign.config import QUEUE, NAMESPACE, checked_url, computer_url, temporal_address
 from reign.session_errors import BrowserOccupied, browser_occupied_response
+from reign.tool_errors import ACTION_MESSAGES, BrowserActionError, browser_action_error_response
 from reign.voice import VoiceBroker, VoiceError, capabilities as voice_capabilities, read_offer, voice_error_response
 
 
@@ -28,27 +30,30 @@ def authorize(request: Request):
 async def lifespan(app: FastAPI):
     app.state.http = httpx.AsyncClient(timeout=60.0, trust_env=False)
     from reign.agent import AgentRuntime
-    app.state.agent = AgentRuntime()
-    app.state.voice = VoiceBroker(app.state.http)
+    from reign.mcp_client import MCPTools, WorkspaceMCP
     try:
-        yield
+        async with WorkspaceMCP().connect() as connection:
+            app.state.agent = AgentRuntime(adapter=MCPTools(connection))
+            app.state.voice = VoiceBroker(app.state.http)
+            try:
+                yield
+            finally:
+                await app.state.agent.shutdown()
     finally:
-        try:
-            await app.state.agent.shutdown()
-        finally:
-            await app.state.http.aclose()
+        await app.state.http.aclose()
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.add_exception_handler(VoiceError, voice_error_response)
 app.add_exception_handler(BrowserOccupied, browser_occupied_response)
+app.add_exception_handler(BrowserActionError, browser_action_error_response)
 
 
 class OpenRequest(BaseModel):
     url: str = "https://alambda-forge.onrender.com/"
 
 
-def workflow_http_error(error):
+def workflow_http_error(error, uncertain=False):
     """Preserve expected worker rejections across Temporal's exception wrappers."""
     cause = error
     for _ in range(5):
@@ -57,15 +62,29 @@ def workflow_http_error(error):
                 return HTTPException(409, "Control changed; refresh the session")
             if cause.type == "WorkerOccupied":
                 return BrowserOccupied()
+            if cause.type in {"BrowserActionRejected", "BrowserActionUncertain"}:
+                code = getattr(cause, "message", "")
+                return BrowserActionError(code if code in ACTION_MESSAGES else "action_uncertain")
         cause = getattr(cause, "cause", None)
         if cause is None:
             break
-    return HTTPException(503, "Computer workflow failed")
+    return BrowserActionError("action_uncertain") if uncertain else HTTPException(503, "Computer workflow failed")
 
 
 class NavigateRequest(BaseModel):
     url: str
     epoch: int = Field(ge=0)
+
+
+class BrowserEffectRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    epoch: int = Field(ge=0)
+    observation_id: str = Field(min_length=16, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
+    action: Literal["click", "fill", "press", "scroll"]
+    ref: str | None = Field(default=None, max_length=64)
+    text: str = Field(default="", max_length=2000)
+    key: str = Field(default="", max_length=30)
+    dy: int = Field(default=0, ge=-1000, le=1000)
 
 
 class ControlRequest(BaseModel):
@@ -99,6 +118,12 @@ async def worker(method: str, path: str, payload=None):
     except httpx.RequestError:
         raise HTTPException(503, "Computer worker unreachable")
     if response.status_code >= 400:
+        try:
+            code = response.json().get("code")
+        except (ValueError, AttributeError):
+            code = None
+        if code in ACTION_MESSAGES:
+            raise BrowserActionError(code)
         raise HTTPException(response.status_code, "Computer worker request failed")
     return response
 
@@ -145,7 +170,7 @@ async def open_session(data: OpenRequest):
                                                id="reign-open-" + sid, task_queue=QUEUE)
         return result
     except Exception as error:
-        raise workflow_http_error(error) from error
+        raise workflow_http_error(error, uncertain=True) from None
 
 
 @app.get("/api/sessions/active", dependencies=[Depends(authorize)])
@@ -169,6 +194,28 @@ async def frame(sid: uuid.UUID):
     return Response(result.content, media_type="image/jpeg", headers=headers)
 
 
+@app.get("/api/sessions/{sid}/observe", dependencies=[Depends(authorize)])
+async def observe(sid: uuid.UUID, epoch: int):
+    if epoch < 0:
+        raise HTTPException(422, "Invalid control epoch")
+    return (await worker("GET", f"/sessions/{sid}/observe?epoch={epoch}")).json()
+
+
+@app.post("/api/sessions/{sid}/action", dependencies=[Depends(authorize)])
+async def browser_effect(sid: uuid.UUID, data: BrowserEffectRequest):
+    payload = data.model_dump(exclude_none=True, exclude_unset=True)
+    # The no-text preflight rejects secret targets before ordinary fill data
+    # can enter Temporal history. The activity rechecks the same fences.
+    preflight = {key: value for key, value in payload.items() if key != "text"}
+    await worker("POST", f"/sessions/{sid}/validate-action", preflight)
+    try:
+        client = await Client.connect(temporal_address(), namespace=NAMESPACE)
+        return await client.execute_workflow("BrowserAction", {"id": str(sid), **payload},
+            id="reign-action-" + str(uuid.uuid4()), task_queue=QUEUE)
+    except Exception as error:
+        raise workflow_http_error(error, uncertain=True) from None
+
+
 @app.post("/api/sessions/{sid}/navigate", dependencies=[Depends(authorize)])
 async def navigate(sid: uuid.UUID, data: NavigateRequest):
     try:
@@ -181,7 +228,7 @@ async def navigate(sid: uuid.UUID, data: NavigateRequest):
             {"id": str(sid), "url": data.url, "epoch": data.epoch},
             id="reign-navigate-" + str(uuid.uuid4()), task_queue=QUEUE)
     except Exception as error:
-        raise workflow_http_error(error) from error
+        raise workflow_http_error(error, uncertain=True) from None
 
 
 @app.post("/api/sessions/{sid}/control", dependencies=[Depends(authorize)])
@@ -240,3 +287,7 @@ async def chat_resume(tid: uuid.UUID):
 @app.delete("/api/chat/{tid}", dependencies=[Depends(authorize)])
 async def chat_delete(tid: uuid.UUID):
     return await app.state.agent.delete(str(tid))
+
+
+from reign.accounts import install as install_accounts, vault_tool
+install_accounts(app, authorize)

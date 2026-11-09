@@ -246,9 +246,9 @@ async def collect_audio(reader, receipt):
 
 
 class StatusOnlyTools:
-    def __init__(self):
+    def __init__(self, core=None):
         from reign.agent import CoreTools
-        self.core, self.denied = CoreTools(), 0
+        self.core, self.denied = core or CoreTools(), 0
 
     async def status(self):
         return await self.core.status()
@@ -270,7 +270,7 @@ async def run_graph(message, receipt):
     from reign.core import app, lifespan
     async with lifespan(app):
         runtime = app.state.agent
-        adapter = StatusOnlyTools()
+        adapter = StatusOnlyTools(runtime.adapter)
         runtime.adapter = adapter
         initial = runtime.submit(message)
         thread = runtime.get(initial["thread_id"])

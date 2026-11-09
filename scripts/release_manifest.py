@@ -8,6 +8,18 @@ from pathlib import Path
 SERVICES = ("core", "ax", "computer", "temporal")
 
 
+def workspace_acceptance(sha, initial, restart):
+    for phase, receipt in (("initial", initial), ("restart", restart)):
+        if (receipt.get("passed") is not True or receipt.get("phase") != phase
+                or receipt.get("source_sha") != sha
+                or receipt.get("evidence_kind") != "controlled_workspace_acceptance"
+                or receipt.get("model") != "scripted_model" or receipt.get("website") != "controlled_site"):
+            raise ValueError("Controlled workspace acceptance must pass for this source and both phases")
+    if restart.get("checks", {}).get("account_survived_process_restart") is not True:
+        raise ValueError("Saved-login persistence must be verified after restart")
+    return {"initial": initial, "restart": restart}
+
+
 def manifest(owner, sha, smoke, inspect):
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", owner):
         raise ValueError("Invalid registry owner")
@@ -37,12 +49,15 @@ def inspect_image(image):
 if __name__ == "__main__":
     owner, sha = sys.argv[1:]
     smoke = json.loads(Path("artifacts/smoke/smoke.json").read_text())
+    workspace = workspace_acceptance(sha,
+        json.loads(Path("artifacts/smoke/workspace-initial.json").read_text()),
+        json.loads(Path("artifacts/smoke/workspace-restart.json").read_text()))
     release = manifest(owner, sha, smoke, inspect_image)
     output = Path("artifacts/release")
     output.mkdir(parents=True, exist_ok=True)
     (output / "release.json").write_text(json.dumps(release, indent=2) + "\n")
     (output / "provenance.json").write_text(json.dumps({
-        "source_sha": sha, "acceptance": smoke,
+        "source_sha": sha, "acceptance": smoke, "controlled_workspace_acceptance": workspace,
         "promotion": "Promote reviewed digests through the existing Render Blueprint with autoSync=false; never apply the legacy OpenTofu manifest."
     }, indent=2) + "\n")
     print(json.dumps(release))

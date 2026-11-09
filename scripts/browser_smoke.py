@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 from playwright.async_api import async_playwright, expect
 from temporalio.client import Client
 from temporalio.api.enums.v1 import EventType
+from accounts_ui_smoke import accounts_ui_smoke
 
 TARGET = "https://alambda-forge.onrender.com/"
 AX = "https://ax:10000"
@@ -412,6 +413,9 @@ async def main():
             await api("/api/sessions/" + new_sid, "DELETE")
             evidence["restart_expiry"] = "passed"
             evidence["temporal_persistence"] = "passed"
+            evidence["accounts_restart"] = await accounts_ui_smoke(
+                browser, await context.storage_state(), phase="restart",
+                previous=evidence["accounts_ui"], voice_bootstrap=SIMULATED_VOICE_BOOTSTRAP)
             evidence["status"] = "passed"
             (EVIDENCE / "smoke.json").write_text(json.dumps(evidence, indent=2) + "\n")
             print(json.dumps(evidence))
@@ -481,6 +485,8 @@ async def main():
             # Separate authenticated context with no real browser to recover;
             # only this scenario uses synthetic media/provider/graph responses.
             simulated_voice = await simulated_voice_ui(browser, await context.storage_state())
+            accounts_ui = await accounts_ui_smoke(
+                browser, await context.storage_state(), voice_bootstrap=SIMULATED_VOICE_BOOTSTRAP)
             # Leave a session open to check honest expiry after Computer restarts.
             opened = await api("/api/sessions", "POST", {"url": TARGET})
             restart_sid = (await opened.json())["id"]
@@ -497,6 +503,7 @@ async def main():
                 "voice_config_unavailable_ui": "passed", "voice_auth_and_csrf": "passed",
                 "live_voice_audio": "not_run_no_provider_key",
                 "simulated_voice_ui": simulated_voice,
+                "accounts_ui": accounts_ui,
                 "target": TARGET,
             }
             (EVIDENCE / "smoke.json").write_text(json.dumps(evidence, indent=2) + "\n")
