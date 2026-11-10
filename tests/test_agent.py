@@ -287,6 +287,27 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await custom.shutdown()
 
+    async def test_shutdown_with_expired_and_running_threads_never_raises_404(self):
+        import time
+        runtime = self.setup_run(AIMessage(content="completed"))
+        first = runtime.submit("first turn")
+        finished, _ = await self.finish(first)
+        finished.updated = time.monotonic() - 2000  # Expired prior chat.
+        class SlowModel:
+            async def ainvoke(self, messages):
+                await asyncio.Event().wait()
+        runtime.model_factory = lambda: SlowModel()
+        active = runtime.submit("second turn")
+        pending = runtime.threads[active["thread_id"]].task
+        await asyncio.sleep(0)
+        # Previously shutdown->delete->get pruned the expired chat and raised
+        # HTTP 404 before cleanup of the still-running task could complete.
+        await runtime.shutdown()
+        self.assertEqual(runtime.threads, {})
+        self.assertTrue(pending.done())
+        self.assertTrue(pending.cancelled() or pending.exception() is None)
+        await runtime.shutdown()  # Idempotent cleanup.
+
     async def test_unconfigured_has_no_mock_success(self):
         runtime = self.setup_run()
         with patch.dict(os.environ, {"OPENAI_API_KEY": ""}):
