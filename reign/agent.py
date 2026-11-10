@@ -102,7 +102,8 @@ class AgentState(TypedDict):
 
 
 class Conversation:
-    def __init__(self, model, adapter, *, checkpointer=None, thread_id=None):
+    def __init__(self, model, adapter, *, checkpointer=None, thread_id=None,
+                 archive=None, restored_turns=None):
         # Only a trusted, authenticated Core lifecycle may supply a restored ID;
         # this constructor does not itself authorize loading another owner's data.
         if thread_id is None:
@@ -112,17 +113,25 @@ class Conversation:
         else:
             raise ValueError("Invalid checkpoint thread identifier")
         self.model, self.adapter = model, adapter
+        self.archive = archive
+        self.restored_turns = list(restored_turns or [])
+        self.restored_context = [message for user, assistant in self.restored_turns
+                                 for message in (HumanMessage(user), AIMessage(content=assistant))]
+        self.pending_user_text = None
         # Durable storage is injected only by a trusted authenticated Core
         # lifecycle; a model, prompt or request cannot select a saver/owner.
         self.saver = checkpointer if checkpointer is not None else InMemorySaver()
-        self.memory_kind = "injected" if checkpointer is not None else "ephemeral"
+        self.memory_kind = ("injected" if checkpointer is not None else
+                            "durable_transcript" if archive is not None else "ephemeral")
         self.events = []
         self.trace_id, self.trace_spans = new_trace_id(), []
         self.usage = {"input_tokens": 0, "output_tokens": 0}
-        self.status, self.answer, self.error = "idle", "", None
+        self.status = "completed" if self.restored_turns else "idle"
+        self.answer = self.restored_turns[-1][1] if self.restored_turns else ""
+        self.error = None
         self.session_id = None
         self.updated = time.monotonic()
-        self.turns = 0
+        self.turns = len(self.restored_turns)
         self.task = None
         self.run_id = None
         self.tools = tool_specs()
@@ -253,8 +262,22 @@ class Conversation:
                 self.status = "paused"
                 self.event("paused", reason="human_control")
             else:
+                final_message = result["messages"][-1]
+                # LangChain versions expose text either as a property or a
+                # callable; never persist an accessor object as conversation text.
+                answer = final_message.text
+                if callable(answer):
+                    answer = answer()
+                if not isinstance(answer, str):
+                    raise ValueError("Invalid model answer text")
+                if self.archive is not None and self.pending_user_text is not None:
+                    # Commit both halves of a completed turn. Never archive an
+                    # uncertain or interrupted browser action as completed.
+                    self.archive.save_turn(self.id, self.turns - 1,
+                                           self.pending_user_text, answer)
+                    self.pending_user_text = None
                 self.status = "completed"
-                self.answer = result["messages"][-1].text
+                self.answer = answer
                 self.event("completed")
         except asyncio.CancelledError:
             self.status = "cancelled"
@@ -286,23 +309,35 @@ class Conversation:
 
 
 class AgentRuntime:
-    def __init__(self, model_factory=model_client, adapter=None, *, saver_factory=None):
+    def __init__(self, model_factory=model_client, adapter=None, *,
+                 saver_factory=None, archive=None):
         self.threads = {}
         self.model_factory, self.adapter = model_factory, adapter or CoreTools()
         # No durable saver is configured by the current Core lifespan. A
         # future server-owned factory must bind authenticated owner, RLS and
         # encryption keys before this opt-in seam may be enabled.
         self.saver_factory = saver_factory
+        self.archive = archive
 
     def capabilities(self):
         return {"configured": bool(os.getenv("OPENAI_API_KEY")), "provider": "openai_responses",
                 "model": os.getenv("OPENAI_MODEL", "gpt-6-astra"), "orchestration": "langgraph",
                 "tool_protocol": "mcp_stdio" if hasattr(self.adapter, "connection") else "local_test_adapter",
-                "tools": list(tool_specs()), "memory": "ephemeral", "max_tool_steps": MAX_STEPS,
+                "tools": list(tool_specs()), "memory": "durable_transcript" if self.archive else "ephemeral", "max_tool_steps": MAX_STEPS,
                 "max_turns": MAX_TURNS}
 
     def get(self, tid):
         self.prune()
+        if tid not in self.threads and self.archive is not None:
+            try:
+                saved = self.archive.load_turns(tid)
+            except (ValueError, RuntimeError):
+                raise HTTPException(404, "Conversation not found") from None
+            if saved:
+                if len(self.threads) >= MAX_THREADS:
+                    raise HTTPException(429, "Close an old conversation first")
+                self.threads[tid] = Conversation(self.model_factory(), self.adapter,
+                    thread_id=tid, archive=self.archive, restored_turns=saved)
         if tid not in self.threads:
             raise HTTPException(404, "Conversation expired; start a new chat")
         return self.threads[tid]
@@ -330,11 +365,15 @@ class AgentRuntime:
             # unsafe connection/key state before accepting a conversation.
             # The default deployment continues to use InMemorySaver.
             saver = self.saver_factory() if self.saver_factory is not None else None
-            thread = Conversation(self.model_factory(), self.adapter, checkpointer=saver)
+            thread = Conversation(self.model_factory(), self.adapter, checkpointer=saver,
+                                  archive=self.archive)
             self.threads[thread.id] = thread
         thread.turns += 1
         thread.session_id = sid
-        thread.start({"messages": [HumanMessage(text)], "session_id": sid, "steps": 0, "halted": False})
+        thread.pending_user_text = text if self.archive is not None else None
+        messages = [*thread.restored_context, HumanMessage(text)]
+        thread.restored_context = []
+        thread.start({"messages": messages, "session_id": sid, "steps": 0, "halted": False})
         return thread.snapshot()
 
     async def resume(self, tid):
@@ -353,6 +392,8 @@ class AgentRuntime:
         if thread.task and not thread.task.done():
             thread.task.cancel()
             await asyncio.gather(thread.task, return_exceptions=True)
+        if self.archive is not None:
+            self.archive.delete_thread(tid)
         del self.threads[tid]
         return {"status": "deleted", "browser_session_closed": False}
 
