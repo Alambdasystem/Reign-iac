@@ -262,7 +262,14 @@ class Conversation:
                 self.status = "paused"
                 self.event("paused", reason="human_control")
             else:
-                answer = result["messages"][-1].text
+                final_message = result["messages"][-1]
+                # LangChain versions expose text either as a property or a
+                # callable; never persist an accessor object as conversation text.
+                answer = final_message.text
+                if callable(answer):
+                    answer = answer()
+                if not isinstance(answer, str):
+                    raise ValueError("Invalid model answer text")
                 if self.archive is not None and self.pending_user_text is not None:
                     # Commit both halves of a completed turn. Never archive an
                     # uncertain or interrupted browser action as completed.
@@ -275,9 +282,7 @@ class Conversation:
         except asyncio.CancelledError:
             self.status = "cancelled"
             self.event("cancelled")
-        except Exception as exc:
-            # Temporary sanitized diagnostic for this isolated PR test.
-            self.event("failed_category", exception_type=type(exc).__name__)
+        except Exception:
             self.trace_spans.append(safe_span(trace_id=self.trace_id, service="core",
                 operation="agent.failure", outcome="error", started_monotonic=time.monotonic(),
                 error_code="unknown"))
