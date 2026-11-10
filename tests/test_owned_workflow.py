@@ -238,10 +238,13 @@ class MCPCancellationTests(unittest.IsolatedAsyncioTestCase):
                                                 read_timeout_seconds=timedelta(seconds=2)) as session:
                 await session.initialize()
                 first = asyncio.create_task(session.call_tool("first", {},
-                    read_timeout_seconds=timedelta(seconds=0.05) if timeout else None))
+                    read_timeout_seconds=timedelta(seconds=1.5) if timeout else None))
                 second = asyncio.create_task(session.call_tool("second", {}))
-                await asyncio.wait_for(handles["first"].started.wait(), 1)
-                await asyncio.wait_for(handles["second"].started.wait(), 1)
+                # The timeout must exercise cancellation of an already-started
+                # server request, not an incidental CI scheduling delay before
+                # the MCP fixture receives it. Retain the real SDK timeout path.
+                await asyncio.wait_for(handles["first"].started.wait(), 3)
+                await asyncio.wait_for(handles["second"].started.wait(), 3)
                 if timeout:
                     with self.assertRaises(McpError) as failure:
                         await first
