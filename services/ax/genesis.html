@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Genesis · Sovereign Console</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,system-ui,Arial,sans-serif;background:#0b0e18;color:#eef0fa}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 18% 3%,#442044 0,transparent 35%),radial-gradient(circle at 95% 60%,#15213a,transparent 40%),#0b0e18}
+main{max-width:1060px;margin:auto;padding:35px 20px 65px}
+header{display:flex;justify-content:space-between;gap:16px;align-items:center;flex-wrap:wrap}
+small{color:#adafc5;letter-spacing:.12em}h1{font-size:clamp(2rem,6vw,3.4rem);margin:10px 0 2px}p{line-height:1.55;color:#b9bdd1}
+a{color:#e5a7c8}a:hover{color:white}h2{font-size:1.18rem;margin-top:0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px;margin-top:28px}
+.panel{border:1px solid #ffffff2b;background:#ffffff0a;backdrop-filter:blur(18px);box-shadow:0 15px 45px #0006;border-radius:20px;padding:24px}
+label{display:block;margin-top:14px;color:#d4d7e5;font-weight:600}
+input,select{width:100%;background:#0c1020;color:#fff;border:1px solid #46485a;padding:12px 14px;border-radius:10px;margin-top:7px;font:inherit}
+fieldset{border:1px solid #46485a;border-radius:12px;margin:16px 0;padding:12px}
+legend{padding:0 7px;color:#d4d7e5;font-weight:600}
+.check{display:flex;align-items:center;gap:9px;font-weight:400;margin:7px 0}
+.check input{width:auto;margin:0}
+button{background:#9e4a78;border:1px solid #c67c9e;color:white;font:inherit;padding:11px 18px;border-radius:10px;cursor:pointer;font-weight:650}
+button.secondary{background:#2a3044;border-color:#5a607b}button:disabled{opacity:.45;cursor:not-allowed}
+.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+.status{font-size:.9rem;margin-top:14px;padding:10px;border-radius:9px;background:#ffffff10;min-height:40px}
+.note{font-size:.9rem}
+ul{padding-left:18px}li{padding:10px 0;border-bottom:1px solid #ffffff20;list-style:none}
+code{font-size:.9rem;color:#edc8df}
+.badge{background:#40283f;color:#f5bed7;border-radius:30px;font-size:.72rem;padding:4px 9px;display:inline-block}
+</style>
+</head>
+<body><main>
+<header><div><small>SOVEREIGN CONSOLE · PILOT</small><h1>Genesis</h1><p>Register agents as drafts. Review guardrails before any activation.</p></div><a href="/">Back to REIGN</a></header>
+<section class="grid">
+<div class="panel">
+<h2>New agent draft</h2>
+<form id="agentForm" autocomplete="off">
+<label for="agentId">Agent ID<input id="agentId" required maxlength="63" pattern="[a-z][a-z0-9-]{1,62}" placeholder="research-agent"></label>
+<label for="agentName">Display name<input id="agentName" required maxlength="120" placeholder="Research Assistant"></label>
+<fieldset><legend>Permitted read-only capabilities</legend>
+<label class="check"><input type="checkbox" name="cap" value="workspace_status" checked>Workspace status</label>
+<label class="check"><input type="checkbox" name="cap" value="browser_status">Browser session status</label>
+<label class="check"><input type="checkbox" name="cap" value="browser_observe">Browser observation</label>
+</fieldset>
+<p class="note">Genesis drafts cannot run, deploy, access credentials, or create paid services. Registration isn't agent activation.</p>
+<div class="actions"><button type="button" id="preview">Preview guardrails</button><button type="submit" id="register" class="secondary">Register draft</button></div>
+</form><div class="status" id="formStatus" role="status">Checking Genesis readiness…</div>
+</div>
+<div class="panel">
+<h2>Guardrail Manager</h2>
+<p>Default-deny policy on all capabilities except the read-only list above. Each draft needs an approved identity and deployment review before activation.</p>
+<div id="guardrails" class="status">Loading…</div>
+<h2 style="margin-top:28px">Registered drafts</h2>
+<div id="agents" class="status" aria-live="polite">Loading…</div>
+<div class="actions"><button id="refresh" type="button" class="secondary">Refresh</button></div>
+</div>
+</section>
+</main>
+<script>
+'use strict';
+const el=id=>document.getElementById(id);
+function csrf(){return document.cookie.split('; ').find(x=>x.startsWith('ax_csrf='))?.slice(8)||''}
+async function call(path,method='GET',data){
+  const headers={};
+  if(method!=='GET'){headers['Content-Type']='application/json';headers['X-CSRF-Token']=csrf()}
+  const r=await fetch(path,{method,headers,credentials:'same-origin',cache:'no-store',body:data===undefined?undefined:JSON.stringify(data)});
+  const body=await r.json().catch(()=>({}));
+  if(!r.ok)throw Error(body.detail||'Request unavailable');
+  return body;
+}
+function readForm(){return {agent_id:el('agentId').value.trim(),name:el('agentName').value.trim(),capabilities:[...document.querySelectorAll('input[name="cap"]:checked')].map(c=>c.value)}}
+function status(msg){el('formStatus').textContent=msg}
+async function refresh(){
+ try{
+ const [meta,result]=await Promise.all([call('/api/genesis/status'),call('/api/genesis/agents')]);
+ el('guardrails').textContent='Policy '+meta.policy_version+' · '+meta.mode+' · Execution '+meta.execution+' · Provider provisioning disabled';
+ const node=el('agents');node.replaceChildren();
+ if(!result.agents.length){node.textContent='No drafts registered yet.';return}
+ const list=document.createElement('ul');
+ for(const agent of result.agents){const li=document.createElement('li');const label=document.createElement('strong');label.textContent=agent.name+' ('+agent.agent_id+')';const tag=document.createElement('span');tag.className='badge';tag.textContent='DRAFT';li.append(label,document.createTextNode(' '),tag);const details=document.createElement('p');details.textContent=agent.capabilities.join(', ')||'No capabilities';li.append(details);list.append(li)}
+ node.append(list);status('Draft registration ready.');
+ }catch(error){el('guardrails').textContent='Unavailable';el('agents').textContent='Registration service unavailable';status(error.message)}
+}
+el('preview').onclick=async()=>{if(!el('agentForm').reportValidity())return;try{const p=await call('/api/genesis/preview','POST',readForm());status('Allowed: '+(p.allowed_capabilities.join(', ')||'none')+'; blocked: '+(p.rejected_capabilities.join(', ')||'none')+'. Still requires approval.')}catch(e){status(e.message)}};
+el('agentForm').onsubmit=async e=>{e.preventDefault();if(!el('agentForm').reportValidity())return;const b=el('register');b.disabled=true;try{const d=await call('/api/genesis/agents','POST',readForm());status('Saved '+d.agent_id+' as draft. No agent deployed.');await refresh()}catch(error){status(error.message)}finally{b.disabled=false}};
+el('refresh').onclick=refresh;refresh();
+</script>
+</body></html>
