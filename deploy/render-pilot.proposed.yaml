@@ -106,6 +106,12 @@ services:
     value: /var/data/reign-vault
   - key: REIGN_VAULT_KEY
     generateValue: true
+  # Existing private Core mount stores encrypted transcript records. The
+  # history key is provided only via Render's manual secret input, never Git.
+  - key: REIGN_HISTORY_MODE
+    value: disk
+  - key: REIGN_HISTORY_KEY
+    sync: false
   - key: CREDENTIAL_CHANNEL_KEY
     generateValue: true
   # Core derives both private endpoints from the referenced host variables.
