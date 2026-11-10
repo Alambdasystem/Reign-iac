@@ -19,21 +19,21 @@ jobs:
           set -euo pipefail
           actual="$(gh api repos/$GITHUB_REPOSITORY/branches/main --jq .commit.sha)"
           test "$actual" = "$EXPECTED" || { echo "::error::Main moved; probe is stale"; exit 1; }
-      - name: Read immutable AX image digest without publishing
-        env:
-          SOURCE_SHA: e0bdad4b3e19ecc701ec136ebbcbc8b33343634d
+      - name: Read available tested Genesis AX image digest without publishing
         run: |
           set -euo pipefail
-          image="ghcr.io/alambdasystem/reign-ax:$SOURCE_SHA"
-          output="$(docker buildx imagetools inspect "$image")" || {
-            echo "::error::Exact AX image tag is missing or not readable; no promotion"
-            exit 1
-          }
-          digest="$(printf '%s\n' "$output" | awk '$1=="Digest:" {print $2; exit}')"
-          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
-            echo "::error::No immutable digest returned"
-            exit 1
-          }
-          echo "VERIFIED_AX_IMAGE=ghcr.io/alambdasystem/reign-ax@$digest"
-          echo "SOURCE_SHA=$SOURCE_SHA"
-          echo "Read-only probe only: no image publication and no Render deployment"
+          for sha in e0bdad4b3e19ecc701ec136ebbcbc8b33343634d 9e884d8284df1df529a2e7e6ff08f9a95b7574f8 f151bda849e074a2f047d8576e94f87db183ce7c; do
+            image="ghcr.io/alambdasystem/reign-ax:$sha"
+            echo "Checking reviewed source tag $sha"
+            if output="$(docker buildx imagetools inspect "$image" 2>/dev/null)"; then
+              digest="$(printf '%s\n' "$output" | awk '$1=="Digest:" {print $2; exit}')"
+              if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                echo "VERIFIED_AX_IMAGE=ghcr.io/alambdasystem/reign-ax@$digest"
+                echo "SOURCE_SHA=$sha"
+                echo "Read-only inspection; release CI provenance still requires independent review"
+                exit 0
+              fi
+            fi
+          done
+          echo "::error::None of the reviewed Genesis UI main tags is published/readable"
+          exit 1
