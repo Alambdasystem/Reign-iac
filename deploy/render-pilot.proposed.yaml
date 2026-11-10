@@ -118,7 +118,10 @@ services:
   dockerCommand: ''
   # Block promotion unless real provider speech reaches the LangGraph status
   # tool and returns non-silent audio. Synthetic input; no device-audio claim.
-  preDeployCommand: python -m reign.voice_acceptance
+  # Render pre-deploy has no persistent disk; run the real voice/graph probe
+  # with ephemeral *test* memory. Core production startup still fails closed
+  # if the encrypted history disk or generated key is unavailable.
+  preDeployCommand: env REIGN_HISTORY_MODE=disabled python -m reign.voice_acceptance
   disk:
     name: reign-account-vault
     mountPath: /var/data/reign-vault
