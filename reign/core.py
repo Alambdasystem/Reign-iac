@@ -158,6 +158,15 @@ async def database_ready():
     return {"status": "ready", "schema": "reign"}
 
 
+@app.get("/api/history/readyz", dependencies=[Depends(authorize)])
+async def history_readiness():
+    """Read-only release preflight, not a migration or activation endpoint."""
+    from reign.history_readiness import history_ready
+    if not await history_ready():
+        raise HTTPException(503, "Durable history is not ready")
+    return {"status": "ready", "storage": "encrypted_postgres"}
+
+
 @app.post("/api/sessions", dependencies=[Depends(authorize)])
 async def open_session(data: OpenRequest):
     try:
