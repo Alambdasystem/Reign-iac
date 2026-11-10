@@ -263,6 +263,30 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         runtime.prune()
         self.assertEqual(runtime.threads, {})
 
+    async def test_checkpointer_injection_is_opt_in_and_default_is_ephemeral(self):
+        from langgraph.checkpoint.memory import InMemorySaver
+        runtime = self.setup_run(AIMessage(content="Ready."))
+        thread, receipt = await self.finish(runtime.submit("status"))
+        self.assertIsInstance(thread.saver, InMemorySaver)
+        self.assertEqual(receipt["memory"], "ephemeral")
+        self.assertEqual(runtime.capabilities()["memory"], "ephemeral")
+
+        # The server-owned injection seam is testable without changing
+        # the Core production lifecycle or trusting a model to select it.
+        injected = InMemorySaver()
+        custom = AgentRuntime(lambda: Model(AIMessage(content="Ready.")),
+                              self.adapter, saver_factory=lambda: injected)
+        self.assertIs(custom.saver_factory(), injected)
+        try:
+            value = custom.submit("status")
+            bound = custom.get(value["thread_id"])
+            self.assertIs(bound.saver, injected)
+            await bound.task
+            self.assertEqual(bound.status, "completed")
+            self.assertEqual(bound.snapshot()["memory"], "injected")
+        finally:
+            await custom.shutdown()
+
     async def test_unconfigured_has_no_mock_success(self):
         runtime = self.setup_run()
         with patch.dict(os.environ, {"OPENAI_API_KEY": ""}):
