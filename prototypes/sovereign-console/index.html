@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sovereign Console · Design Prototype</title>
+<style>
+:root{color-scheme:dark;font:15px/1.45 system-ui,Segoe UI,Arial;background:#0b1220;color:#eaf1ff}
+*{box-sizing:border-box}body{margin:0}.layout{display:grid;grid-template-columns:230px 1fr;min-height:100vh}
+aside{background:#101b2d;border-right:1px solid #2a3952;padding:25px 17px}
+.brand{font-size:23px;font-weight:750;letter-spacing:-.5px}.small{font-size:12px;color:#99aac4}
+nav{margin-top:34px;display:grid;gap:8px}button{cursor:pointer;color:inherit}
+nav button{display:block;width:100%;text-align:left;border:1px solid transparent;border-radius:11px;padding:12px 15px;background:none}
+nav button.active,nav button:hover{background:#1c2a42;border-color:#355078}
+main{padding:30px;max-width:1160px;width:100%;margin:0 auto}
+.top{display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap}
+h1{font-size:28px;margin:6px 0}h2{font-size:18px;margin:0 0 14px}.muted{color:#a4b3cb}
+.pill{border:1px solid #537da2;border-radius:40px;padding:6px 11px;font-size:12px;color:#bbd7f3}
+.metrics{display:grid;grid-template-columns:repeat(3,minmax(140px,1fr));gap:14px;margin:25px 0}
+.panel{background:#131f33;border:1px solid #30415d;border-radius:16px;padding:22px}
+.metric strong{display:block;font-size:27px;margin-top:10px}
+table{border-collapse:collapse;width:100%;text-align:left}td,th{padding:13px 8px;border-bottom:1px solid #2c3a50}th{color:#98b0d0;font-size:12px;text-transform:uppercase}
+.primary{background:#357be5;border:0;border-radius:10px;padding:11px 16px;font-weight:650}
+.secondary{background:#263a58;border:1px solid #456185;border-radius:10px;padding:10px 15px}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #83b9ff;outline-offset:2px}
+.actions{display:flex;gap:10px;flex-wrap:wrap}.hidden{display:none}
+fieldset{border:0;margin:0;padding:0;display:grid;gap:15px}
+label{display:grid;gap:7px;color:#c5d5ed}input,select{background:#0c1728;color:#eaf1ff;border:1px solid #465875;border-radius:10px;padding:11px;font:inherit;width:100%}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.notice{border:1px solid #665329;border-radius:12px;padding:12px 14px;background:#2b241a;color:#f4dba4;font-size:13px;margin:20px 0}
+.result{white-space:pre-wrap;font-size:13px;border-radius:10px;border:1px solid #394c69;padding:14px;margin-top:16px}
+@media(max-width:720px){.layout{grid-template-columns:1fr}aside{padding:16px}nav{margin-top:15px;grid-template-columns:repeat(3,1fr)}main{padding:18px}.metrics,.grid{grid-template-columns:1fr}}
+</style></head>
+<body><div class="layout"><aside><div class="brand">◈ Sovereign</div><div class="small">Constitutional Agent Platform</div><nav aria-label="Console navigation">
+<button class="active" data-view="agents">◉ Agents</button><button data-view="genesis">✧ Genesis</button><button data-view="policies">⚖ Policies</button>
+</nav><p class="small" style="margin-top:36px">Design prototype · No cloud or production connection</p></aside>
+<main><div class="top"><div><div class="small">SOVEREIGN / CONTROL PLANE</div><h1 id="heading">Agent Registry</h1><div class="muted" id="subtitle">Governed identities across providers</div></div><span class="pill">● Local prototype</span></div>
+<div class="notice">Simulation only: These screens do not register agents, authenticate users, issue credentials, enforce policy, or deploy to Render/AWS/Azure.</div>
+<section id="agents">
+<div class="metrics"><div class="panel metric"><span class="muted">Illustrative agents</span><strong>2</strong></div><div class="panel metric"><span class="muted">Providers</span><strong>Render</strong></div><div class="panel metric"><span class="muted">Constitution</span><strong>v1</strong></div></div>
+<div class="panel"><div class="top"><h2>Agent Registry · Example records</h2><button class="primary" id="new-agent">+ Create agent</button></div>
+<table><thead><tr><th>Identity</th><th>Harness</th><th>Provider</th><th>Scope</th><th>Status</th></tr></thead><tbody>
+<tr><td><b>REIGN</b><div class="small">reign</div></td><td>LangGraph</td><td>Render</td><td>web.read, repo.read</td><td>Example · Active</td></tr>
+<tr><td><b>Research</b><div class="small">research</div></td><td>LangGraph</td><td>Render</td><td>web.read</td><td>Example · Draft</td></tr>
+</tbody></table></div></section>
+<section id="genesis" class="hidden"><div class="panel"><h2>Genesis · Agent birth request</h2>
+<form id="genesis-form"><fieldset><div class="grid"><label>Agent name<input required maxlength="120" name="name" placeholder="Research Agent"></label>
+<label>Provider<select name="provider"><option>Render</option><option>AWS AgentCore</option><option>Azure Foundry</option><option>External</option></select></label>
+<label>Harness<select name="harness"><option>LangGraph</option><option>External provider harness</option></select></label>
+<label>Parent constitution<select name="constitution"><option>v1 · Mandatory</option></select></label></div>
+<label>Requested scope<select name="scope"><option>web.read (read-only)</option><option>repo.read (read-only)</option></select></label>
+<div class="actions"><button type="submit" class="primary">Preview birth request</button><button type="reset" class="secondary">Reset</button></div></fieldset></form>
+<div class="result hidden" id="genesis-result" role="status"></div></div></section>
+<section id="policies" class="hidden"><div class="panel"><h2>Constitution · Policy simulator</h2>
+<div class="muted">Evaluate sample requests against a toy local rule. Production enforcement must occur in trusted gateways, not in this UI.</div>
+<form id="policy-form"><fieldset style="margin-top:20px"><div class="grid">
+<label>Agent<select id="policy-agent"><option value="research">Research</option><option value="reign">REIGN</option></select></label>
+<label>Tool<select id="policy-tool"><option value="web.read">web.read</option><option value="repo.read">repo.read</option><option value="cloud.admin">cloud.admin</option></select></label></div>
+<label>Destination URL<input id="policy-url" value="https://alambda-forge.onrender.com/" required></label>
+<button type="submit" class="primary">Simulate decision</button></fieldset></form>
+<div class="result hidden" id="policy-result" role="status"></div></div></section></main></div>
+<script>
+const headings={agents:["Agent Registry","Governed identities across providers"],genesis:["Genesis","Define an agent before provisioning"],policies:["Constitution","Policy evaluation and review"]};
+function show(id){for(const item of document.querySelectorAll("main section"))item.classList.toggle("hidden",item.id!==id);
+for(const button of document.querySelectorAll("nav button"))button.classList.toggle("active",button.dataset.view===id);
+document.querySelector("#heading").textContent=headings[id][0];document.querySelector("#subtitle").textContent=headings[id][1];}
+for(const button of document.querySelectorAll("nav button"))button.addEventListener("click",()=>show(button.dataset.view));
+document.querySelector("#new-agent").addEventListener("click",()=>show("genesis"));
+document.querySelector("#genesis-form").addEventListener("submit",event=>{
+event.preventDefault();const data=new FormData(event.target);const node=document.querySelector("#genesis-result");
+node.classList.remove("hidden");node.textContent="REQUEST PREVIEW ONLY — no agent created\n"+JSON.stringify(Object.fromEntries(data),null,2)+"\nStatus: draft, approval required";});
+document.querySelector("#policy-form").addEventListener("submit",event=>{
+event.preventDefault();const agent=document.querySelector("#policy-agent").value,tool=document.querySelector("#policy-tool").value;
+const url=document.querySelector("#policy-url").value;let valid=false;
+try{const u=new URL(url);valid=u.protocol==="https:"&&u.hostname==="alambda-forge.onrender.com"&&(u.port===""||u.port==="443")&&!u.username&&!u.password&&!u.hash;}catch{}
+const authorized=valid&&tool==="web.read";const node=document.querySelector("#policy-result");node.classList.remove("hidden");
+node.textContent=(authorized?"ALLOW":"DENY")+" (UI SIMULATION ONLY)\nAgent: "+agent+"\nTool: "+tool+"\nReason: "+(valid?(authorized?"toy scope matched":"tool outside toy scope"):"destination not on demo allowlist");});
+</script></body></html>
