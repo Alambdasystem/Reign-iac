@@ -25,7 +25,9 @@ async def main():
         page = await context.new_page()
         page.set_default_timeout(20000)
         errors = []
+        console_errors = []
         page.on("pageerror", lambda e: errors.append(str(e)))
+        page.on("console", lambda m: console_errors.append(m.text) if m.type == "error" else None)
         try:
             response = await page.goto(AX + "/genesis")
             assert response.status == 401
@@ -43,7 +45,13 @@ async def main():
             await expect(page.get_by_role("heading", name="Genesis")).to_be_visible()
             await expect(page.get_by_role("heading", name="Guardrail Manager")).to_be_visible()
             passed("G05 protected Genesis console renders")
-            await expect(page.locator("#formStatus")).to_contain_text("Draft registration ready")
+            try:
+                await expect(page.locator("#formStatus")).to_contain_text("Draft registration ready", timeout=10000)
+            except AssertionError:
+                raise AssertionError("Genesis init failed: page_errors=" + repr(errors) +
+                    " console_errors=" + repr(console_errors) +
+                    " status=" + repr(await page.locator("#formStatus").inner_text()) +
+                    " script_count=" + str(await page.locator("script").count())) from None
             await expect(page.locator("#guardrails")).to_contain_text("draft_only")
             await expect(page.locator("#guardrails")).to_contain_text("disabled")
             passed("G06 policy readiness and disabled execution shown")
