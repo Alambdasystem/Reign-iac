@@ -112,6 +112,10 @@ services:
     value: disk
   - key: REIGN_HISTORY_KEY
     generateValue: true
+  # Draft-only single-admin Genesis registry. No agent execution, credentials,
+  # provider provisioning, external IAM, or paid resources.
+  - key: GENESIS_DRAFT_MODE
+    value: enabled
   - key: CREDENTIAL_CHANNEL_KEY
     generateValue: true
   # Core derives both private endpoints from the referenced host variables.
