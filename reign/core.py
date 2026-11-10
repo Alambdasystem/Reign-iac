@@ -164,7 +164,8 @@ async def history_readiness():
     from reign.history_readiness import history_ready
     if not await history_ready():
         raise HTTPException(503, "Durable history is not ready")
-    return {"status": "ready", "storage": "encrypted_postgres"}
+    return {"status": "preflight_passed", "storage": "encrypted_postgres",
+            "activation": "disabled"}
 
 
 @app.post("/api/sessions", dependencies=[Depends(authorize)])
