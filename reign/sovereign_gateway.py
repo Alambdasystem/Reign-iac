@@ -40,6 +40,10 @@ class ConstitutionalGateway:
             raise GatewayDenied("Access denied") from None
         if not decision.allowed or request.tool not in self._handlers:
             raise GatewayDenied("Access denied")
+        # Web tools require an explicit, checked target before dispatch. A
+        # missing URL must not bypass the constitution host allowlist.
+        if request.tool.startswith("web.") and not request.url:
+            raise GatewayDenied("Access denied")
         # Only explicitly registered, pre-approved trusted handlers can execute.
         # URL must be checked again at the actual network dispatch boundary.
         return self._handlers[request.tool](request.url)
