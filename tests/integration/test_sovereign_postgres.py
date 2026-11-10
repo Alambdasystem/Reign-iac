@@ -56,6 +56,8 @@ class SovereignPostgresTests(unittest.IsolatedAsyncioTestCase):
             await self.db.execute("SELECT set_config('sovereign.owner_id','owner-b',true)")
             self.assertEqual(await self.db.fetchval(
                 "SELECT count(*) FROM reign.sovereign_agents"),0)
+        async with self.db.transaction():
+            await self.db.execute("SET LOCAL ROLE sovereign_ci_app")
             with self.assertRaises(asyncpg.InsufficientPrivilegeError):
                 await self.db.execute("CREATE TABLE reign.escape_hatch(x int)")
         async with self.db.transaction():
