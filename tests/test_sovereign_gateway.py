@@ -56,7 +56,8 @@ class SovereignEndToEndTests(unittest.TestCase):
 
     def test_expired_or_forged_or_wrong_audience_denied_before_effect(self):
         valid = self.grant()
-        forged = valid[:-1] + ("A" if valid[-1] != "A" else "B")
+        head, signature = valid.split(".", 1)
+        forged = head + "." + ("A" if signature[0] != "A" else "B") + signature[1:]
         wrong = GrantAuthority(b"a-different-test-secret-not-production-1234")
         for token, moment in ((forged,NOW+1), (valid,NOW+60),
                               (wrong.issue(tenant_id="tenant-a", owner_id="owner-a",
