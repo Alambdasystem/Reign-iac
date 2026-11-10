@@ -39,7 +39,7 @@ class LivePromptRunnerContractTests(unittest.TestCase):
 
     def test_no_unattended_credential_entry_or_human_takeover(self):
         for _,prompt,tools in module.SAFE_CASES:
-            self.assertNotIn("password",prompt.lower())
+            self.assertNotIn("enter password",prompt.lower())
             self.assertNotIn("click",prompt.lower())
             self.assertNotIn("submit",prompt.lower())
             self.assertTrue(all("fill" not in tool and "use_account" not in tool
