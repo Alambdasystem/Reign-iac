@@ -10,6 +10,7 @@ import os
 import sqlite3
 import stat
 import uuid
+from contextlib import closing
 from pathlib import Path
 
 from reign.history_crypto import HistoryCipher, SealedRecord
@@ -23,7 +24,7 @@ MAX_TURNS = 12
 class HistoryArchive:
     def __init__(self, path: str, cipher: HistoryCipher):
         self.path, self.cipher = path, cipher
-        with self._connect() as db:
+        with closing(self._connect()) as db, db:
             db.execute("""CREATE TABLE IF NOT EXISTS turns (
                 thread TEXT NOT NULL,
                 turn INTEGER NOT NULL CHECK (turn >= 0 AND turn < 12),
@@ -87,14 +88,14 @@ class HistoryArchive:
                 thread_id=tid, record_id=mid, purpose="message")
             values.append((tid, turn, role, mid, sealed.ciphertext,
                            sealed.nonce, sealed.key_version))
-        with self._connect() as db:
+        with closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             for row in values:
                 db.execute("INSERT INTO turns VALUES (?,?,?,?,?,?,?)", row)
 
     def load_turns(self, thread_id: str) -> list[tuple[str, str]]:
         tid = self._thread(thread_id)
-        with self._connect() as db:
+        with closing(self._connect()) as db, db:
             rows = db.execute(
                 "SELECT turn,role,message_id,ciphertext,nonce,key_version FROM turns "
                 "WHERE thread=? ORDER BY turn,CASE role WHEN 'user' THEN 0 ELSE 1 END",
@@ -114,7 +115,16 @@ class HistoryArchive:
             turns.append((value[0], value[1]))
         return turns
 
+    def list_threads(self) -> list[dict]:
+        # Only metadata; never expose stored conversation bodies or secrets.
+        with closing(self._connect()) as db, db:
+            rows = db.execute(
+                "SELECT thread, COUNT(*) / 2 FROM turns GROUP BY thread "
+                "HAVING COUNT(*) % 2 = 0 ORDER BY MAX(rowid) DESC LIMIT 50"
+            ).fetchall()
+        return [{"thread_id": tid, "turns": count} for tid, count in rows]
+
     def delete_thread(self, thread_id: str) -> None:
         tid = self._thread(thread_id)
-        with self._connect() as db:
+        with closing(self._connect()) as db, db:
             db.execute("DELETE FROM turns WHERE thread=?", (tid,))
