@@ -22,7 +22,9 @@ jobs:
           set -euo pipefail
           trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
           printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null
-          image="ghcr.io/alambdasystem/reign-core:$SOURCE_SHA"
-          echo "Checking image: $image"
-          docker buildx imagetools inspect "$image"
-          echo "This check only confirms registry availability and its digest; it does not prove deployment."
+          for service in core ax computer temporal; do
+            image="ghcr.io/alambdasystem/reign-$service:$SOURCE_SHA"
+            echo "Checking image: $image"
+            docker buildx imagetools inspect "$image"
+          done
+          echo "All four release tags exist; no deployment was performed."
