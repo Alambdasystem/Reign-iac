@@ -188,8 +188,10 @@ async def main(args) -> None:
             await browser.close()
     # Prevent accidental publication of auth-adjacent operational evidence.
     dest.parent.mkdir(parents=True,exist_ok=True)
-    with dest.open("x",encoding="utf-8") as file:
-        os.chmod(dest,0o600)
+    # Create with restrictive mode AT CREATION, not after opening a file
+    # that could temporarily have been readable by another local user.
+    fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as file:
         json.dump({"source":"authenticated_live_ax_ui","production":True,
                    "warning":"Tool receipts are provisional until independently correlated with Temporal and screenshots",
                    "results":results},file,indent=2)
