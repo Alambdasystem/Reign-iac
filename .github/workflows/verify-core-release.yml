@@ -17,7 +17,7 @@ jobs:
       - name: Inspect immutable main release image (no deployment)
         env:
           GHCR_TOKEN: ${{ github.token }}
-          SOURCE_SHA: 80ab84fc028ee3d0c3d09b77e9f419c66b42f451
+          SOURCE_SHA: ae9611af2cf2a206eb2f3d1d12b3655f2ad8a318
         run: |
           set -euo pipefail
           trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
