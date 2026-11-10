@@ -90,8 +90,8 @@ class HistoryCryptoTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             HistoryCipher(keys={1: self.key}, active_version=2)
         with self.assertRaises(ValueError):
-            HistoryCipher(keys={1: self.key, True: bytes(reversed(self.key))},
-                          active_version=1)
+            HistoryCipher(keys={2: self.key, True: bytes(reversed(self.key))},
+                          active_version=2)
 
     def test_deleting_old_key_fails_closed(self):
         record = self.cipher.seal(b"old data", **self.fields)
