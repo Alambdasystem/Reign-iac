@@ -77,7 +77,7 @@ class DiskHistoryTests(unittest.IsolatedAsyncioTestCase):
         receipt = self.runtime.submit("Check the workspace")
         thread = self.runtime.get(receipt["thread_id"])
         await thread.task
-        self.assertEqual(thread.status, "completed")
+        self.assertEqual(thread.status, "completed", repr((thread.error, thread.events, self.archive.list_threads())))
         self.assertEqual(adapter.calls, 1)
         self.assertEqual(self.archive.load_turns(thread.id),
                          [("Check the workspace", "The workspace is ready.")])
