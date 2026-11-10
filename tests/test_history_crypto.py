@@ -50,6 +50,63 @@ class HistoryCryptoTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.cipher.open(SealedRecord(value.ciphertext, b"tiny"), **self.fields)
 
+
+    def test_versioned_keyring_backward_read_and_new_write(self):
+        old = self.cipher.seal(b"legacy", **self.fields)
+        rotated = HistoryCipher(keys={1: self.key, 2: bytes(reversed(self.key))},
+                                active_version=2)
+        self.assertEqual(rotated.open(old, **self.fields), b"legacy")
+        latest = rotated.seal(b"new", **self.fields)
+        self.assertEqual(latest.key_version, 2)
+        self.assertEqual(rotated.open(latest, **self.fields), b"new")
+        with self.assertRaises(ValueError):
+            self.cipher.open(latest, **self.fields)
+
+    def test_keyring_environment_and_no_legacy_fallback(self):
+        key2 = bytes(reversed(self.key))
+        config = {"active_version": 2, "keys": {
+            "1": base64.urlsafe_b64encode(self.key).decode(),
+            "2": base64.urlsafe_b64encode(key2).decode()}}
+        import json
+        with patch.dict(os.environ, {
+                "REIGN_HISTORY_KEYS_JSON": json.dumps(config),
+                "REIGN_HISTORY_KEY": base64.urlsafe_b64encode(self.key).decode()}):
+            rotated = HistoryCipher.from_env()
+            self.assertEqual(rotated._active_version, 2)
+            self.assertEqual(rotated.open(self.cipher.seal(b"ok", **self.fields),
+                                          **self.fields), b"ok")
+        for malformed in ("", "{}", '{"active_version":2,"keys":{}}',
+                          '{"active_version":true,"keys":{}}', '{"active_version":2,"keys":{"01":"bad"}}'):
+            with self.subTest(malformed=malformed):
+                with patch.dict(os.environ, {
+                        "REIGN_HISTORY_KEYS_JSON": malformed,
+                        "REIGN_HISTORY_KEY": base64.urlsafe_b64encode(self.key).decode()}):
+                    with self.assertRaises(ValueError):
+                        HistoryCipher.from_env()
+
+    def test_reject_duplicate_key_material_and_missing_active_key(self):
+        with self.assertRaises(ValueError):
+            HistoryCipher(keys={1: self.key, 2: self.key}, active_version=2)
+        with self.assertRaises(ValueError):
+            HistoryCipher(keys={1: self.key}, active_version=2)
+        with self.assertRaises(ValueError):
+            HistoryCipher(keys={1: self.key, True: bytes(reversed(self.key))},
+                          active_version=1)
+
+    def test_deleting_old_key_fails_closed(self):
+        record = self.cipher.seal(b"old data", **self.fields)
+        only_new = HistoryCipher(keys={2: bytes(reversed(self.key))}, active_version=2)
+        with self.assertRaises(ValueError):
+            only_new.open(record, **self.fields)
+
+    def test_tampered_version_cannot_decrypt_with_other_key(self):
+        rotated = HistoryCipher(keys={1: self.key, 2: bytes(reversed(self.key))},
+                                active_version=2)
+        sealed = rotated.seal(b"new data", **self.fields)
+        with self.assertRaises(InvalidTag):
+            rotated.open(SealedRecord(sealed.ciphertext, sealed.nonce, 1),
+                         **self.fields)
+
     def test_explicit_secret_key_required(self):
         with patch.dict(os.environ, {"REIGN_HISTORY_KEY": ""}):
             with self.assertRaises(ValueError):
