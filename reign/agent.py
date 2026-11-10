@@ -275,7 +275,9 @@ class Conversation:
         except asyncio.CancelledError:
             self.status = "cancelled"
             self.event("cancelled")
-        except Exception:
+        except Exception as exc:
+            # Temporary sanitized diagnostic for this isolated PR test.
+            self.event("failed_category", exception_type=type(exc).__name__)
             self.trace_spans.append(safe_span(trace_id=self.trace_id, service="core",
                 operation="agent.failure", outcome="error", started_monotonic=time.monotonic(),
                 error_code="unknown"))
