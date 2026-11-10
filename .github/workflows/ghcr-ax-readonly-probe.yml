@@ -6,6 +6,7 @@ on:
 permissions:
   contents: read
   packages: read
+  actions: read
 jobs:
   verify-ax-tag:
     runs-on: ubuntu-24.04
@@ -37,3 +38,23 @@ jobs:
           done
           echo "::error::None of the reviewed Genesis UI main tags is published/readable"
           exit 1
+      - name: Verify successful gated release artifact for the selected SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: 9e884d8284df1df529a2e7e6ff08f9a95b7574f8
+        run: |
+          set -euo pipefail
+          found=false
+          for run in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/reign-cd.yml/runs?per_page=30" --jq '.workflow_runs[] | select(.conclusion=="success") | .id'); do
+            artifact="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts?per_page=100" --jq ".artifacts[] | select(.name==\"tested-release-$SOURCE_SHA\" and .expired==false) | .id" | head -n 1)"
+            if [[ -n "$artifact" ]]; then
+              echo "VERIFIED_GATED_RELEASE_RUN=https://github.com/$GITHUB_REPOSITORY/actions/runs/$run"
+              echo "VERIFIED_RELEASE_ARTIFACT=$artifact"
+              found=true
+              break
+            fi
+          done
+          if [[ "$found" != true ]]; then
+            echo "::error::Gated publication receipt missing for selected AX SHA"
+            exit 1
+          fi
