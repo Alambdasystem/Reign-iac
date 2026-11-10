@@ -98,10 +98,13 @@ class AgentState(TypedDict):
 
 
 class Conversation:
-    def __init__(self, model, adapter):
+    def __init__(self, model, adapter, *, checkpointer=None):
         self.id = str(uuid.uuid4())
         self.model, self.adapter = model, adapter
-        self.saver = InMemorySaver()
+        # Durable storage is injected only by a trusted authenticated Core
+        # lifecycle; a model, prompt or request cannot select a saver/owner.
+        self.saver = checkpointer if checkpointer is not None else InMemorySaver()
+        self.memory_kind = "injected" if checkpointer is not None else "ephemeral"
         self.events = []
         self.trace_id, self.trace_spans = new_trace_id(), []
         self.usage = {"input_tokens": 0, "output_tokens": 0}
@@ -266,15 +269,19 @@ class Conversation:
                 "answer": self.answer, "error": self.error, "session_id": self.session_id,
                 "events": self.events, "usage": self.usage,
                 "trace_id": self.trace_id, "trace_spans": self.trace_spans,
-                "memory": "ephemeral",
+                "memory": self.memory_kind,
                 "turns": self.turns, "max_turns": MAX_TURNS,
                 "continuable": self.status in ("idle", "completed") and self.turns < MAX_TURNS}
 
 
 class AgentRuntime:
-    def __init__(self, model_factory=model_client, adapter=None):
+    def __init__(self, model_factory=model_client, adapter=None, *, saver_factory=None):
         self.threads = {}
         self.model_factory, self.adapter = model_factory, adapter or CoreTools()
+        # No durable saver is configured by the current Core lifespan. A
+        # future server-owned factory must bind authenticated owner, RLS and
+        # encryption keys before this opt-in seam may be enabled.
+        self.saver_factory = saver_factory
 
     def capabilities(self):
         return {"configured": bool(os.getenv("OPENAI_API_KEY")), "provider": "openai_responses",
@@ -308,7 +315,11 @@ class AgentRuntime:
         else:
             if len(self.threads) >= MAX_THREADS:
                 raise HTTPException(429, "Close an old conversation first")
-            thread = Conversation(self.model_factory(), self.adapter)
+            # Durable providers must be provisioned separately and reject
+            # unsafe connection/key state before accepting a conversation.
+            # The default deployment continues to use InMemorySaver.
+            saver = self.saver_factory() if self.saver_factory is not None else None
+            thread = Conversation(self.model_factory(), self.adapter, checkpointer=saver)
             self.threads[thread.id] = thread
         thread.turns += 1
         thread.session_id = sid
