@@ -1,0 +1,39 @@
+name: Read-only Genesis AX GHCR provenance probe
+on:
+  pull_request:
+    paths:
+      - .github/workflows/ghcr-ax-readonly-probe.yml
+permissions:
+  contents: read
+  packages: read
+jobs:
+  verify-ax-tag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Verify current main source is still exact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED: e0bdad4b3e19ecc701ec136ebbcbc8b33343634d
+        run: |
+          set -euo pipefail
+          actual="$(gh api repos/$GITHUB_REPOSITORY/branches/main --jq .commit.sha)"
+          test "$actual" = "$EXPECTED" || { echo "::error::Main moved; probe is stale"; exit 1; }
+      - name: Read immutable AX image digest without publishing
+        env:
+          SOURCE_SHA: e0bdad4b3e19ecc701ec136ebbcbc8b33343634d
+        run: |
+          set -euo pipefail
+          image="ghcr.io/alambdasystem/reign-ax:$SOURCE_SHA"
+          output="$(docker buildx imagetools inspect "$image")" || {
+            echo "::error::Exact AX image tag is missing or not readable; no promotion"
+            exit 1
+          }
+          digest="$(printf '%s\n' "$output" | awk '$1=="Digest:" {print $2; exit}')"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "::error::No immutable digest returned"
+            exit 1
+          }
+          echo "VERIFIED_AX_IMAGE=ghcr.io/alambdasystem/reign-ax@$digest"
+          echo "SOURCE_SHA=$SOURCE_SHA"
+          echo "Read-only probe only: no image publication and no Render deployment"
