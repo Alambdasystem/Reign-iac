@@ -45,8 +45,8 @@ async def history_ready() -> bool:
             records = await conn.fetch("""
                 SELECT c.relname AS name, c.relrowsecurity AS rls,
                        c.relforcerowsecurity AS forced,
-                       has_table_privilege(current_user,c.oid,'SELECT,INSERT')
-                         AS writable,
+                       has_table_privilege(current_user,c.oid,'SELECT') AS readable,
+                       has_table_privilege(current_user,c.oid,'INSERT') AS writable,
                        p.policyname AS policy
                 FROM pg_class c
                 JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -60,7 +60,7 @@ async def history_ready() -> bool:
                 if (table not in required_policies or
                         row["policy"] != required_policies[table] or
                         not row["rls"] or not row["forced"] or
-                        not row["writable"]):
+                        not row["readable"] or not row["writable"]):
                     return False
                 names.add(table)
             return names == set(required_tables)
