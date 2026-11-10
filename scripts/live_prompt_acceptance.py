@@ -85,7 +85,14 @@ async def run_case(page, case_id: str, prompt: str, expected: list[str]) -> dict
     # UI interaction, rather than direct POST, is essential to validate
     # the actual AX text composer -> Core LangGraph workflow.
     await page.locator("#sendCommand").wait_for(state="visible")
-    if not await page.locator("#sendCommand").is_enabled():
+    # AX asynchronously clears its pending-chat lock after Core completes.
+    # Wait for that UI state instead of racing subsequent prompts.
+    try:
+        await page.locator("#sendCommand").wait_for(state="attached",timeout=15000)
+        await page.wait_for_function(
+            "() => !document.getElementById('sendCommand').disabled",
+            timeout=15000)
+    except Exception:
         record.update(status="BLOCKED",reason="AX composer unavailable")
         return record
     async with page.expect_response(
