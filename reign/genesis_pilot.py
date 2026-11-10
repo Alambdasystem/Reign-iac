@@ -81,7 +81,21 @@ class GenesisPilot:
     def preview(self, agent_id: str, name: str, capabilities: list[str]) -> dict:
         proposal = self._request(agent_id, name, capabilities)
         draft = GenesisRegistration(AgentRegistry(), self.constitution)
-        return asdict(draft.preview(proposal, tenant_id=TENANT, owner_id=OWNER, principal_id=OWNER))
+        result = draft.preview(proposal, tenant_id=TENANT, owner_id=OWNER, principal_id=OWNER)
+        # The in-memory registry is intentionally short-lived. The persistent
+        # draft database is authoritative for duplicate registration previews.
+        # This check improves previews; create_draft still owns the atomic
+        # uniqueness check to prevent races between preview and commit.
+        with closing(self._connect()) as db:
+            exists = db.execute(
+                "SELECT 1 FROM agent_drafts WHERE agent_id = ? LIMIT 1",
+                (proposal.agent_id,)).fetchone()
+            count = db.execute("SELECT count(*) FROM agent_drafts").fetchone()[0]
+        if exists:
+            raise RegistryDenied("Draft already registered")
+        if count >= MAX_AGENTS:
+            raise RegistryDenied("Genesis draft registry is full")
+        return asdict(result)
 
     def create_draft(self, agent_id: str, name: str, capabilities: list[str]) -> dict:
         request = self._request(agent_id, name, capabilities)
