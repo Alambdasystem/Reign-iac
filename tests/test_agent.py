@@ -308,6 +308,18 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(pending.cancelled() or pending.exception() is None)
         await runtime.shutdown()  # Idempotent cleanup.
 
+    async def test_saver_factory_failure_does_not_accept_or_run_a_chat(self):
+        runtime = AgentRuntime(lambda: Model(AIMessage(content="should not run")),
+                               self.adapter, saver_factory=lambda: (_ for _ in ()).throw(
+                                   RuntimeError("history storage not approved")))
+        try:
+            with self.assertRaisesRegex(RuntimeError, "not approved"):
+                runtime.submit("start a durable chat")
+            self.assertEqual(runtime.threads, {})
+            self.assertEqual(self.adapter.statuses, 0)
+        finally:
+            await runtime.shutdown()
+
     async def test_unconfigured_has_no_mock_success(self):
         runtime = self.setup_run()
         with patch.dict(os.environ, {"OPENAI_API_KEY": ""}):
