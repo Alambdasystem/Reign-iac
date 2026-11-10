@@ -111,7 +111,7 @@ services:
   - key: REIGN_HISTORY_MODE
     value: disk
   - key: REIGN_HISTORY_KEY
-    sync: false
+    generateValue: true
   - key: CREDENTIAL_CHANNEL_KEY
     generateValue: true
   # Core derives both private endpoints from the referenced host variables.
