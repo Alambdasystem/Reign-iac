@@ -54,6 +54,12 @@ class SovereignEndToEndTests(unittest.TestCase):
             self.gateway.execute(GatewayRequest(grant,"cloud.admin"), now=NOW+1)
         self.assertEqual(len(self.calls),1)
 
+    def test_web_dispatch_without_explicit_url_is_denied_before_handler(self):
+        for missing in (None, ""):
+            with self.subTest(url=missing), self.assertRaises(GatewayDenied):
+                self.gateway.execute(GatewayRequest(self.grant(), "web.read", missing), now=NOW+1)
+        self.assertEqual(self.calls, [])
+
     def test_expired_or_forged_or_wrong_audience_denied_before_effect(self):
         valid = self.grant()
         head, signature = valid.split(".", 1)
