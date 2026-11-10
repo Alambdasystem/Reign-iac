@@ -38,9 +38,14 @@ async def lifespan(app: FastAPI):
     if os.environ.get("REIGN_HISTORY_MODE", "disabled") == "disk":
         from reign.disk_history import HistoryArchive
         archive = HistoryArchive.from_env()
+    genesis = None
+    if os.environ.get("GENESIS_DRAFT_MODE", "disabled") == "enabled":
+        from reign.genesis_pilot import GenesisPilot
+        genesis = GenesisPilot.from_env()
     try:
         async with WorkspaceMCP().connect() as connection:
             app.state.agent = AgentRuntime(adapter=MCPTools(connection), archive=archive)
+            app.state.genesis = genesis
             app.state.voice = VoiceBroker(app.state.http)
             try:
                 yield
@@ -317,6 +322,49 @@ async def chat_resume(tid: uuid.UUID):
 async def chat_delete(tid: uuid.UUID):
     return await app.state.agent.delete(str(tid))
 
+
+
+
+class GenesisDraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    agent_id: str = Field(min_length=2, max_length=63)
+    name: str = Field(min_length=1, max_length=120)
+    capabilities: list[str] = Field(default_factory=list, max_length=12)
+
+
+def genesis_pilot():
+    pilot = getattr(app.state, "genesis", None)
+    if pilot is None:
+        raise HTTPException(503, "Genesis draft registration unavailable")
+    return pilot
+
+
+@app.get("/api/genesis/status", dependencies=[Depends(authorize)])
+async def genesis_status():
+    return genesis_pilot().status()
+
+
+@app.get("/api/genesis/agents", dependencies=[Depends(authorize)])
+async def genesis_agents():
+    return {"agents": genesis_pilot().list_drafts()}
+
+
+@app.post("/api/genesis/preview", dependencies=[Depends(authorize)])
+async def genesis_preview(data: GenesisDraftRequest):
+    from reign.sovereign_registry import RegistryDenied
+    try:
+        return genesis_pilot().preview(data.agent_id, data.name, data.capabilities)
+    except (RegistryDenied, ValueError):
+        raise HTTPException(422, "Genesis request denied") from None
+
+
+@app.post("/api/genesis/agents", dependencies=[Depends(authorize)])
+async def genesis_register(data: GenesisDraftRequest):
+    from reign.sovereign_registry import RegistryDenied
+    try:
+        return genesis_pilot().create_draft(data.agent_id, data.name, data.capabilities)
+    except (RegistryDenied, ValueError):
+        raise HTTPException(422, "Genesis registration denied") from None
 
 from reign.accounts import install as install_accounts, vault_tool
 install_accounts(app, authorize)
