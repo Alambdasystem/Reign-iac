@@ -69,7 +69,7 @@ async function call(path,method='GET',data){
   return body;
 }
 function readForm(){return {agent_id:el('agentId').value.trim(),name:el('agentName').value.trim(),capabilities:[...document.querySelectorAll('input[name="cap"]:checked')].map(c=>c.value)}}
-function status(msg){el('formStatus').textContent=msg}
+function showStatus(msg){el('formStatus').textContent=msg}
 async function refresh(){
  try{
  const [meta,result]=await Promise.all([call('/api/genesis/status'),call('/api/genesis/agents')]);
@@ -78,11 +78,11 @@ async function refresh(){
  if(!result.agents.length){node.textContent='No drafts registered yet.';return}
  const list=document.createElement('ul');
  for(const agent of result.agents){const li=document.createElement('li');const label=document.createElement('strong');label.textContent=agent.name+' ('+agent.agent_id+')';const tag=document.createElement('span');tag.className='badge';tag.textContent='DRAFT';li.append(label,document.createTextNode(' '),tag);const details=document.createElement('p');details.textContent=agent.capabilities.join(', ')||'No capabilities';li.append(details);list.append(li)}
- node.append(list);status('Draft registration ready.');
- }catch(error){el('guardrails').textContent='Unavailable';el('agents').textContent='Registration service unavailable';status(error.message)}
+ node.append(list);showStatus('Draft registration ready.');
+ }catch(error){el('guardrails').textContent='Unavailable';el('agents').textContent='Registration service unavailable';showStatus(error.message)}
 }
-el('preview').onclick=async()=>{if(!el('agentForm').reportValidity())return;try{const p=await call('/api/genesis/preview','POST',readForm());status('Allowed: '+(p.allowed_capabilities.join(', ')||'none')+'; blocked: '+(p.rejected_capabilities.join(', ')||'none')+'. Still requires approval.')}catch(e){status(e.message)}};
-el('agentForm').onsubmit=async e=>{e.preventDefault();if(!el('agentForm').reportValidity())return;const b=el('register');b.disabled=true;try{const d=await call('/api/genesis/agents','POST',readForm());status('Saved '+d.agent_id+' as draft. No agent deployed.');await refresh()}catch(error){status(error.message)}finally{b.disabled=false}};
+el('preview').onclick=async()=>{if(!el('agentForm').reportValidity())return;try{const p=await call('/api/genesis/preview','POST',readForm());showStatus('Allowed: '+(p.allowed_capabilities.join(', ')||'none')+'; blocked: '+(p.rejected_capabilities.join(', ')||'none')+'. Still requires approval.')}catch(e){showStatus(e.message)}};
+el('agentForm').onsubmit=async e=>{e.preventDefault();if(!el('agentForm').reportValidity())return;const b=el('register');b.disabled=true;try{const d=await call('/api/genesis/agents','POST',readForm());showStatus('Saved '+d.agent_id+' as draft. No agent deployed.');await refresh()}catch(error){showStatus(error.message)}finally{b.disabled=false}};
 el('refresh').onclick=refresh;refresh();
 </script>
 </body></html>
