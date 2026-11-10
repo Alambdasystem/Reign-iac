@@ -64,7 +64,7 @@ services:
   region: oregon
   numInstances: 1
   image:
-    url: ghcr.io/alambdasystem/reign-core@sha256:0f2727a51ce2c77ed04aae70b434dbc255c3d50eced3a1612588437ea92963a0
+    url: ghcr.io/alambdasystem/reign-core@sha256:cb058db6cb833080537ad9b1387fc6eb78b5079d2a1036889e5128b22045ea05
   envVars:
   - key: PORT
     value: '10000'
