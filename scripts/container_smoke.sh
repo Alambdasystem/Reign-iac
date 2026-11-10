@@ -44,7 +44,7 @@ docker run --rm --network none --ipc=host -v "$PWD/tests:/app/tests:ro" -e REIGN
 docker build -f scripts/workspace-fixture.Dockerfile -t reign-workspace-fixture:ci .
 docker run -d --name "$temporal" --network "$network" --network-alias temporal reign-temporal:ci >/dev/null
 docker run -d --name "$computer" --network "$network" --network-alias computer -e TEMPORAL_ADDRESS=temporal:7233 -e CORE_URL=http://core:10000 -e COMPUTER_TOKEN -e CREDENTIAL_CHANNEL_KEY reign-computer:ci >/dev/null
-docker run -d --name "$core" --network "$network" --network-alias core -v "$vault_volume:/var/data/reign-vault" -e REIGN_VAULT_DIR=/var/data/reign-vault -e REIGN_VAULT_KEY -e CREDENTIAL_CHANNEL_KEY -e TEMPORAL_ADDRESS=temporal:7233 -e COMPUTER_URL=http://computer:10000 -e CORE_TOKEN -e COMPUTER_TOKEN reign-core:ci >/dev/null
+docker run -d --name "$core" --network "$network" --network-alias core -v "$vault_volume:/var/data/reign-vault" -e GENESIS_DRAFT_MODE=enabled -e REIGN_VAULT_DIR=/var/data/reign-vault -e REIGN_VAULT_KEY -e CREDENTIAL_CHANNEL_KEY -e TEMPORAL_ADDRESS=temporal:7233 -e COMPUTER_URL=http://computer:10000 -e CORE_TOKEN -e COMPUTER_TOKEN reign-core:ci >/dev/null
 docker run -d --name "$ax" --network "$network" --network-alias ax -v "$certs:/test-tls:ro" -e CORE_URL=http://core:10000 -e AX_ALLOW_INTERNAL_HTTP=1 -e AX_PUBLIC_ORIGIN=https://ax:10000 -e CORE_TOKEN -e AX_SESSION_KEY -e AX_ADMIN_PASSWORD reign-ax:ci sh -c 'exec uvicorn reign.ax:app --host 0.0.0.0 --port 10000 --ssl-keyfile /test-tls/key.pem --ssl-certfile /test-tls/cert.pem' >/dev/null
 wait_ready() {
   local ready=false
@@ -62,9 +62,13 @@ run_browser_test() {
   docker run --rm --network "$network" --ipc=host -v "$PWD/scripts:/smoke-scripts:ro" -v "$evidence:/evidence" -e CORE_TOKEN -e AX_ADMIN_PASSWORD -e SOURCE_SHA="${SOURCE_SHA:-${GITHUB_SHA:-local}}" -e SMOKE_PHASE="$1" reign-computer:ci python /smoke-scripts/browser_smoke.py
 }
 run_browser_test initial
+# Real authenticated AX/Genesis UI against disposable Core persistent disk.
+# Never set GENESIS_DRAFT_MODE=enabled in production from this CI fixture.
+docker run --rm --network "$network" --ipc=host -v "$PWD/scripts:/smoke-scripts:ro" -v "$evidence:/evidence" -e AX_ADMIN_PASSWORD -e SMOKE_PHASE=initial reign-computer:ci python /smoke-scripts/genesis_ui_smoke.py
 docker restart "$temporal" "$computer" "$core" >/dev/null
 wait_ready
 run_browser_test restart
+docker run --rm --network "$network" --ipc=host -v "$PWD/scripts:/smoke-scripts:ro" -v "$evidence:/evidence" -e AX_ADMIN_PASSWORD -e SMOKE_PHASE=restart reign-computer:ci python /smoke-scripts/genesis_ui_smoke.py
 docker exec "$ax" python -m reign.live_acceptance --ci-local
 # The controlled site must have no external network fallback, even if a browser
 # regression bypasses request interception. Only Temporal is reachable here.
