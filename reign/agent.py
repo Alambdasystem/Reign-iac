@@ -24,6 +24,7 @@ from reign.session_errors import BROWSER_OCCUPIED_CODE, BROWSER_OCCUPIED_MESSAGE
 from reign.tool_contracts import EFFECT_TOOLS, EmptyArgs, URLArgs, tool_specs
 from reign.tool_errors import BrowserActionError
 from reign.workspace_backend import CoreTools
+from reign.telemetry import new_trace_id, safe_span
 
 MAX_STEPS = 16
 MAX_TURNS = 12
@@ -101,11 +102,15 @@ class AgentState(TypedDict):
 
 
 class Conversation:
-    def __init__(self, model, adapter):
+    def __init__(self, model, adapter, *, checkpointer=None):
         self.id = str(uuid.uuid4())
         self.model, self.adapter = model, adapter
-        self.saver = InMemorySaver()
+        # Durable storage is injected only by a trusted authenticated Core
+        # lifecycle; a model, prompt or request cannot select a saver/owner.
+        self.saver = checkpointer if checkpointer is not None else InMemorySaver()
+        self.memory_kind = "injected" if checkpointer is not None else "ephemeral"
         self.events = []
+        self.trace_id, self.trace_spans = new_trace_id(), []
         self.usage = {"input_tokens": 0, "output_tokens": 0}
         self.status, self.answer, self.error = "idle", "", None
         self.session_id = None
@@ -127,6 +132,7 @@ class Conversation:
         self.events.append({"sequence": len(self.events) + 1, "kind": kind, **data})
 
     async def call_model(self, state):
+        started = time.monotonic()
         self.event("model_started")
         final = state["steps"] >= MAX_STEPS
         messages = [SystemMessage(SYSTEM), *state["messages"]]
@@ -141,6 +147,10 @@ class Conversation:
         if len(response.tool_calls) > 1 or (final and response.tool_calls):
             raise ValueError("Tool budget exceeded")
         self.event("model_completed", tool_calls=len(response.tool_calls))
+        self.trace_spans.append(safe_span(trace_id=self.trace_id, service="core",
+            operation="agent.model", outcome="ok", started_monotonic=started,
+            input_tokens=int(usage.get("input_tokens", 0)),
+            output_tokens=int(usage.get("output_tokens", 0))))
         return {"messages": [response], "steps": state["steps"] + 1}
 
     def route(self, state):
@@ -166,6 +176,7 @@ class Conversation:
                 current = await self.adapter.session(sid)
                 if current["mode"] != "agent":
                     raise HTTPException(409, "Human still controls browser")
+        started = time.monotonic()
         self.event("tool_started", tool=name)
         try:
             if name == "workspace_status":
@@ -209,6 +220,10 @@ class Conversation:
             else:
                 result = {"error": "Control changed; no action completed" if exc.status_code == 409 else "Workspace tool unavailable", "status": exc.status_code}
             self.event("tool_completed", tool=name, ok=False)
+        self.trace_spans.append(safe_span(trace_id=self.trace_id, service="core",
+            operation="agent.tool", outcome="error" if "error" in result else "ok",
+            started_monotonic=started, tool_name=name,
+            error_code=result.get("code") if "error" in result else None))
         # Bounded public fields only. Never forward provider bodies or worker secrets.
         allowed = {"id", "url", "title", "mode", "epoch", "status", "components", "error", "code",
                    "observation_id", "text", "elements", "truncated", "acted", "filled",
@@ -238,6 +253,9 @@ class Conversation:
             self.status = "cancelled"
             self.event("cancelled")
         except Exception:
+            self.trace_spans.append(safe_span(trace_id=self.trace_id, service="core",
+                operation="agent.failure", outcome="error", started_monotonic=time.monotonic(),
+                error_code="unknown"))
             self.status, self.error = "failed", "The agent run failed. Start a new chat to retry; completed browser actions may remain."
             self.event("failed")
         finally:
@@ -245,6 +263,7 @@ class Conversation:
 
     def start(self, value):
         self.events, self.answer, self.error = [], "", None
+        self.trace_id, self.trace_spans = new_trace_id(), []
         self.usage = {"input_tokens": 0, "output_tokens": 0}
         self.status, self.run_id = "running", str(uuid.uuid4())
         self.task = asyncio.create_task(self.run(value))
@@ -252,15 +271,21 @@ class Conversation:
     def snapshot(self):
         return {"thread_id": self.id, "run_id": self.run_id, "status": self.status,
                 "answer": self.answer, "error": self.error, "session_id": self.session_id,
-                "events": self.events, "usage": self.usage, "memory": "ephemeral",
+                "events": self.events, "usage": self.usage,
+                "trace_id": self.trace_id, "trace_spans": self.trace_spans,
+                "memory": self.memory_kind,
                 "turns": self.turns, "max_turns": MAX_TURNS,
                 "continuable": self.status in ("idle", "completed") and self.turns < MAX_TURNS}
 
 
 class AgentRuntime:
-    def __init__(self, model_factory=model_client, adapter=None):
+    def __init__(self, model_factory=model_client, adapter=None, *, saver_factory=None):
         self.threads = {}
         self.model_factory, self.adapter = model_factory, adapter or CoreTools()
+        # No durable saver is configured by the current Core lifespan. A
+        # future server-owned factory must bind authenticated owner, RLS and
+        # encryption keys before this opt-in seam may be enabled.
+        self.saver_factory = saver_factory
 
     def capabilities(self):
         return {"configured": bool(os.getenv("OPENAI_API_KEY")), "provider": "openai_responses",
@@ -294,7 +319,11 @@ class AgentRuntime:
         else:
             if len(self.threads) >= MAX_THREADS:
                 raise HTTPException(429, "Close an old conversation first")
-            thread = Conversation(self.model_factory(), self.adapter)
+            # Durable providers must be provisioned separately and reject
+            # unsafe connection/key state before accepting a conversation.
+            # The default deployment continues to use InMemorySaver.
+            saver = self.saver_factory() if self.saver_factory is not None else None
+            thread = Conversation(self.model_factory(), self.adapter, checkpointer=saver)
             self.threads[thread.id] = thread
         thread.turns += 1
         thread.session_id = sid
@@ -321,9 +350,8 @@ class AgentRuntime:
         return {"status": "deleted", "browser_session_closed": False}
 
     async def shutdown(self):
-        # Shutdown must not call delete/get: get() prunes expired threads and
-        # can raise 404 midway through cleanup. Cancel only still-active work,
-        # then release all in-memory references without replaying tool effects.
+        # Snapshot active threads and avoid delete/get, which prunes expired
+        # entries and may raise HTTP 404 midway through service shutdown.
         threads = list(self.threads.values())
         for thread in threads:
             if thread.task and not thread.task.done():

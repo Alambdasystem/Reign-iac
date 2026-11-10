@@ -93,6 +93,250 @@ class PostgresIsolationTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncpg.ForeignKeyViolationError):
             await self.db.execute("INSERT INTO reign.tasks(task_id,owner_id,session_id) VALUES ($1,'alice',$2)", uuid4(), uuid4())
 
+    async def test_history_and_traces_fail_closed_until_rls_policies_exist(self):
+        # Proposal migration is deliberately *not* runtime-enabled.
+        # Even a table grant must not permit querying other users' history.
+        with self.assertRaises(asyncpg.InsufficientPrivilegeError):
+            await self.db.execute(
+                "INSERT INTO reign.conversations(thread_id, owner_id) VALUES ($1,'alice')", uuid4()
+            )
+        self.assertEqual(await self.db.fetchval("SELECT count(*) FROM reign.conversations"), 0)
+        self.assertEqual(await self.db.fetchval("SELECT count(*) FROM reign.trace_spans"), 0)
+
+    async def test_encrypted_history_round_trip_is_owner_scoped(self):
+        from reign.history_crypto import HistoryCipher
+        from reign.history_store import HistoryRepository
+        cipher = HistoryCipher(bytes(range(32)))
+        store = HistoryRepository(self.db, cipher)
+        alice_id, bob_id = str(uuid4()), str(uuid4())
+        await store.create_conversation("alice", alice_id)
+        await store.create_conversation("bob", bob_id)
+        mid = await store.append_message(owner_id="alice", thread_id=alice_id, ordinal=0,
+                                         role="user", text="private fixture for Alice")
+        messages = await store.get_messages(owner_id="alice", thread_id=alice_id)
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0]["message_id"], mid)
+        self.assertEqual(messages[0]["text"], "private fixture for Alice")
+        # The database is storing ciphertext, not a plaintext message.
+        async with self.db.transaction():
+            await self.db.fetchval("SELECT set_config('reign.actor_id',$1,true)", "alice")
+            raw = await self.db.fetchval(
+                "SELECT body_ciphertext FROM reign.conversation_messages WHERE message_id=$1",
+                __import__("uuid").UUID(mid))
+            self.assertNotIn(b"private fixture for Alice", bytes(raw))
+        self.assertEqual(await store.get_messages(owner_id="bob", thread_id=alice_id), [])
+        self.assertEqual(await store.list_conversations("bob"), [
+            dict(thread_id=bob_id, status="idle", created_at=unittest.mock.ANY,
+                 updated_at=unittest.mock.ANY)])
+        # A cross-owner write must not modify the original owner's conversation.
+        with self.assertRaises((asyncpg.InsufficientPrivilegeError,
+                                asyncpg.ForeignKeyViolationError)):
+            await store.append_message(owner_id="bob", thread_id=alice_id, ordinal=1,
+                                       role="user", text="attempted cross-owner write")
+        self.assertEqual(len(await store.get_messages(owner_id="alice", thread_id=alice_id)), 1)
+
+    async def test_trace_sinks_reject_cross_user_read_and_raw_metadata(self):
+        import time
+        from reign.telemetry import safe_span, new_trace_id
+        from reign.trace_store import TraceRepository
+        traces = TraceRepository(self.db)
+        span = safe_span(trace_id=new_trace_id(), service="core",
+                         operation="agent.tool", outcome="ok",
+                         started_monotonic=time.monotonic(),
+                         tool_name="workspace_status", input_tokens=12)
+        await traces.record(owner_id="alice", span=span)
+        alice = await traces.recent("alice")
+        self.assertEqual(len(alice), 1)
+        self.assertEqual(alice[0]["tool_name"], "workspace_status")
+        self.assertEqual(alice[0]["input_tokens"], 12)
+        self.assertEqual(await traces.recent("bob"), [])
+        with self.assertRaises(ValueError):
+            await traces.record(owner_id="alice", span={**span, "raw_prompt": "private fixture"})
+        self.assertEqual(len(await traces.recent("alice")), 1)
+
+    async def test_immutable_encrypted_checkpoints_survive_reconnection(self):
+        from reign.checkpoint_store import CheckpointRepository
+        from reign.history_crypto import HistoryCipher
+        from reign.history_store import HistoryRepository
+        cipher = HistoryCipher(bytes(range(32)))  # Disposable CI key only.
+        owner, other = "alice", "bob"
+        tid = str(uuid4())
+        await HistoryRepository(self.db, cipher).create_conversation(owner, tid)
+        checkpoints = CheckpointRepository(self.db, cipher)
+        await checkpoints.save(owner_id=owner, thread_id=tid, checkpoint_id="ckpt-1",
+                               payload=b'{"next":"wait_for_user","side_effects":"not_replayed"}')
+        await checkpoints.save(owner_id=owner, thread_id=tid, checkpoint_id="ckpt-2",
+                               payload=b'{"next":"paused"}', parent_checkpoint_id="ckpt-1")
+        self.assertEqual(await checkpoints.list_ids(owner_id=owner, thread_id=tid),
+                         ["ckpt-2", "ckpt-1"])
+        with self.assertRaises(asyncpg.UniqueViolationError):
+            await checkpoints.save(owner_id=owner, thread_id=tid, checkpoint_id="ckpt-1",
+                                   payload=b'{"next":"replay"}')
+        with self.assertRaises(ValueError):
+            await checkpoints.save(owner_id=owner, thread_id=tid, checkpoint_id="ckpt-3",
+                                   payload=b"orphan", parent_checkpoint_id="missing")
+        self.assertIsNone(await checkpoints.load(owner_id=other, thread_id=tid))
+        self.assertEqual(await checkpoints.list_ids(owner_id=other, thread_id=tid), [])
+        with self.assertRaises((asyncpg.InsufficientPrivilegeError,
+                                asyncpg.ForeignKeyViolationError)):
+            await checkpoints.save(owner_id=other, thread_id=tid, checkpoint_id="ckpt-3",
+                                   payload=b"cross-owner")
+        # Simulate process restart: NEW database connection and NEW repository
+        # instance read the ciphertext with only the explicitly supplied key.
+        replacement = await asyncpg.connect(os.environ["REIGN_TEST_DATABASE_URL"])
+        try:
+            await replacement.execute("SET ROLE reign_ci_app")
+            restored = await CheckpointRepository(replacement, cipher).load(
+                owner_id=owner, thread_id=tid)
+            self.assertEqual(restored.checkpoint_id, "ckpt-2")
+            self.assertEqual(restored.parent_checkpoint_id, "ckpt-1")
+            self.assertEqual(restored.payload, b'{"next":"paused"}')
+            # RLS and authenticated encryption preserve ownership across reconnects.
+            # No model invocation or browser effect takes place on restoration.
+            self.assertIsNone(await CheckpointRepository(replacement, cipher).load(
+                owner_id="bob", thread_id=tid))
+        finally:
+            await replacement.close()
+
+    async def test_pending_writes_survive_restart_with_owner_and_replay_fences(self):
+        from reign.checkpoint_store import CheckpointRepository
+        from reign.history_crypto import HistoryCipher
+        from reign.history_store import HistoryRepository
+        cipher = HistoryCipher(bytes(reversed(range(32))))
+        tid = str(uuid4())
+        await HistoryRepository(self.db, cipher).create_conversation("alice", tid)
+        store = CheckpointRepository(self.db, cipher)
+        await store.save(owner_id="alice", thread_id=tid, checkpoint_id="step-1",
+                         payload=b"paused at human takeover")
+        await store.save_writes(owner_id="alice", thread_id=tid,
+            checkpoint_id="step-1", task_id="tool-1", writes=[
+                (0, "tool_result", b"browser click completed"),
+                (-1, "__interrupt__", b"waiting for human")])
+        self.assertEqual(len(await store.load_writes(owner_id="alice",
+                             thread_id=tid, checkpoint_id="step-1")), 2)
+        with self.assertRaises(asyncpg.UniqueViolationError):
+            await store.save_writes(owner_id="alice", thread_id=tid,
+                checkpoint_id="step-1", task_id="tool-1",
+                writes=[(0, "tool_result", b"replay attempt")])
+        with self.assertRaises(ValueError):
+            await store.save_writes(owner_id="alice", thread_id=tid,
+                checkpoint_id="step-1", task_id="tool-2",
+                writes=[(0, "a", b"one"), (0, "b", b"two")])
+        fresh = await asyncpg.connect(os.environ["REIGN_TEST_DATABASE_URL"])
+        try:
+            await fresh.execute("SET ROLE reign_ci_app")
+            restarted = CheckpointRepository(fresh, cipher)
+            writes = await restarted.load_writes(owner_id="alice", thread_id=tid,
+                                                 checkpoint_id="step-1")
+            self.assertEqual(writes[0], ("tool-1", -1, "__interrupt__", b"waiting for human"))
+            self.assertEqual(writes[1], ("tool-1", 0, "tool_result", b"browser click completed"))
+            self.assertEqual(await restarted.load_writes(owner_id="bob",
+                thread_id=tid, checkpoint_id="step-1"), [])
+        finally:
+            await fresh.close()
+
+    async def test_real_langgraph_pause_and_restart_does_not_replay_prior_node(self):
+        from typing import TypedDict
+        from langgraph.graph import StateGraph, START, END
+        from langgraph.types import Command, interrupt
+        from reign.history_crypto import HistoryCipher
+        from reign.history_store import HistoryRepository
+        from reign.checkpoint_store import CheckpointRepository
+        from reign.langgraph_saver import EncryptedGraphSaver
+
+        class State(TypedDict):
+            count: int
+            approved: bool
+
+        calls = []
+        def do_once(state):
+            calls.append("effectless-step")
+            return {"count": state["count"] + 1}
+        def approval(state):
+            approved = interrupt("Human approval required")
+            return {"approved": bool(approved)}
+
+        def compile_graph(saver):
+            builder = StateGraph(State)
+            builder.add_node("do_once", do_once)
+            builder.add_node("approval", approval)
+            builder.add_edge(START, "do_once")
+            builder.add_edge("do_once", "approval")
+            builder.add_edge("approval", END)
+            return builder.compile(checkpointer=saver)
+
+        cipher = HistoryCipher(bytes(range(32)))
+        tid = str(uuid4())
+        await HistoryRepository(self.db, cipher).create_conversation("alice", tid)
+        first = compile_graph(EncryptedGraphSaver(
+            CheckpointRepository(self.db, cipher), owner_id="alice"))
+        conf = {"configurable": {"thread_id": tid}}
+        interrupted = await first.ainvoke({"count": 0, "approved": False}, conf)
+        self.assertIn("__interrupt__", interrupted)
+        self.assertEqual(calls, ["effectless-step"])
+        # A fresh database connection represents a restarted Core process.
+        new_connection = await asyncpg.connect(os.environ["REIGN_TEST_DATABASE_URL"])
+        try:
+            await new_connection.execute("SET ROLE reign_ci_app")
+            second = compile_graph(EncryptedGraphSaver(
+                CheckpointRepository(new_connection, cipher), owner_id="alice"))
+            completed = await second.ainvoke(Command(resume=True), conf)
+            self.assertEqual(completed["count"], 1)
+            self.assertTrue(completed["approved"])
+            self.assertEqual(calls, ["effectless-step"],
+                             "Resume must not repeat the previously completed node")
+        finally:
+            await new_connection.close()
+
+    async def test_history_readiness_requires_key_and_restricted_rls_role(self):
+        import base64
+        from reign.history_readiness import history_ready
+        @asynccontextmanager
+        async def connected():
+            yield SessionDataGateway(self.db)
+        with patch("reign.history_readiness.connect_reign_database", connected):
+            with patch.dict(os.environ, {"REIGN_HISTORY_MODE": "disabled"}):
+                self.assertFalse(await history_ready())
+            with patch.dict(os.environ, {"REIGN_HISTORY_MODE": "postgres",
+                                         "REIGN_HISTORY_KEY": ""}):
+                self.assertFalse(await history_ready())
+            valid = base64.urlsafe_b64encode(bytes(range(32))).decode("ascii")
+            with patch.dict(os.environ, {"REIGN_HISTORY_MODE": "postgres",
+                                         "REIGN_HISTORY_KEY": valid}):
+                self.assertTrue(await history_ready())
+                await self.db.execute(
+                    "RESET ROLE; REVOKE INSERT ON reign.checkpoint_writes FROM reign_ci_app; SET ROLE reign_ci_app")
+                self.assertFalse(await history_ready())
+                await self.db.execute(
+                    "RESET ROLE; GRANT INSERT ON reign.checkpoint_writes TO reign_ci_app; SET ROLE reign_ci_app")
+                self.assertTrue(await history_ready())
+                await self.db.execute("RESET ROLE")
+                self.assertFalse(await history_ready())  # Superuser rejected.
+
+    async def test_history_foreign_keys_reject_cross_owner_linkage(self):
+        # Migration role creates the fixture, but database-level composite FK
+        # prevents a message or checkpoint claiming someone else's thread.
+        await self.db.execute("RESET ROLE")
+        tid = uuid4()
+        try:
+            await self.db.execute(
+                "INSERT INTO reign.conversations(thread_id,owner_id) VALUES ($1,'alice')", tid)
+            with self.assertRaises(asyncpg.ForeignKeyViolationError):
+                await self.db.execute("""
+                    INSERT INTO reign.conversation_messages
+                      (message_id,thread_id,owner_id,ordinal,role,body_ciphertext,
+                       body_nonce,key_version)
+                    VALUES ($1,$2,'bob',0,'user',$3,$4,1)
+                """, uuid4(), tid, b"encrypted-test-only", b"0" * 12)
+            with self.assertRaises(asyncpg.ForeignKeyViolationError):
+                await self.db.execute("""
+                    INSERT INTO reign.graph_checkpoints
+                      (thread_id,checkpoint_id,owner_id,state_ciphertext,state_nonce,key_version)
+                    VALUES ($1,'c1','bob',$2,$3,1)
+                """, tid, b"encrypted-test-only", b"1" * 12)
+        finally:
+            await self.db.execute("SET ROLE reign_ci_app")
+
     async def test_readiness_rejects_missing_table_grant(self):
         await self.db.execute("RESET ROLE; REVOKE UPDATE ON reign.tasks FROM reign_ci_app; SET ROLE reign_ci_app")
         self.assertFalse(await self.probe())

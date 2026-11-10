@@ -51,6 +51,22 @@ class CoreTests(unittest.TestCase):
                     probe.side_effect = ConnectionError("private database unavailable")
                     self.assertEqual(client.get("/api/database/readyz", headers=headers).status_code, 503)
 
+    def test_history_readiness_is_private_and_fail_closed(self):
+        token = "x" * 40
+        headers = {"Authorization": "Bearer " + token}
+        with patch.dict(os.environ, {"CORE_TOKEN": token, "REIGN_HISTORY_MODE": "disabled"}):
+            with TestClient(app) as client:
+                self.assertEqual(client.get("/api/history/readyz").status_code, 401)
+                # Must not claim durable storage just because Core is healthy.
+                self.assertEqual(client.get("/api/history/readyz", headers=headers).status_code, 503)
+                with patch("reign.history_readiness.history_ready", new_callable=AsyncMock) as probe:
+                    probe.return_value = True
+                    self.assertEqual(client.get("/api/history/readyz", headers=headers).json(),
+                                     {"status": "preflight_passed", "storage": "encrypted_postgres",
+                                      "activation": "disabled"})
+                    probe.return_value = False
+                    self.assertEqual(client.get("/api/history/readyz", headers=headers).status_code, 503)
+
     def test_ready_requires_both_temporal_and_computer(self):
         token = "x" * 40
         headers = {"Authorization": "Bearer " + token}

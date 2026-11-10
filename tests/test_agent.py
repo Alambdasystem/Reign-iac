@@ -82,6 +82,14 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.adapter.statuses, 1)
         self.assertEqual(result["usage"]["input_tokens"], 10)
         self.assertEqual([e["kind"] for e in result["events"]], ["model_started", "model_completed", "tool_started", "tool_completed", "model_started", "model_completed", "completed"])
+        # Instrumentation is sanitized metadata, never the user's prompt or model answer.
+        self.assertEqual(len(result["trace_spans"]), 3)
+        self.assertEqual([span["operation"] for span in result["trace_spans"]],
+                         ["agent.model", "agent.tool", "agent.model"])
+        self.assertEqual(result["trace_spans"][1]["tool_name"], "workspace_status")
+        self.assertEqual({span["trace_id"] for span in result["trace_spans"]}, {result["trace_id"]})
+        self.assertNotIn("My name is James", str(result["trace_spans"]))
+        self.assertNotIn("Ready.", str(result["trace_spans"]))
         await self.finish(runtime.submit("What is my name?", thread.id))
         self.assertTrue(any(isinstance(m, HumanMessage) and "James" in m.content for m in self.model.seen[-1]))
 
@@ -255,6 +263,30 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         runtime.prune()
         self.assertEqual(runtime.threads, {})
 
+    async def test_checkpointer_injection_is_opt_in_and_default_is_ephemeral(self):
+        from langgraph.checkpoint.memory import InMemorySaver
+        runtime = self.setup_run(AIMessage(content="Ready."))
+        thread, receipt = await self.finish(runtime.submit("status"))
+        self.assertIsInstance(thread.saver, InMemorySaver)
+        self.assertEqual(receipt["memory"], "ephemeral")
+        self.assertEqual(runtime.capabilities()["memory"], "ephemeral")
+
+        # The server-owned injection seam is testable without changing
+        # the Core production lifecycle or trusting a model to select it.
+        injected = InMemorySaver()
+        custom = AgentRuntime(lambda: Model(AIMessage(content="Ready.")),
+                              self.adapter, saver_factory=lambda: injected)
+        self.assertIs(custom.saver_factory(), injected)
+        try:
+            value = custom.submit("status")
+            bound = custom.get(value["thread_id"])
+            self.assertIs(bound.saver, injected)
+            await bound.task
+            self.assertEqual(bound.status, "completed")
+            self.assertEqual(bound.snapshot()["memory"], "injected")
+        finally:
+            await custom.shutdown()
+
     async def test_shutdown_with_expired_and_running_threads_never_raises_404(self):
         import time
         runtime = self.setup_run(AIMessage(content="completed"))
@@ -275,6 +307,18 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(pending.done())
         self.assertTrue(pending.cancelled() or pending.exception() is None)
         await runtime.shutdown()  # Idempotent cleanup.
+
+    async def test_saver_factory_failure_does_not_accept_or_run_a_chat(self):
+        runtime = AgentRuntime(lambda: Model(AIMessage(content="should not run")),
+                               self.adapter, saver_factory=lambda: (_ for _ in ()).throw(
+                                   RuntimeError("history storage not approved")))
+        try:
+            with self.assertRaisesRegex(RuntimeError, "not approved"):
+                runtime.submit("start a durable chat")
+            self.assertEqual(runtime.threads, {})
+            self.assertEqual(self.adapter.statuses, 0)
+        finally:
+            await runtime.shutdown()
 
     async def test_unconfigured_has_no_mock_success(self):
         runtime = self.setup_run()
