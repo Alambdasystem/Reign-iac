@@ -288,6 +288,31 @@ class PostgresIsolationTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await new_connection.close()
 
+    async def test_history_readiness_requires_key_and_restricted_rls_role(self):
+        import base64
+        from reign.history_readiness import history_ready
+        @asynccontextmanager
+        async def connected():
+            yield SessionDataGateway(self.db)
+        with patch("reign.history_readiness.connect_reign_database", connected):
+            with patch.dict(os.environ, {"REIGN_HISTORY_MODE": "disabled"}):
+                self.assertFalse(await history_ready())
+            with patch.dict(os.environ, {"REIGN_HISTORY_MODE": "postgres",
+                                         "REIGN_HISTORY_KEY": ""}):
+                self.assertFalse(await history_ready())
+            valid = base64.urlsafe_b64encode(bytes(range(32))).decode("ascii")
+            with patch.dict(os.environ, {"REIGN_HISTORY_MODE": "postgres",
+                                         "REIGN_HISTORY_KEY": valid}):
+                self.assertTrue(await history_ready())
+                await self.db.execute(
+                    "RESET ROLE; REVOKE INSERT ON reign.checkpoint_writes FROM reign_ci_app; SET ROLE reign_ci_app")
+                self.assertFalse(await history_ready())
+                await self.db.execute(
+                    "RESET ROLE; GRANT INSERT ON reign.checkpoint_writes TO reign_ci_app; SET ROLE reign_ci_app")
+                self.assertTrue(await history_ready())
+                await self.db.execute("RESET ROLE")
+                self.assertFalse(await history_ready())  # Superuser rejected.
+
     async def test_history_foreign_keys_reject_cross_owner_linkage(self):
         # Migration role creates the fixture, but database-level composite FK
         # prevents a message or checkpoint claiming someone else's thread.
