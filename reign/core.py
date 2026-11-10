@@ -32,9 +32,15 @@ async def lifespan(app: FastAPI):
     app.state.http = httpx.AsyncClient(timeout=60.0, trust_env=False)
     from reign.agent import AgentRuntime
     from reign.mcp_client import MCPTools, WorkspaceMCP
+    # Opt-in only. A missing disk, invalid key or failed archive initialization
+    # aborts startup rather than switching silently to process-local history.
+    archive = None
+    if os.environ.get("REIGN_HISTORY_MODE", "disabled") == "disk":
+        from reign.disk_history import HistoryArchive
+        archive = HistoryArchive.from_env()
     try:
         async with WorkspaceMCP().connect() as connection:
-            app.state.agent = AgentRuntime(adapter=MCPTools(connection))
+            app.state.agent = AgentRuntime(adapter=MCPTools(connection), archive=archive)
             app.state.voice = VoiceBroker(app.state.http)
             try:
                 yield
@@ -160,12 +166,24 @@ async def database_ready():
 
 @app.get("/api/history/readyz", dependencies=[Depends(authorize)])
 async def history_readiness():
-    """Read-only release preflight, not a migration or activation endpoint."""
+    """Read-only probe; distinguish durable transcript from graph checkpoints."""
+    if getattr(app.state.agent, "archive", None) is not None:
+        return {"status": "ready", "storage": "encrypted_core_disk",
+                "activation": "durable_transcript", "graph_checkpoints": "ephemeral"}
     from reign.history_readiness import history_ready
     if not await history_ready():
         raise HTTPException(503, "Durable history is not ready")
     return {"status": "preflight_passed", "storage": "encrypted_postgres",
             "activation": "disabled"}
+
+
+@app.get("/api/history/conversations", dependencies=[Depends(authorize)])
+async def history_conversations():
+    """Authenticated Core-only list of thread identifiers; no message contents."""
+    archive = getattr(app.state.agent, "archive", None)
+    if archive is None:
+        raise HTTPException(503, "History archive is not enabled")
+    return {"conversations": archive.list_threads()}
 
 
 @app.post("/api/sessions", dependencies=[Depends(authorize)])
