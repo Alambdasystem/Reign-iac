@@ -59,7 +59,12 @@ function harness({threadStatus = 404, oldBrowser = false} = {}) {
     thread_id: id, run_id: 'synthetic-run', status, session_id: sessionId,
     events: status === 'completed' ? [{sequence: 1, kind: 'completed'}] : [],
     answer: status === 'completed' ? 'Browser status checked.' : '', error: null,
-    usage: {input_tokens: 1, output_tokens: 1}, turns: 1, max_turns: 12
+    usage: {input_tokens: 1, output_tokens: 1}, turns: 1, max_turns: 12,
+    memory: 'ephemeral', trace_id: '00000000-0000-4000-8000-000000000005',
+    trace_spans: [{service: 'core', operation: 'agent.tool', tool_name: 'workspace_status',
+      outcome: 'ok', duration_ms: 12, input_tokens: 1, output_tokens: 0},
+      {service: 'core', operation: 'agent.tool\\nprivate-password',
+       tool_name: 'password=my-fixture-secret', outcome: 'ok', duration_ms: 1}]
   });
   const json = (value, status = 200) => new Response(JSON.stringify(value), {
     status, headers: {'Content-Type': 'application/json'}
@@ -160,4 +165,17 @@ test('a temporary chat lookup failure keeps the thread and reports an interrupte
   assert.equal(h.node('agentLabel').textContent, 'Agent connection interrupted');
   assert.doesNotMatch(h.node('feed').textContent, /previous conversation expired/i);
   assert.ok(h.calls.every(call => call.method === 'GET'));
+});
+
+test('current-run trace inspector shows allowlisted metadata but no untrusted tool text', async () => {
+  const h = harness();
+  await h.ready();
+  h.node('message').value = 'Show the workspace status.';
+  h.node('form').onsubmit({preventDefault() {}});
+  await eventually(() => h.node('agentLabel').textContent.startsWith('Ready ·'));
+  const text = h.node('traceOutput').textContent;
+  assert.match(text, /Ephemeral.*Core restart/);
+  assert.match(text, /core \/ agent\.tool · workspace_status · ok · 12 ms/);
+  assert.doesNotMatch(text, /my-fixture-secret|private-password|password=/);
+  assert.match(text, /Trace events: 2/);
 });
