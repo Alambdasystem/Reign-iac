@@ -62,7 +62,8 @@ class CoreTests(unittest.TestCase):
                 with patch("reign.history_readiness.history_ready", new_callable=AsyncMock) as probe:
                     probe.return_value = True
                     self.assertEqual(client.get("/api/history/readyz", headers=headers).json(),
-                                     {"status": "ready", "storage": "encrypted_postgres"})
+                                     {"status": "preflight_passed", "storage": "encrypted_postgres",
+                                      "activation": "disabled"})
                     probe.return_value = False
                     self.assertEqual(client.get("/api/history/readyz", headers=headers).status_code, 503)
 
