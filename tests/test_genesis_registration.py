@@ -75,3 +75,35 @@ class GenesisRegistrationTests(unittest.TestCase):
         self.genesis.register_draft(self.request(), **self.subject)
         with self.assertRaises(RegistryDenied):
             self.genesis.register_draft(self.request(), **self.subject)
+
+    def test_duplicate_owner_cannot_receive_green_preview(self):
+        self.genesis.register_draft(self.request(), **self.subject)
+        with self.assertRaises(RegistryDenied):
+            self.genesis.preview(self.request(), **self.subject)
+        self.assertEqual(len(self.registry.list_owned("tenant-a", principal_id="owner-a")), 1)
+
+    def test_self_parent_is_rejected_at_preview_and_draft(self):
+        self_ref = self.request(parent="research")
+        with self.assertRaises(RegistryDenied):
+            self.genesis.preview(self_ref, **self.subject)
+        with self.assertRaises(RegistryDenied):
+            self.genesis.register_draft(self_ref, **self.subject)
+        self.assertEqual(self.registry.list_owned("tenant-a", principal_id="owner-a"), ())
+
+    def test_parent_suspension_between_preview_and_registration_denies(self):
+        parent = AgentRecord(
+            agent_id="reign", tenant_id="tenant-a", owner_id="owner-a",
+            name="REIGN", harness="langgraph", provider="render",
+            constitution_version="v1", capabilities=frozenset({"web.read"}))
+        self.registry.create(parent, principal_id="owner-a")
+        self.registry.transition("tenant-a", "reign", "active",
+                                 principal_id="owner-a", expected_revision=1)
+        self.assertEqual(self.genesis.preview(
+            self.request(parent="reign"), **self.subject).allowed_capabilities,
+            ("web.read",))
+        self.registry.transition("tenant-a", "reign", "suspended",
+                                 principal_id="owner-a", expected_revision=2)
+        with self.assertRaises(RegistryDenied):
+            self.genesis.register_draft(self.request(parent="reign"), **self.subject)
+        self.assertEqual(self.registry.list_owned("tenant-a", principal_id="owner-a")[0].agent_id,
+                         "reign")

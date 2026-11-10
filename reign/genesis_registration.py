@@ -49,6 +49,18 @@ class GenesisRegistration:
             name=request.name, harness=request.harness, provider=request.provider,
             constitution_version=self.constitution.version,
             capabilities=request.capabilities, parent_id=request.parent_id)
+        # The preview is an approval candidate, not a promise to provision.
+        # Reject locally provable invalid registrations before presenting it.
+        if record.parent_id == record.agent_id:
+            raise RegistryDenied("Agent cannot parent itself")
+        try:
+            self.registry.get(tenant_id, record.agent_id, principal_id=principal_id)
+        except RegistryDenied:
+            # Access-denied and absent records are intentionally indistinguishable.
+            # create() still checks uniqueness against all owners at commit time.
+            pass
+        else:
+            raise RegistryDenied("Agent already registered")
         allowed = record.capabilities & self.constitution.allowed_tools
         allowed -= self.constitution.blocked_tools
         if record.parent_id is not None:
