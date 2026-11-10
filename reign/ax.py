@@ -171,6 +171,14 @@ async def console():
         path = Path(__file__).resolve().parent.parent / "services" / "ax" / "index.html"
     return FileResponse(path, headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
+@app.get("/genesis")
+async def genesis_console(request: Request):
+    user(request)
+    path = ASSETS / "genesis.html"
+    return FileResponse(path, headers={"Cache-Control": "no-store",
+                                       "X-Content-Type-Options": "nosniff"})
+
+
 @app.get("/healthz")
 async def health():
     return {"status": "ok"}
@@ -424,6 +432,34 @@ async def chat_state(tid: str, request: Request):
 async def chat_resume(tid: str, request: Request):
     csrf(request)
     return JSONResponse((await core("POST", f"/api/chat/{session_id(tid)}/resume")).json(), headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/genesis/status")
+async def genesis_status(request: Request):
+    user(request)
+    return JSONResponse((await core("GET", "/api/genesis/status")).json(),
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/genesis/agents")
+async def genesis_agents(request: Request):
+    user(request)
+    return JSONResponse((await core("GET", "/api/genesis/agents")).json(),
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/genesis/preview")
+async def genesis_preview(request: Request):
+    csrf(request)
+    return JSONResponse((await core("POST", "/api/genesis/preview", await request.json())).json(),
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/genesis/agents")
+async def genesis_register(request: Request):
+    csrf(request)
+    return JSONResponse((await core("POST", "/api/genesis/agents", await request.json())).json(),
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.delete("/api/chat/{tid}")
