@@ -73,7 +73,7 @@ async def main():
             await expect(page.locator("#agents")).to_contain_text(agent_id)
             passed("G12 refresh preserves registered draft")
             await page.locator("#preview").click()
-            await expect(page.locator("#formStatus")).to_contain_text("Genesis request denied")
+            await expect(page.locator("#formStatus")).to_contain_text("Genesis preview denied")
             passed("G13 persisted duplicate preview fail-closed")
             await page.locator("#register").click()
             await expect(page.locator("#formStatus")).to_contain_text("Genesis registration denied")
