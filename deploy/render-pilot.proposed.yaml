@@ -107,7 +107,7 @@ services:
   - key: REIGN_VAULT_KEY
     generateValue: true
   # Existing private Core mount stores encrypted transcript records. The
-  # history key is provided only via Render's manual secret input, never Git.
+  # Render generates/preserves a random 256-bit key; no secret enters Git.
   - key: REIGN_HISTORY_MODE
     value: disk
   - key: REIGN_HISTORY_KEY
