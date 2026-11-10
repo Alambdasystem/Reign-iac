@@ -102,8 +102,15 @@ class AgentState(TypedDict):
 
 
 class Conversation:
-    def __init__(self, model, adapter, *, checkpointer=None):
-        self.id = str(uuid.uuid4())
+    def __init__(self, model, adapter, *, checkpointer=None, thread_id=None):
+        # Only a trusted, authenticated Core lifecycle may supply a restored ID;
+        # this constructor does not itself authorize loading another owner's data.
+        if thread_id is None:
+            self.id = str(uuid.uuid4())
+        elif type(thread_id) is str:
+            self.id = str(uuid.UUID(thread_id))
+        else:
+            raise ValueError("Invalid checkpoint thread identifier")
         self.model, self.adapter = model, adapter
         # Durable storage is injected only by a trusted authenticated Core
         # lifecycle; a model, prompt or request cannot select a saver/owner.
