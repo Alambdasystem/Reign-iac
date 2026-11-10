@@ -28,6 +28,31 @@ function recalled(){try{return sessionStorage.getItem('reign-session')}catch{ret
 function say(message,mode){$('status').textContent=message;if(mode&&!voiceUi.active){$('state').textContent=mode;voiceState=mode==='Working'?'working':'idle';activity=mode==='Working'?.55:.1;document.querySelector('.orb').dataset.mode=mode==='Your control'?'human':voiceState}wake()}
 function entry(title,message,error=false){const row=document.createElement('div');row.className='entry'+(error?' error':'');const label=document.createElement('b');label.textContent=title;const time=document.createElement('time');time.textContent=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});row.append(time,label,document.createTextNode(message));$('feed').append(row);while($('feed').children.length>60)$('feed').firstChild.remove();$('feed').scrollTop=$('feed').scrollHeight;wake()}
 function csrf(){return document.cookie.split('; ').find(x=>x.startsWith('ax_csrf='))?.slice(8)||''}
+
+function renderRunTrace(result){
+  const output=$('traceOutput');
+  if(!result){output.textContent='No current conversation trace.';return}
+  // This view is current-run, sanitized metadata only. It must never render
+  // model messages, browser form values, raw errors, request bodies or secrets.
+  const safe=value=>typeof value==='string'&&/^[a-z][a-z0-9_.-]{0,63}$/.test(value)?value:'—';
+  const count=value=>Number.isSafeInteger(value)&&value>=0&&value<=10000000?String(value):'—';
+  const storage=result.memory==='ephemeral'?'Ephemeral · lost after Core restart':
+    result.memory==='injected'?'Injected checkpoint saver · durability unverified':'Not reported';
+  const traceId=typeof result.trace_id==='string'&&/^[0-9a-f-]{36}$/.test(result.trace_id)?result.trace_id:'Unavailable';
+  const spans=Array.isArray(result.trace_spans)?result.trace_spans.slice(-40):[];
+  const lines=['Storage: '+storage,'Trace ID: '+traceId,
+    'Trace events: '+spans.length+' (last 40)',''];
+  for(const span of spans){
+    if(!span||typeof span!=='object')continue;
+    lines.push(safe(span.service)+' / '+safe(span.operation)+
+      (safe(span.tool_name)!=='—'?' · '+safe(span.tool_name):'')+
+      ' · '+safe(span.outcome)+' · '+count(span.duration_ms)+' ms'+
+      ' · tokens '+count(span.input_tokens)+'/'+count(span.output_tokens)+
+      (safe(span.error_code)!=='—'?' · '+safe(span.error_code):''));
+  }
+  output.textContent=lines.join('\n');
+}
+
 async function request(path,method='GET',body,options={}){
   const headers={},requestAbort=new AbortController();let timedOut=false;
   if(method!=='GET'){headers['Content-Type']='application/json';headers['X-CSRF-Token']=csrf()}
@@ -427,6 +452,7 @@ async function pollChat({restore=false}={}){
       if(threadId!==activeThread||generation!==chatGeneration)return;
     }
     chatInfo=result;
+    renderRunTrace(result);
     if(chatRun!==result.run_id){chatRun=result.run_id;chatSeen=0}
     chatState=result.status;
     if(detachExpiredConversation())return;
@@ -456,7 +482,7 @@ async function pollChat({restore=false}={}){
       // browser. Drop only this tab's chat reference; never cancel server work.
       const interrupted=!!chatPending;
       error.message=interrupted?'The conversation expired. Check the browser before starting a new task; an action already sent may have completed.':'The previous conversation expired. Your next message will start a new conversation.';
-      threadId=null;chatRun=null;chatSeen=0;chatInfo=null;chatState='idle';rememberChat();
+      threadId=null;chatRun=null;chatSeen=0;chatInfo=null;chatState='idle';rememberChat();renderRunTrace(null);
       settleChatJob(chatPending,null,error);chatOwner=null;notifyChatWaiters();
       entry('CONVERSATION',error.message,interrupted);refreshControls();
       $('agentLabel').textContent='New conversation · previous chat expired';
