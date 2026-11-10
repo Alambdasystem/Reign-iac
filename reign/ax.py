@@ -451,15 +451,25 @@ async def genesis_agents(request: Request):
 @app.post("/api/genesis/preview")
 async def genesis_preview(request: Request):
     csrf(request)
-    return JSONResponse((await core("POST", "/api/genesis/preview", await request.json())).json(),
-                        headers={"Cache-Control": "no-store"})
+    try:
+        result = await core("POST", "/api/genesis/preview", await request.json())
+    except HTTPException as error:
+        if error.status_code == 422:
+            raise HTTPException(422, "Genesis preview denied") from None
+        raise
+    return JSONResponse(result.json(), headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/genesis/agents")
 async def genesis_register(request: Request):
     csrf(request)
-    return JSONResponse((await core("POST", "/api/genesis/agents", await request.json())).json(),
-                        headers={"Cache-Control": "no-store"})
+    try:
+        result = await core("POST", "/api/genesis/agents", await request.json())
+    except HTTPException as error:
+        if error.status_code == 422:
+            raise HTTPException(422, "Genesis registration denied") from None
+        raise
+    return JSONResponse(result.json(), headers={"Cache-Control": "no-store"})
 
 
 @app.delete("/api/chat/{tid}")
