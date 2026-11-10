@@ -73,11 +73,20 @@ class DiskHistoryTests(unittest.IsolatedAsyncioTestCase):
     async def test_no_completed_tool_replay_after_new_runtime_reconstructs_context(self):
         adapter = Adapter()
         first = Model(tool_status(), AIMessage(content="The workspace is ready."))
+        save_errors = []
+        original_save = self.archive.save_turn
+        def instrumented_save(*args, **kwargs):
+            try:
+                return original_save(*args, **kwargs)
+            except Exception as exc:
+                save_errors.append((type(exc).__name__, str(exc)))
+                raise
+        self.archive.save_turn = instrumented_save
         self.runtime = AgentRuntime(lambda: first, adapter, archive=self.archive)
         receipt = self.runtime.submit("Check the workspace")
         thread = self.runtime.get(receipt["thread_id"])
         await thread.task
-        self.assertEqual(thread.status, "completed", repr((thread.error, thread.events, self.archive.list_threads())))
+        self.assertEqual(thread.status, "completed", repr((thread.error, thread.events, self.archive.list_threads(), save_errors, thread.turns)))
         self.assertEqual(adapter.calls, 1)
         self.assertEqual(self.archive.load_turns(thread.id),
                          [("Check the workspace", "The workspace is ready.")])
