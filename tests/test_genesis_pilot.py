@@ -35,6 +35,20 @@ class GenesisPilotTests(unittest.TestCase):
         self.assertEqual(preview["rejected_capabilities"], ("browser_click",))
         self.assertEqual(self.pilot.list_drafts(), [])
 
+    def test_preview_rejects_persisted_duplicate_after_restart(self):
+        self.pilot.create_draft("research", "Research", ["workspace_status"])
+        restarted = GenesisPilot(self.path)
+        with self.assertRaises(RegistryDenied):
+            restarted.preview("research", "Duplicate", ["workspace_status"])
+        self.assertEqual(len(restarted.list_drafts()), 1)
+
+    def test_preview_rejects_full_registry_without_mutation(self):
+        for i in range(40):
+            self.pilot.create_draft(f"agent-{i:02d}", "Draft", ["workspace_status"])
+        with self.assertRaises(RegistryDenied):
+            self.pilot.preview("agent-40", "Overflow", ["workspace_status"])
+        self.assertEqual(self.pilot.status()["draft_count"], 40)
+
     def test_blocked_capabilities_and_duplicate_registration_fail(self):
         with self.assertRaises(RegistryDenied):
             self.pilot.create_draft("research", "Research", ["browser_click"])
