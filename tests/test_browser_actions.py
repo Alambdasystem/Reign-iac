@@ -333,6 +333,27 @@ class OfflineBrowserActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(failure.exception.code, "human_verification_required")
         self.assertEqual(await self.page.evaluate("window.submits"), 0)
 
+    async def test_account_form_unavailable_rejects_before_redeeming_and_recovers_on_fresh_form(self):
+        # Reproduces the *class* of the live FillAccount rejection safely with
+        # a controlled fixture; it does not establish the live site's root cause.
+        await self.load('<h1>Sign in</h1><a href="/user/login">Continue</a>')
+        observation = await self.observed()
+        redeem = AsyncMock(return_value={"username": "fixture-user", "password": "fixture-only"})
+        with patch.dict("sys.modules", {"reign.credential_transport": types.SimpleNamespace(redeem_credentials=redeem)}):
+            with self.assertRaises(BrowserActionError) as failure:
+                await self.manager.fill_account(SID, "fixture-grant", observation["observation_id"], 0)
+            self.assertEqual(failure.exception.code, "account_form_unavailable")
+            redeem.assert_not_awaited()
+            # A new page observation, not an automatic replay of that grant,
+            # is required when the user opens a compatible login form.
+            await self.load(LOGIN)
+            fresh = await self.observed()
+            result = await self.manager.fill_account(SID, "fresh-fixture-grant", fresh["observation_id"], 0)
+            self.assertTrue(result["filled"])
+            self.assertEqual(await self.page.evaluate("window.submits"), 0)
+            redeem.assert_awaited_once_with(
+                "fresh-fixture-grant", SID, fresh["observation_id"], 0, ORIGIN)
+
     async def test_ambiguous_or_cross_origin_form_never_redeems(self):
         redeem = AsyncMock(return_value={"username": "fixture-user", "password": "fixture-password"})
         for body in (LOGIN + LOGIN, LOGIN.replace('action="/user/login"', 'action="https://outside.example.test/login"')):
