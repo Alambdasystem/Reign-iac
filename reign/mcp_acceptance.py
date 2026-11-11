@@ -45,12 +45,9 @@ async def main():
         assert isinstance(listing, dict) and "error" not in listing, listing
         assert "password" not in json.dumps(listing).lower()
         record("M05 account listing returns no passwords")
-        try:
-            await mcp.invoke("open_browser", {"url": "https://example.com/"})
-        except HTTPException as exc:
-            assert exc.status_code == 403, exc
-        else:
-            raise AssertionError("MCP allowed unapproved destination")
+        denied_url = await mcp.invoke("open_browser", {"url": "https://example.com/"})
+        assert denied_url.get("code") == "invalid_tool_context", denied_url
+        assert denied_url.get("status") == 403, denied_url
         record("M06 disallowed browser destination rejected before effects")
         try:
             await mcp.invoke("workspace_status", {"owner_id": "forged"})
