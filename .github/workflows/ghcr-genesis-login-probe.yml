@@ -19,6 +19,12 @@ jobs:
           set -euo pipefail
           actual="$(gh api repos/$GITHUB_REPOSITORY/branches/main --jq .commit.sha)"
           test "$actual" = "$SOURCE_SHA" || { echo "::error::Main changed"; exit 1; }
+      - name: Inspect main validation and gated CD statuses
+        run: |
+          echo "MAIN_VALIDATION_RUNS"
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/validate.yml/runs?per_page=20" --jq '.workflow_runs[] | select(.head_sha==env.SOURCE_SHA) | {id,status,conclusion,html_url}' || true
+          echo "GATED_PUBLICATION_RUNS"
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/reign-cd.yml/runs?per_page=20" --jq '.workflow_runs[] | select(.head_sha==env.SOURCE_SHA) | {id,status,conclusion,html_url}' || true
       - name: Verify immutable GHCR AX digest
         run: |
           set -euo pipefail
