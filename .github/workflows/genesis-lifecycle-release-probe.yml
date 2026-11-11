@@ -1,0 +1,42 @@
+name: Genesis lifecycle image publication receipt
+on:
+  pull_request:
+    paths: [.github/workflows/genesis-lifecycle-release-probe.yml]
+permissions:
+  contents: read
+  packages: read
+  actions: read
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_SHA: 3abae1b75bfc717972bc1556f6ae8d891a8d4856
+    steps:
+      - name: Check immutable main and its CI release
+        run: |
+          set -euo pipefail
+          test "$(gh api repos/$GITHUB_REPOSITORY/branches/main --jq .commit.sha)" = "$SOURCE_SHA"
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/validate.yml/runs?per_page=30" \
+            --jq '.workflow_runs[] | select(.head_sha==env.SOURCE_SHA) | {id,status,conclusion,html_url}'
+          found=false
+          for run in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/reign-cd.yml/runs?per_page=30" --jq '.workflow_runs[] | select(.conclusion=="success") | .id'); do
+            artifact="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts?per_page=100" --jq ".artifacts[] | select(.name==\"tested-release-$SOURCE_SHA\" and .expired==false) | .id" | head -n 1)"
+            if [[ -n "$artifact" ]]; then
+              echo "RELEASE_RUN=https://github.com/$GITHUB_REPOSITORY/actions/runs/$run"
+              echo "RELEASE_ARTIFACT=$artifact"
+              found=true;break
+            fi
+          done
+          [[ "$found" == true ]] || { echo "::error::Main gated release has no successful artifact"; exit 1; }
+      - name: Verify Core and AX digest from exact source tags
+        run: |
+          set -euo pipefail
+          for component in core ax; do
+            image="ghcr.io/alambdasystem/reign-$component:$SOURCE_SHA"
+            out="$(docker buildx imagetools inspect "$image")" || exit 1
+            digest="$(printf '%s\n' "$out" | awk '$1=="Digest:" {print $2; exit}')"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || exit 1
+            echo "IMAGE_$component=ghcr.io/alambdasystem/reign-$component@$digest"
+          done
