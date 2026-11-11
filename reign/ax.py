@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from pydantic import BaseModel
@@ -173,7 +173,15 @@ async def console():
 
 @app.get("/genesis")
 async def genesis_console(request: Request):
-    user(request)
+    try:
+        user(request)
+    except HTTPException as error:
+        if error.status_code == 401:
+            # A direct browser link needs to reach the normal sign-in page.
+            # API endpoints still return 401 and no Genesis data is exposed.
+            return RedirectResponse(url="/", status_code=303,
+                                    headers={"Cache-Control": "no-store"})
+        raise
     path = ASSETS / "genesis.html"
     return FileResponse(path, headers={"Cache-Control": "no-store",
                                        "X-Content-Type-Options": "nosniff"})

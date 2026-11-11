@@ -30,8 +30,10 @@ async def main():
         page.on("console", lambda m: console_errors.append(m.text) if m.type == "error" else None)
         try:
             response = await page.goto(AX + "/genesis")
-            assert response.status == 401
-            passed("G01 anonymous Genesis page denied")
+            assert response.status == 200
+            assert page.url.rstrip("/") == AX
+            await expect(page.locator("#loginForm")).to_be_visible()
+            passed("G01 anonymous Genesis page redirects to login without exposing console")
             assert (await context.request.get(AX + "/api/genesis/agents")).status == 401
             passed("G02 anonymous draft listing denied")
             assert (await context.request.post(AX + "/api/genesis/preview", data={})).status == 401
