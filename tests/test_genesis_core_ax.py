@@ -51,7 +51,11 @@ class GenesisAXTests(unittest.TestCase):
     def test_genesis_console_requires_login_and_csrf(self):
         with patch.dict(os.environ, SETTINGS):
             with TestClient(ax_app, base_url="https://ax.example.com") as client:
-                self.assertEqual(client.get("/genesis").status_code,401)
+                unauth = client.get("/genesis", follow_redirects=False)
+                self.assertEqual(unauth.status_code, 303)
+                self.assertEqual(unauth.headers["location"], "/")
+                self.assertEqual(client.get("/genesis").status_code, 200)
+                self.assertIn("loginForm", client.get("/genesis").text)
                 self.assertEqual(client.get("/api/genesis/status").status_code,401)
                 self.assertEqual(client.post("/api/genesis/agents",json={}).status_code,401)
                 self.assertEqual(client.post("/login",json={"password":"p"*40}).status_code,200)
