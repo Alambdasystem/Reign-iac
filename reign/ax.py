@@ -1,6 +1,7 @@
 """UltraView AX: authenticated human console for the private REIGN Core."""
 import json
 import os
+import re
 import secrets
 import uuid
 from contextlib import asynccontextmanager
@@ -477,6 +478,61 @@ async def genesis_register(request: Request):
         if error.status_code == 422:
             raise HTTPException(422, "Genesis registration denied") from None
         raise
+    return JSONResponse(result.json(), headers={"Cache-Control": "no-store"})
+
+
+def genesis_agent_id(value: str) -> str:
+    if not re.fullmatch(r"[a-z][a-z0-9-]{1,62}", value):
+        raise HTTPException(422, "Invalid Genesis agent ID")
+    return value
+
+
+async def genesis_mutation(method: str, path: str, body: dict):
+    try:
+        result = await core(method, path, body)
+    except HTTPException as error:
+        if error.status_code in (404, 409, 422):
+            raise HTTPException(error.status_code, {
+                404: "Genesis draft not found",
+                409: "Genesis revision conflict; refresh and retry",
+                422: "Genesis draft action denied",
+            }[error.status_code]) from None
+        raise
+    return JSONResponse(result.json(), headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/genesis/agents/{agent_id}")
+async def genesis_detail(agent_id: str, request: Request):
+    user(request)
+    result = await core("GET", f"/api/genesis/agents/{genesis_agent_id(agent_id)}")
+    return JSONResponse(result.json(), headers={"Cache-Control": "no-store"})
+
+
+@app.put("/api/genesis/agents/{agent_id}")
+async def genesis_update(agent_id: str, request: Request):
+    csrf(request)
+    return await genesis_mutation("PUT", f"/api/genesis/agents/{genesis_agent_id(agent_id)}",
+                                  await request.json())
+
+
+@app.delete("/api/genesis/agents/{agent_id}")
+async def genesis_delete(agent_id: str, request: Request):
+    csrf(request)
+    return await genesis_mutation("DELETE", f"/api/genesis/agents/{genesis_agent_id(agent_id)}",
+                                  await request.json())
+
+
+@app.post("/api/genesis/agents/{agent_id}/clone")
+async def genesis_clone(agent_id: str, request: Request):
+    csrf(request)
+    return await genesis_mutation("POST", f"/api/genesis/agents/{genesis_agent_id(agent_id)}/clone",
+                                  await request.json())
+
+
+@app.get("/api/genesis/agents/{agent_id}/audit")
+async def genesis_audit(agent_id: str, request: Request):
+    user(request)
+    result = await core("GET", f"/api/genesis/agents/{genesis_agent_id(agent_id)}/audit")
     return JSONResponse(result.json(), headers={"Cache-Control": "no-store"})
 
 
