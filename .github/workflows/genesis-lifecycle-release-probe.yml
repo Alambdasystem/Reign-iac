@@ -20,6 +20,8 @@ jobs:
           test "$(gh api repos/$GITHUB_REPOSITORY/branches/main --jq .commit.sha)" = "$SOURCE_SHA"
           gh api "repos/$GITHUB_REPOSITORY/actions/workflows/validate.yml/runs?per_page=30" \
             --jq '.workflow_runs[] | select(.head_sha==env.SOURCE_SHA) | {id,status,conclusion,html_url}'
+          echo "ALL_GATED_MAIN_RELEASE_RUNS"
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/reign-cd.yml/runs?per_page=30" --jq '.workflow_runs[] | select(.head_sha==env.SOURCE_SHA) | {id,status,conclusion,html_url}' || true
           found=false
           for run in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/reign-cd.yml/runs?per_page=30" --jq '.workflow_runs[] | select(.conclusion=="success") | .id'); do
             artifact="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts?per_page=100" --jq ".artifacts[] | select(.name==\"tested-release-$SOURCE_SHA\" and .expired==false) | .id" | head -n 1)"
