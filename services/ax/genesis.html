@@ -20,7 +20,7 @@ legend{padding:0 7px;color:#d4d7e5;font-weight:600}
 .check{display:flex;align-items:center;gap:9px;font-weight:400;margin:7px 0}
 .check input{width:auto;margin:0}
 button{background:#9e4a78;border:1px solid #c67c9e;color:white;font:inherit;padding:11px 18px;border-radius:10px;cursor:pointer;font-weight:650}
-button.secondary{background:#2a3044;border-color:#5a607b}button:disabled{opacity:.45;cursor:not-allowed}
+button.secondary{background:#2a3044;border-color:#5a607b}button.danger{background:#632333;border-color:#ac5970}[hidden]{display:none!important}.draft-row{display:flex;justify-content:space-between;align-items:center;gap:12px}.draft-row button{padding:6px 10px;font-size:.85rem}.audit{font-size:.85rem;color:#d7d8e4}button:disabled{opacity:.45;cursor:not-allowed}
 .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
 .status{font-size:.9rem;margin-top:14px;padding:10px;border-radius:9px;background:#ffffff10;min-height:40px}
 .note{font-size:.9rem}
@@ -53,6 +53,23 @@ code{font-size:.9rem;color:#edc8df}
 <h2 style="margin-top:28px">Registered drafts</h2>
 <div id="agents" class="status" aria-live="polite">Loading…</div>
 <div class="actions"><button id="refresh" type="button" class="secondary">Refresh</button></div>
+<section id="detailPanel" class="panel" hidden style="margin-top:20px;padding:18px">
+<h2 id="detailHeading">Edit draft</h2>
+<p id="detailMeta" class="note"></p>
+<label for="editName">Display name<input id="editName" maxlength="120" required></label>
+<fieldset><legend>Draft read-only capabilities</legend>
+<label class="check"><input type="checkbox" class="editCap" value="workspace_status">Workspace status</label>
+<label class="check"><input type="checkbox" class="editCap" value="browser_status">Browser status</label>
+<label class="check"><input type="checkbox" class="editCap" value="browser_observe">Browser observe</label>
+</fieldset>
+<div class="actions"><button type="button" id="saveDraft">Save changes</button><button type="button" id="closeDetail" class="secondary">Close</button></div>
+<label for="cloneId">Clone as new agent ID<input id="cloneId" maxlength="63" pattern="[a-z][a-z0-9-]{1,62}" placeholder="research-copy"></label>
+<div class="actions"><button type="button" id="cloneDraft" class="secondary">Clone draft</button></div>
+<label class="check"><input type="checkbox" id="confirmDelete">I confirm deletion of this unprovisioned draft</label>
+<div class="actions"><button type="button" id="deleteDraft" class="danger">Delete draft</button></div>
+<div role="status" id="detailStatus" class="status">Select a draft.</div>
+<h2>Audit history</h2><div id="auditHistory" class="audit">No events loaded.</div>
+</section>
 </div>
 </section>
 </main>
@@ -77,10 +94,68 @@ async function refresh(){
  const node=el('agents');node.replaceChildren();
  if(!result.agents.length){node.textContent='No drafts registered yet.';showStatus('Draft registration ready.');return}
  const list=document.createElement('ul');
- for(const agent of result.agents){const li=document.createElement('li');const label=document.createElement('strong');label.textContent=agent.name+' ('+agent.agent_id+')';const tag=document.createElement('span');tag.className='badge';tag.textContent='DRAFT';li.append(label,document.createTextNode(' '),tag);const details=document.createElement('p');details.textContent=agent.capabilities.join(', ')||'No capabilities';li.append(details);list.append(li)}
+ for(const agent of result.agents){const li=document.createElement('li');const item=document.createElement('div');item.className='draft-row';const label=document.createElement('strong');label.textContent=agent.name+' ('+agent.agent_id+')';const open=document.createElement('button');open.type='button';open.className='secondary';open.textContent='Manage';open.onclick=()=>openDraft(agent.agent_id);item.append(label,open);const tag=document.createElement('span');tag.className='badge';tag.textContent='DRAFT';li.append(item,tag);const details=document.createElement('p');details.textContent=(agent.capabilities.join(', ')||'No capabilities')+' · revision '+(agent.revision||1);li.append(details);list.append(li)}
  node.append(list);showStatus('Draft registration ready.');
  }catch(error){el('guardrails').textContent='Unavailable';el('agents').textContent='Registration service unavailable';showStatus(error.message)}
 }
+let selectedDraft=null;
+async function openDraft(id){
+ try{
+ const [draft,audit]=await Promise.all([
+   call('/api/genesis/agents/'+encodeURIComponent(id)),
+   call('/api/genesis/agents/'+encodeURIComponent(id)+'/audit')
+ ]);
+ selectedDraft=draft;
+ el('detailHeading').textContent='Manage '+draft.agent_id;
+ el('detailMeta').textContent='Status: DRAFT · Revision '+draft.revision+' · Provisioned: No';
+ el('editName').value=draft.name;
+ document.querySelectorAll('.editCap').forEach(check=>check.checked=draft.capabilities.includes(check.value));
+ el('cloneId').value='';
+ el('confirmDelete').checked=false;
+ el('detailPanel').hidden=false;
+ el('detailStatus').textContent='Editing draft only. No agent execution.';
+ showAudit(audit.events);
+ }catch(error){el('detailStatus').textContent=error.message;el('detailPanel').hidden=false}
+}
+function showAudit(events){
+ const node=el('auditHistory');node.replaceChildren();
+ if(!events.length){node.textContent='No audit events.';return}
+ const ul=document.createElement('ul');
+ for(const event of events){const li=document.createElement('li');li.textContent=event.created_at+' · '+event.action+' · revision '+event.revision;ul.append(li)}
+ node.append(ul);
+}
+async function performDraftAction(path,method,data,success){
+ if(!selectedDraft)return;
+ const id=selectedDraft.agent_id;
+ try{
+ const result=await call('/api/genesis/agents/'+encodeURIComponent(id)+path,method,data);
+ el('detailStatus').textContent=success;
+ await refresh();
+ if(method==='DELETE'){selectedDraft=null;el('detailPanel').hidden=true;return}
+ await openDraft(id);
+ return result;
+ }catch(error){el('detailStatus').textContent=error.message+' (refresh the draft if its revision changed)'}
+}
+el('saveDraft').onclick=async()=>{
+ if(!selectedDraft)return;
+ const name=el('editName').value.trim();
+ if(!name){el('detailStatus').textContent='Display name required';return}
+ await performDraftAction('','PUT',{name,capabilities:[...document.querySelectorAll('.editCap:checked')].map(x=>x.value),expected_revision:selectedDraft.revision},'Draft saved');
+};
+el('cloneDraft').onclick=async()=>{
+ if(!selectedDraft)return;
+ const id=el('cloneId').value.trim();
+ if(!/^[a-z][a-z0-9-]{1,62}$/.test(id)){el('detailStatus').textContent='Enter a valid new agent ID';return}
+ try{
+ await call('/api/genesis/agents/'+encodeURIComponent(selectedDraft.agent_id)+'/clone','POST',{new_agent_id:id,expected_revision:selectedDraft.revision});
+ await refresh();await openDraft(id);el('detailStatus').textContent='Cloned as a separate unprovisioned draft';
+ }catch(error){el('detailStatus').textContent=error.message}
+};
+el('deleteDraft').onclick=async()=>{
+ if(!selectedDraft||!el('confirmDelete').checked){el('detailStatus').textContent='Confirm draft deletion first';return}
+ await performDraftAction('','DELETE',{expected_revision:selectedDraft.revision},'Draft deleted');
+};
+el('closeDetail').onclick=()=>{el('detailPanel').hidden=true;selectedDraft=null};
 el('preview').onclick=async()=>{if(!el('agentForm').reportValidity())return;try{const p=await call('/api/genesis/preview','POST',readForm());showStatus('Allowed: '+(p.allowed_capabilities.join(', ')||'none')+'; blocked: '+(p.rejected_capabilities.join(', ')||'none')+'. Still requires approval.')}catch(e){showStatus(e.message)}};
 el('agentForm').onsubmit=async e=>{e.preventDefault();if(!el('agentForm').reportValidity())return;const b=el('register');b.disabled=true;try{const d=await call('/api/genesis/agents','POST',readForm());showStatus('Saved '+d.agent_id+' as draft. No agent deployed.');await refresh()}catch(error){showStatus(error.message)}finally{b.disabled=false}};
 el('refresh').onclick=refresh;refresh();

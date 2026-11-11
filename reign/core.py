@@ -366,5 +366,72 @@ async def genesis_register(data: GenesisDraftRequest):
     except (RegistryDenied, ValueError):
         raise HTTPException(422, "Genesis registration denied") from None
 
+class GenesisUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=120)
+    capabilities: list[str] = Field(default_factory=list, max_length=12)
+    expected_revision: int = Field(ge=1)
+
+
+class GenesisRevisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=1)
+
+
+class GenesisCloneRequest(GenesisRevisionRequest):
+    new_agent_id: str = Field(min_length=2, max_length=63)
+
+
+def genesis_lifecycle_error(error):
+    from reign.genesis_pilot import DraftMissing, DraftConflict
+    from reign.sovereign_registry import RegistryDenied
+    if isinstance(error, DraftMissing):
+        raise HTTPException(404, "Genesis draft not found") from None
+    if isinstance(error, DraftConflict):
+        raise HTTPException(409, "Genesis draft revision conflict") from None
+    if isinstance(error, (RegistryDenied, ValueError)):
+        raise HTTPException(422, "Genesis draft action denied") from None
+    raise error
+
+
+@app.get("/api/genesis/agents/{agent_id}", dependencies=[Depends(authorize)])
+async def genesis_draft_detail(agent_id: str):
+    try:
+        return genesis_pilot().get_draft(agent_id)
+    except Exception as error:
+        genesis_lifecycle_error(error)
+
+
+@app.put("/api/genesis/agents/{agent_id}", dependencies=[Depends(authorize)])
+async def genesis_draft_update(agent_id: str, data: GenesisUpdateRequest):
+    try:
+        return genesis_pilot().update_draft(
+            agent_id, data.name, data.capabilities, expected_revision=data.expected_revision)
+    except Exception as error:
+        genesis_lifecycle_error(error)
+
+
+@app.delete("/api/genesis/agents/{agent_id}", dependencies=[Depends(authorize)])
+async def genesis_draft_delete(agent_id: str, data: GenesisRevisionRequest):
+    try:
+        return genesis_pilot().delete_draft(agent_id, expected_revision=data.expected_revision)
+    except Exception as error:
+        genesis_lifecycle_error(error)
+
+
+@app.post("/api/genesis/agents/{agent_id}/clone", dependencies=[Depends(authorize)])
+async def genesis_draft_clone(agent_id: str, data: GenesisCloneRequest):
+    try:
+        return genesis_pilot().clone_draft(
+            agent_id, data.new_agent_id, expected_revision=data.expected_revision)
+    except Exception as error:
+        genesis_lifecycle_error(error)
+
+
+@app.get("/api/genesis/agents/{agent_id}/audit", dependencies=[Depends(authorize)])
+async def genesis_draft_audit(agent_id: str):
+    return {"events": genesis_pilot().audit_events(agent_id)}
+
+
 from reign.accounts import install as install_accounts, vault_tool
 install_accounts(app, authorize)

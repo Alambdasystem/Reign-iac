@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from reign.genesis_pilot import GenesisPilot
+from reign.genesis_pilot import GenesisPilot, DraftMissing, DraftConflict
 from reign.sovereign_registry import RegistryDenied
 
 
@@ -63,6 +63,45 @@ class GenesisPilotTests(unittest.TestCase):
             self.pilot.create_draft("BAD ID", "Oops", [])
         with self.assertRaises(ValueError):
             self.pilot.create_draft("okay", "Oops", ["workspace_status"] * 13)
+
+    def test_update_clone_delete_audit_and_restart(self):
+        first = self.pilot.create_draft("research", "Research", ["workspace_status"])
+        self.assertEqual(first["revision"], 1)
+        changed = self.pilot.update_draft("research", "Research Updated",
+                   ["browser_status"], expected_revision=1)
+        self.assertEqual(changed["revision"], 2)
+        self.assertEqual(changed["capabilities"], ["browser_status"])
+        with self.assertRaises(DraftConflict):
+            self.pilot.update_draft("research", "Stale", [], expected_revision=1)
+        copied = self.pilot.clone_draft("research", "research-copy", expected_revision=2)
+        self.assertEqual(copied["state"], "draft")
+        self.assertFalse(copied["provisioned"])
+        self.assertEqual(copied["revision"], 1)
+        with self.assertRaises(RegistryDenied):
+            self.pilot.update_draft("research", "Unsafe", ["browser_click"], expected_revision=2)
+        with self.assertRaises(DraftConflict):
+            self.pilot.delete_draft("research", expected_revision=1)
+        deleted = self.pilot.delete_draft("research", expected_revision=2)
+        self.assertTrue(deleted["deleted"])
+        with self.assertRaises(DraftMissing):
+            self.pilot.get_draft("research")
+        with self.assertRaises(DraftMissing):
+            self.pilot.delete_draft("research", expected_revision=2)
+        self.assertEqual([event["action"] for event in self.pilot.audit_events("research")],
+                         ["deleted", "updated", "created"])
+        restarted = GenesisPilot(self.path)
+        self.assertEqual([d["agent_id"] for d in restarted.list_drafts()], ["research-copy"])
+        self.assertEqual([e["revision"] for e in restarted.audit_events("research")], [3, 2, 1])
+
+    def test_legacy_draft_revision_migrates_without_rewriting(self):
+        created = self.pilot.create_draft("legacy", "Legacy", [])
+        created.pop("revision")
+        with sqlite3.connect(self.path) as db:
+            db.execute("UPDATE agent_drafts SET metadata=? WHERE agent_id='legacy'",
+                       (__import__("json").dumps(created),))
+        self.assertEqual(self.pilot.get_draft("legacy")["revision"], 1)
+        self.assertEqual(self.pilot.update_draft("legacy", "Modern", [],
+                         expected_revision=1)["revision"], 2)
 
     def test_symlink_registry_is_rejected(self):
         target = str(Path(self.tmp.name) / "real")
