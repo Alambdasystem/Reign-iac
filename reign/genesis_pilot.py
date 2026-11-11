@@ -25,6 +25,14 @@ ALLOWED = frozenset({"workspace_status", "browser_status", "browser_observe"})
 MAX_AGENTS = 40
 
 
+class DraftMissing(Exception):
+    """The requested draft is absent."""
+
+
+class DraftConflict(Exception):
+    """A caller supplied a stale expected revision."""
+
+
 class GenesisPilot:
     def __init__(self, path: str):
         self.path = path
@@ -35,6 +43,13 @@ class GenesisPilot:
             db.execute("""CREATE TABLE IF NOT EXISTS agent_drafts (
               agent_id TEXT PRIMARY KEY,
               metadata TEXT NOT NULL CHECK (length(metadata) BETWEEN 1 AND 4096),
+              created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )""")
+            db.execute("""CREATE TABLE IF NOT EXISTS agent_audit (
+              event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+              agent_id TEXT NOT NULL,
+              action TEXT NOT NULL,
+              revision INTEGER NOT NULL,
               created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )""")
 
@@ -103,7 +118,7 @@ class GenesisPilot:
         record = reg.register_draft(request, tenant_id=TENANT, owner_id=OWNER,
                                     principal_id=OWNER)
         data = {"agent_id": record.agent_id, "name": record.name,
-                "state": "draft", "provider": record.provider, "harness": record.harness,
+                "revision": 1, "state": "draft", "provider": record.provider, "harness": record.harness,
                 "constitution_version": record.constitution_version,
                 "capabilities": sorted(record.capabilities), "provisioned": False}
         with closing(self._connect()) as db, db:
@@ -116,12 +131,104 @@ class GenesisPilot:
                            (record.agent_id, json.dumps(data, sort_keys=True)))
             except sqlite3.IntegrityError:
                 raise RegistryDenied("Draft already registered") from None
+            db.execute("INSERT INTO agent_audit(agent_id,action,revision) VALUES (?, 'created', 1)",
+                       (record.agent_id,))
         return data
+
+    def get_draft(self, agent_id: str) -> dict:
+        with closing(self._connect()) as db:
+            row = db.execute("SELECT metadata FROM agent_drafts WHERE agent_id = ?",
+                             (agent_id,)).fetchone()
+        if row is None:
+            raise DraftMissing("Draft not found")
+        result = json.loads(row[0])
+        result.setdefault("revision", 1)  # Older pilot records.
+        return result
+
+    @staticmethod
+    def _expected_revision(value):
+        if type(value) is not int or value < 1:
+            raise ValueError("Expected positive integer revision")
+        return value
+
+    def update_draft(self, agent_id: str, name: str, capabilities: list[str],
+                     *, expected_revision: int) -> dict:
+        self._expected_revision(expected_revision)
+        # Validate the proposed configuration against the existing deny-by-default
+        # constitution before opening the SQLite write transaction.
+        request = self._request(agent_id, name, capabilities)
+        record = GenesisRegistration(AgentRegistry(), self.constitution).register_draft(
+            request, tenant_id=TENANT, owner_id=OWNER, principal_id=OWNER)
+        with closing(self._connect()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT metadata FROM agent_drafts WHERE agent_id = ?",
+                             (agent_id,)).fetchone()
+            if row is None:
+                raise DraftMissing("Draft not found")
+            previous = json.loads(row[0])
+            revision = previous.get("revision", 1)
+            if revision != expected_revision:
+                raise DraftConflict("Draft revision has changed")
+            if previous.get("state") != "draft" or previous.get("provisioned") is not False:
+                raise RegistryDenied("Only unprovisioned drafts may be modified")
+            updated = {**previous, "name": record.name, "capabilities": sorted(record.capabilities),
+                       "revision": revision + 1}
+            db.execute("UPDATE agent_drafts SET metadata=? WHERE agent_id=?",
+                       (json.dumps(updated, sort_keys=True), agent_id))
+            db.execute("INSERT INTO agent_audit(agent_id,action,revision) VALUES (?, 'updated', ?)",
+                       (agent_id, revision + 1))
+        return updated
+
+    def delete_draft(self, agent_id: str, *, expected_revision: int) -> dict:
+        self._expected_revision(expected_revision)
+        with closing(self._connect()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT metadata FROM agent_drafts WHERE agent_id = ?",
+                             (agent_id,)).fetchone()
+            if row is None:
+                raise DraftMissing("Draft not found")
+            previous = json.loads(row[0])
+            revision = previous.get("revision", 1)
+            if revision != expected_revision:
+                raise DraftConflict("Draft revision has changed")
+            if previous.get("state") != "draft" or previous.get("provisioned") is not False:
+                raise RegistryDenied("Only unprovisioned drafts may be deleted")
+            db.execute("DELETE FROM agent_drafts WHERE agent_id=?", (agent_id,))
+            db.execute("INSERT INTO agent_audit(agent_id,action,revision) VALUES (?, 'deleted', ?)",
+                       (agent_id, revision + 1))
+        return {"agent_id": agent_id, "deleted": True, "revision": revision + 1}
+
+    def clone_draft(self, agent_id: str, new_agent_id: str, *,
+                    expected_revision: int) -> dict:
+        self._expected_revision(expected_revision)
+        source = self.get_draft(agent_id)
+        if source["revision"] != expected_revision:
+            raise DraftConflict("Draft revision has changed")
+        if source.get("state") != "draft" or source.get("provisioned") is not False:
+            raise RegistryDenied("Only unprovisioned drafts may be cloned")
+        # This only copies validated non-secret draft metadata. It never copies
+        # runtime tokens, provider credentials, grants or execution state.
+        return self.create_draft(new_agent_id, source["name"] + " (copy)",
+                                 list(source["capabilities"]))
+
+    def audit_events(self, agent_id: str, *, limit: int = 50) -> list[dict]:
+        if type(limit) is not int or not 1 <= limit <= 50:
+            raise ValueError("Invalid audit limit")
+        with closing(self._connect()) as db:
+            rows = db.execute(
+                "SELECT event_id, action, revision, created_at FROM agent_audit "
+                "WHERE agent_id=? ORDER BY event_id DESC LIMIT ?",
+                (agent_id, limit)).fetchall()
+        return [{"event_id": event, "action": action, "revision": rev, "created_at": time}
+                for event, action, rev, time in rows]
 
     def list_drafts(self) -> list[dict]:
         with closing(self._connect()) as db, db:
             records = db.execute("SELECT metadata FROM agent_drafts ORDER BY agent_id LIMIT 40").fetchall()
-        return [json.loads(row[0]) for row in records]
+        result = [json.loads(row[0]) for row in records]
+        for draft in result:
+            draft.setdefault("revision", 1)
+        return result
 
     def status(self) -> dict:
         return {"mode": "draft_only", "provider_provisioning": False,
