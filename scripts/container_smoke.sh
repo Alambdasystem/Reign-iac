@@ -62,6 +62,9 @@ run_browser_test() {
   docker run --rm --network "$network" --ipc=host -v "$PWD/scripts:/smoke-scripts:ro" -v "$evidence:/evidence" -e CORE_TOKEN -e AX_ADMIN_PASSWORD -e SOURCE_SHA="${SOURCE_SHA:-${GITHUB_SHA:-local}}" -e SMOKE_PHASE="$1" reign-computer:ci python /smoke-scripts/browser_smoke.py
 }
 run_browser_test initial
+# Exercise the actual private stdio MCP server from Core, plus Genesis's
+# fail-closed draft-only policy. No model or real customer login is used.
+docker exec "$core" python -m reign.mcp_acceptance | tee "$evidence/mcp-genesis-acceptance.log"
 # Real authenticated AX/Genesis UI against disposable Core persistent disk.
 # Never set GENESIS_DRAFT_MODE=enabled in production from this CI fixture.
 docker run --rm --network "$network" --ipc=host -v "$PWD/scripts:/smoke-scripts:ro" -v "$evidence:/evidence" -e AX_ADMIN_PASSWORD -e SMOKE_PHASE=initial reign-computer:ci python /smoke-scripts/genesis_ui_smoke.py
