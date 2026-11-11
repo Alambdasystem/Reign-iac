@@ -88,7 +88,7 @@ async def main():
             await page.locator("#register").click()
             await expect(page.locator("#formStatus")).to_contain_text("Genesis registration denied")
             passed("G14 duplicate registration rejected")
-            await page.locator("#agents").get_by_role("button", name="Manage").first.click()
+            await page.locator("#agents li").filter(has_text="("+agent_id+")").get_by_role("button", name="Manage").click()
             await expect(page.locator("#detailPanel")).to_be_visible()
             await expect(page.locator("#auditHistory")).to_contain_text("created")
             passed("G25 agent detail and audit visible")
