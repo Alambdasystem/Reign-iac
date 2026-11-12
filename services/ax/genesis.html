@@ -92,7 +92,9 @@ code{font-size:.9rem;color:#edc8df}
 <label for="graphName">Name<input id="graphName" required maxlength="120" placeholder="Policy Review"></label>
 <label for="graphKB">Knowledge base<select id="graphKB" required></select></label>
 <label for="graphAgent">Draft agent<select id="graphAgent" required></select></label>
-<div class="status" aria-label="Workflow template">Start → KB Search → Knowledge Agent → End</div>
+<label for="graphTemplate">Workflow template<select id="graphTemplate"><option value="knowledge_review">Knowledge research</option><option value="approval_action">Knowledge + Human Approval + Action (preview only)</option></select></label>
+<div class="actions"><button type="button" id="generateGraph" class="secondary">Generate &amp; preview graph</button></div>
+<pre id="graphPreview" class="status" style="white-space:pre-wrap;overflow-wrap:anywhere" aria-live="polite">Select an agent and KB to preview a validated draft graph.</pre>
 <div class="actions"><button type="submit">Save graph &amp; assign</button></div>
 </form>
 <div id="graphStatus" class="status" role="status">Draft only; workflow execution disabled.</div>
@@ -217,21 +219,34 @@ el('kbForm').onsubmit=async event=>{
  await refreshCatalog();
  }catch(error){el('kbStatus').textContent=error.message}
 };
+let graphPreview=null;
+function resetGraphPreview(){graphPreview=null;el('graphPreview').textContent='Generate a new preview after changing the inputs.'}
+for(const id of ['graphAgent','graphKB','graphTemplate'])el(id).addEventListener('change',resetGraphPreview);
+el('generateGraph').onclick=async()=>{
+ const agent=el('graphAgent').value,kb=el('graphKB').value,template=el('graphTemplate').value;
+ if(!agent||!kb){el('graphStatus').textContent='Create a draft agent and KB first';return}
+ try{
+  const result=await call('/api/genesis/graphs/generate','POST',{agent_id:agent,kb_id:kb,template});
+  graphPreview={...result,agent,kb,template};
+  el('graphPreview').textContent=result.spec.nodes.map(n=>n.type+(n.ref?' ('+n.ref+')':'')).join(' → ');
+  el('graphStatus').textContent='Validated '+result.template+' graph preview. DRAFT only; cannot execute.';
+ }catch(error){resetGraphPreview();el('graphStatus').textContent='Graph preview denied: '+error.message}
+};
 el('graphForm').onsubmit=async event=>{
  event.preventDefault();
  if(!el('graphForm').reportValidity())return;
  const agent=el('graphAgent').value,kb=el('graphKB').value,id=el('graphId').value.trim();
  if(!agent||!kb){el('graphStatus').textContent='Create a draft agent and KB first';return}
- const spec={nodes:[
- {id:'begin',type:'start',ref:null},
- {id:'retrieve',type:'kb_search',ref:kb},
- {id:'analyst',type:'knowledge_agent',ref:agent},
- {id:'finish',type:'end',ref:null}],
- edges:[{from:'begin',to:'retrieve'},{from:'retrieve',to:'analyst'},{from:'analyst',to:'finish'}]};
+ if(!graphPreview||graphPreview.agent!==agent||graphPreview.kb!==kb||
+    graphPreview.template!==el('graphTemplate').value){
+    el('graphStatus').textContent='Generate and review a graph before saving.';return
+ }
+ const spec=graphPreview.spec;
  try{
  await call('/api/genesis/graphs','POST',{graph_id:id,name:el('graphName').value.trim(),spec});
  await call('/api/genesis/graphs/'+encodeURIComponent(id)+'/assign','POST',{agent_id:agent});
  el('graphStatus').textContent='Graph saved and assigned as DRAFT. Execution remains disabled.';
+ resetGraphPreview();
  await refreshCatalog();
  }catch(error){el('graphStatus').textContent='Graph action failed: '+error.message}
 };
