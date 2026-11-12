@@ -433,5 +433,86 @@ async def genesis_draft_audit(agent_id: str):
     return {"events": genesis_pilot().audit_events(agent_id)}
 
 
+# Genesis Studio control-plane definitions. No graph run, KB retrieval or
+# agent activation endpoints are exposed by this release.
+class GenesisKBDefinition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kb_id: str = Field(min_length=2, max_length=63)
+    name: str = Field(min_length=1, max_length=120)
+
+
+class GenesisGraphDefinition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    graph_id: str = Field(min_length=2, max_length=63)
+    name: str = Field(min_length=1, max_length=120)
+    spec: dict
+
+
+class GenesisGraphAssignment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    agent_id: str = Field(min_length=2, max_length=63)
+
+
+def genesis_catalog():
+    from reign.genesis_catalog import GenesisCatalog
+    # Catalog uses the same already-verified private Core disk and pilot identity.
+    return GenesisCatalog(genesis_pilot())
+
+
+def genesis_catalog_error(error):
+    from reign.genesis_catalog import CatalogMissing, CatalogConflict
+    from reign.genesis_pilot import DraftMissing
+    if isinstance(error, (CatalogMissing, DraftMissing)):
+        raise HTTPException(404, "Genesis catalog reference missing") from None
+    if isinstance(error, CatalogConflict):
+        raise HTTPException(409, "Genesis catalog definition already exists") from None
+    if isinstance(error, ValueError):
+        raise HTTPException(422, "Genesis catalog definition rejected") from None
+    raise error
+
+
+@app.get("/api/genesis/knowledge-bases", dependencies=[Depends(authorize)])
+async def genesis_kb_list():
+    return {"knowledge_bases": genesis_catalog().list_kbs()}
+
+
+@app.post("/api/genesis/knowledge-bases", dependencies=[Depends(authorize)])
+async def genesis_kb_create(data: GenesisKBDefinition):
+    try:
+        return genesis_catalog().create_kb(data.kb_id, data.name)
+    except Exception as error:
+        genesis_catalog_error(error)
+
+
+@app.get("/api/genesis/graphs", dependencies=[Depends(authorize)])
+async def genesis_graph_list():
+    return {"graphs": genesis_catalog().list_graphs()}
+
+
+@app.post("/api/genesis/graphs", dependencies=[Depends(authorize)])
+async def genesis_graph_create(data: GenesisGraphDefinition):
+    try:
+        return genesis_catalog().create_graph(data.graph_id, data.name, data.spec)
+    except Exception as error:
+        genesis_catalog_error(error)
+
+
+@app.post("/api/genesis/graphs/{graph_id}/assign", dependencies=[Depends(authorize)])
+async def genesis_graph_assign(graph_id: str, data: GenesisGraphAssignment):
+    try:
+        return genesis_catalog().assign_draft(graph_id, data.agent_id)
+    except Exception as error:
+        genesis_catalog_error(error)
+
+
+@app.get("/api/genesis/agents/{agent_id}/workflows", dependencies=[Depends(authorize)])
+async def genesis_assigned_workflows(agent_id: str):
+    try:
+        return {"workflows": genesis_catalog().workflows_for_agent(agent_id),
+                "runnable": False}
+    except Exception as error:
+        genesis_catalog_error(error)
+
+
 from reign.accounts import install as install_accounts, vault_tool
 install_accounts(app, authorize)
