@@ -54,6 +54,8 @@ def validate_graph(spec):
         key = _id(node["id"])
         kind = node["type"]
         ref = node["ref"]
+        if type(kind) is not str:
+            raise ValueError("Invalid node type")
         if key in kinds or kind not in NODE_TYPES:
             raise ValueError("Duplicate node or unknown type")
         if kind in {"knowledge_agent", "action_agent", "kb_search"}:
@@ -71,6 +73,8 @@ def validate_graph(spec):
         if type(edge) is not dict or set(edge) != {"from", "to"}:
             raise ValueError("Invalid edge")
         a, b = edge["from"], edge["to"]
+        if type(a) is not str or type(b) is not str:
+            raise ValueError("Invalid edge reference")
         if a not in kinds or b not in kinds or a == b or b in outgoing[a]:
             raise ValueError("Invalid, duplicate or cyclic edge")
         if kinds[a] == "end" or kinds[b] == "start":
