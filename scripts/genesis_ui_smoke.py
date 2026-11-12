@@ -121,6 +121,7 @@ async def main():
             await expect(page.locator("#kbStatus")).to_contain_text("No documents ingested")
             passed("G30 real AX/Core knowledge definition creation, nonqueryable")
             await page.locator("#refresh").click()
+            await page.locator("#graphKB").select_option(kb_id)
             await expect(page.locator("#graphKB")).to_have_value(kb_id)
             await page.locator("#graphAgent").select_option(agent_id)
             await page.locator("#graphId").fill(graph_id)
