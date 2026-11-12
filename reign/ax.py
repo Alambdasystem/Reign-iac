@@ -550,6 +550,28 @@ async def genesis_knowledge_create(request: Request):
     return await genesis_mutation("POST", "/api/genesis/knowledge-bases", await request.json())
 
 
+@app.post("/api/genesis/graphs/generate")
+async def genesis_graph_generate(request: Request):
+    csrf(request)
+    return await genesis_mutation("POST", "/api/genesis/graphs/generate",
+                                          await request.json())
+
+
+@app.get("/api/genesis/graphs/{graph_id}")
+async def genesis_graph_detail(graph_id: str, request: Request):
+    user(request)
+    result = await core("GET", f"/api/genesis/graphs/{genesis_agent_id(graph_id)}")
+    return JSONResponse(result.json(), headers={"Cache-Control": "no-store"})
+
+
+@app.put("/api/genesis/graphs/{graph_id}")
+async def genesis_graph_update(graph_id: str, request: Request):
+    csrf(request)
+    return await genesis_mutation(
+        "PUT", f"/api/genesis/graphs/{genesis_agent_id(graph_id)}",
+        await request.json())
+
+
 @app.get("/api/genesis/graphs")
 async def genesis_graph_list(request: Request):
     user(request)

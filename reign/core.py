@@ -484,6 +484,46 @@ async def genesis_kb_create(data: GenesisKBDefinition):
         genesis_catalog_error(error)
 
 
+class GenesisGraphTemplateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    template: Literal["knowledge_review", "approval_action"]
+    agent_id: str = Field(min_length=2, max_length=63)
+    kb_id: str = Field(min_length=2, max_length=63)
+
+
+class GenesisGraphUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=120)
+    spec: dict
+    expected_revision: int = Field(ge=1)
+
+
+@app.post("/api/genesis/graphs/generate", dependencies=[Depends(authorize)])
+async def genesis_generate_graph(data: GenesisGraphTemplateRequest):
+    try:
+        return genesis_catalog().generate_graph(
+            data.template, data.agent_id, data.kb_id)
+    except Exception as error:
+        genesis_catalog_error(error)
+
+
+@app.get("/api/genesis/graphs/{graph_id}", dependencies=[Depends(authorize)])
+async def genesis_graph_detail(graph_id: str):
+    try:
+        return genesis_catalog().get_graph(graph_id)
+    except Exception as error:
+        genesis_catalog_error(error)
+
+
+@app.put("/api/genesis/graphs/{graph_id}", dependencies=[Depends(authorize)])
+async def genesis_graph_update(graph_id: str, data: GenesisGraphUpdateRequest):
+    try:
+        return genesis_catalog().update_graph(
+            graph_id, data.name, data.spec, data.expected_revision)
+    except Exception as error:
+        genesis_catalog_error(error)
+
+
 @app.get("/api/genesis/graphs", dependencies=[Depends(authorize)])
 async def genesis_graph_list():
     return {"graphs": genesis_catalog().list_graphs()}

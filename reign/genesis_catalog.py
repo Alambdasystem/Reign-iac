@@ -173,6 +173,71 @@ class GenesisCatalog:
                 raise CatalogConflict("Graph already exists") from None
         return entry
 
+    def get_graph(self, graph_id):
+        graph_id = _id(graph_id)
+        with closing(self.pilot._connect()) as db:
+            row = db.execute("SELECT spec FROM graph_definitions WHERE graph_id=?",
+                             (graph_id,)).fetchone()
+        if row is None:
+            raise CatalogMissing("Graph not found")
+        return json.loads(row[0])
+
+    def generate_graph(self, template, agent_id, kb_id):
+        """Build a bounded *draft* DAG; never model code or direct execution."""
+        if template not in {"knowledge_review", "approval_action"}:
+            raise ValueError("Unsupported graph template")
+        agent_id, kb_id = _id(agent_id), _id(kb_id)
+        # Verify both references against the current durable pilot registry.
+        # Action templates are previews ONLY, never a privilege grant.
+        agent = self.pilot.get_draft(agent_id)
+        if agent.get("state") != "draft" or agent.get("provisioned") is not False:
+            raise ValueError("Only unprovisioned draft agents supported")
+        with closing(self.pilot._connect()) as db:
+            if db.execute("SELECT 1 FROM knowledge_definitions WHERE kb_id=?",
+                          (kb_id,)).fetchone() is None:
+                raise CatalogMissing("Knowledge base missing")
+        nodes = [
+            {"id": "begin", "type": "start", "ref": None},
+            {"id": "retrieve", "type": "kb_search", "ref": kb_id},
+            {"id": "analyst", "type": "knowledge_agent", "ref": agent_id},
+        ]
+        if template == "approval_action":
+            nodes += [
+                {"id": "approval", "type": "human_approval", "ref": None},
+                {"id": "action", "type": "action_agent", "ref": agent_id},
+            ]
+        nodes.append({"id": "finish", "type": "end", "ref": None})
+        edges = [{"from": a["id"], "to": b["id"]}
+                 for a, b in zip(nodes, nodes[1:])]
+        spec = validate_graph({"nodes": nodes, "edges": edges})
+        return {"template": template, "spec": spec, "executable": False,
+                "status": "preview", "requires_review": True}
+
+    def update_graph(self, graph_id, name, spec, expected_revision):
+        graph_id, name = _id(graph_id), _name(name)
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise ValueError("Invalid revision")
+        validated = validate_graph(spec)
+        self._verify_refs(validated)
+        with closing(self.pilot._connect()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT spec,revision FROM graph_definitions WHERE graph_id=?",
+                (graph_id,)).fetchone()
+            if row is None:
+                raise CatalogMissing("Graph not found")
+            old, revision = json.loads(row[0]), row[1]
+            if revision != expected_revision:
+                raise CatalogConflict("Stale graph revision")
+            if old.get("status") != "draft" or old.get("executable") is not False:
+                raise ValueError("Published or executable graph cannot be edited")
+            updated = {**old, "name": name, "spec": validated,
+                       "revision": revision + 1, "executable": False}
+            db.execute("UPDATE graph_definitions SET name=?,revision=?,spec=? "
+                       "WHERE graph_id=?", (name, revision + 1,
+                                           json.dumps(updated, sort_keys=True), graph_id))
+        return updated
+
     def list_graphs(self):
         with closing(self.pilot._connect()) as db:
             rows = db.execute("SELECT spec FROM graph_definitions ORDER BY graph_id").fetchall()
