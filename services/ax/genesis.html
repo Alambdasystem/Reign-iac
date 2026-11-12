@@ -194,7 +194,7 @@ function drawDraftList(id,items,kind){
  const root=el(id);root.replaceChildren();
  if(!items.length){root.textContent='No '+kind+' drafts saved.';return}
  const ul=document.createElement('ul');
- for(const item of items){const li=document.createElement('li');const name=document.createElement('strong');name.textContent=item.name;li.append(name,document.createTextNode(' · DRAFT · '+(kind==='knowledge base'?'Not indexed':'Not executable')));ul.append(li)}
+ for(const item of items){const li=document.createElement('li');const name=document.createElement('strong');name.textContent=item.name+' ('+(kind==='knowledge base'?item.kb_id:item.graph_id)+')';li.append(name,document.createTextNode(' · DRAFT · '+(kind==='knowledge base'?'Not indexed':'Not executable')));ul.append(li)}
  root.append(ul);
 }
 async function refreshCatalog(){
