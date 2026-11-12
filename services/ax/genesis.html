@@ -72,6 +72,33 @@ code{font-size:.9rem;color:#edc8df}
 </section>
 </div>
 </section>
+<section class="grid" aria-label="Genesis Studio draft catalogs">
+<div class="panel">
+<h2>Knowledge Base Studio · Drafts</h2>
+<p>Create a named knowledge-base definition. Document ingestion, search, embedding storage and agent retrieval are not connected yet.</p>
+<form id="kbForm" autocomplete="off">
+<label for="kbId">Knowledge base ID<input id="kbId" required maxlength="63" pattern="[a-z][a-z0-9-]{1,62}" placeholder="operations-manual"></label>
+<label for="kbName">Name<input id="kbName" required maxlength="120" placeholder="Operations Manual"></label>
+<button type="submit">Save KB definition</button>
+</form>
+<div id="kbStatus" class="status" role="status">Definition-only; retrieval disabled.</div>
+<div id="kbList" class="status" aria-live="polite">Loading…</div>
+</div>
+<div class="panel">
+<h2>Graph Studio · Drafts</h2>
+<p>Save a validated Knowledge → Agent workflow. This cannot run until trusted agent identities and MCP policy enforcement are available.</p>
+<form id="graphForm" autocomplete="off">
+<label for="graphId">Workflow ID<input id="graphId" required maxlength="63" pattern="[a-z][a-z0-9-]{1,62}" placeholder="policy-review"></label>
+<label for="graphName">Name<input id="graphName" required maxlength="120" placeholder="Policy Review"></label>
+<label for="graphKB">Knowledge base<select id="graphKB" required></select></label>
+<label for="graphAgent">Draft agent<select id="graphAgent" required></select></label>
+<div class="status" aria-label="Workflow template">Start → KB Search → Knowledge Agent → End</div>
+<div class="actions"><button type="submit">Save graph &amp; assign</button></div>
+</form>
+<div id="graphStatus" class="status" role="status">Draft only; workflow execution disabled.</div>
+<div id="graphList" class="status" aria-live="polite">Loading…</div>
+</div>
+</section>
 </main>
 <script>
 'use strict';
@@ -158,6 +185,56 @@ el('deleteDraft').onclick=async()=>{
 el('closeDetail').onclick=()=>{el('detailPanel').hidden=true;selectedDraft=null};
 el('preview').onclick=async()=>{if(!el('agentForm').reportValidity())return;try{const p=await call('/api/genesis/preview','POST',readForm());showStatus('Allowed: '+(p.allowed_capabilities.join(', ')||'none')+'; blocked: '+(p.rejected_capabilities.join(', ')||'none')+'. Still requires approval.')}catch(e){showStatus(e.message)}};
 el('agentForm').onsubmit=async e=>{e.preventDefault();if(!el('agentForm').reportValidity())return;const b=el('register');b.disabled=true;try{const d=await call('/api/genesis/agents','POST',readForm());showStatus('Saved '+d.agent_id+' as draft. No agent deployed.');await refresh()}catch(error){showStatus(error.message)}finally{b.disabled=false}};
-el('refresh').onclick=refresh;refresh();
+function replaceOptions(element,items,valueKey,labelKey){
+ const prev=element.value;element.replaceChildren();
+ for(const item of items){const option=document.createElement('option');option.value=item[valueKey];option.textContent=item[labelKey]+' ('+item[valueKey]+')';element.append(option)}
+ if(items.some(x=>x[valueKey]===prev))element.value=prev;
+}
+function drawDraftList(id,items,kind){
+ const root=el(id);root.replaceChildren();
+ if(!items.length){root.textContent='No '+kind+' drafts saved.';return}
+ const ul=document.createElement('ul');
+ for(const item of items){const li=document.createElement('li');const name=document.createElement('strong');name.textContent=item.name+' ('+(kind==='knowledge base'?item.kb_id:item.graph_id)+')';li.append(name,document.createTextNode(' · DRAFT · '+(kind==='knowledge base'?'Not indexed':'Not executable')));ul.append(li)}
+ root.append(ul);
+}
+async function refreshCatalog(){
+ try{
+ const [kbs,graphs,agents]=await Promise.all([
+ call('/api/genesis/knowledge-bases'),call('/api/genesis/graphs'),call('/api/genesis/agents')
+ ]);
+ drawDraftList('kbList',kbs.knowledge_bases,'knowledge base');
+ drawDraftList('graphList',graphs.graphs,'workflow');
+ replaceOptions(el('graphKB'),kbs.knowledge_bases,'kb_id','name');
+ replaceOptions(el('graphAgent'),agents.agents,'agent_id','name');
+ }catch(error){el('kbStatus').textContent='Catalog unavailable: '+error.message;el('graphStatus').textContent='Catalog unavailable: '+error.message}
+}
+el('kbForm').onsubmit=async event=>{
+ event.preventDefault();
+ if(!el('kbForm').reportValidity())return;
+ try{
+ await call('/api/genesis/knowledge-bases','POST',{kb_id:el('kbId').value.trim(),name:el('kbName').value.trim()});
+ el('kbStatus').textContent='Knowledge definition saved. No documents ingested or queryable.';
+ await refreshCatalog();
+ }catch(error){el('kbStatus').textContent=error.message}
+};
+el('graphForm').onsubmit=async event=>{
+ event.preventDefault();
+ if(!el('graphForm').reportValidity())return;
+ const agent=el('graphAgent').value,kb=el('graphKB').value,id=el('graphId').value.trim();
+ if(!agent||!kb){el('graphStatus').textContent='Create a draft agent and KB first';return}
+ const spec={nodes:[
+ {id:'begin',type:'start',ref:null},
+ {id:'retrieve',type:'kb_search',ref:kb},
+ {id:'analyst',type:'knowledge_agent',ref:agent},
+ {id:'finish',type:'end',ref:null}],
+ edges:[{from:'begin',to:'retrieve'},{from:'retrieve',to:'analyst'},{from:'analyst',to:'finish'}]};
+ try{
+ await call('/api/genesis/graphs','POST',{graph_id:id,name:el('graphName').value.trim(),spec});
+ await call('/api/genesis/graphs/'+encodeURIComponent(id)+'/assign','POST',{agent_id:agent});
+ el('graphStatus').textContent='Graph saved and assigned as DRAFT. Execution remains disabled.';
+ await refreshCatalog();
+ }catch(error){el('graphStatus').textContent='Graph action failed: '+error.message}
+};
+el('refresh').onclick=()=>{refresh();refreshCatalog()};refresh();refreshCatalog();
 </script>
 </body></html>

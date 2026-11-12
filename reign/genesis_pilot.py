@@ -194,6 +194,14 @@ class GenesisPilot:
             if previous.get("state") != "draft" or previous.get("provisioned") is not False:
                 raise RegistryDenied("Only unprovisioned drafts may be deleted")
             db.execute("DELETE FROM agent_drafts WHERE agent_id=?", (agent_id,))
+            # Optional newer Genesis Studio catalog, created only when enabled.
+            # Delete assignments atomically so a later draft reusing this ID
+            # cannot inherit the old agent's graph permissions.
+            exists = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='graph_assignments'"
+            ).fetchone()
+            if exists:
+                db.execute("DELETE FROM graph_assignments WHERE agent_id=?", (agent_id,))
             db.execute("INSERT INTO agent_audit(agent_id,action,revision) VALUES (?, 'deleted', ?)",
                        (agent_id, revision + 1))
         return {"agent_id": agent_id, "deleted": True, "revision": revision + 1}

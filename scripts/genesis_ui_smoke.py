@@ -112,6 +112,31 @@ async def main():
             await expect(page.locator("#agents")).not_to_contain_text(clone_id)
             await expect(page.locator("#agents")).to_contain_text(agent_id)
             passed("G29 confirmed draft deletion preserves source")
+            kb_id = "ci-kb-" + PHASE
+            graph_id = "ci-graph-" + PHASE
+            await page.locator("#kbId").fill(kb_id)
+            await page.locator("#kbName").fill("Disposable CI Knowledge " + PHASE)
+            await page.locator("#kbForm button").click()
+            await expect(page.locator("#kbList")).to_contain_text(kb_id)
+            await expect(page.locator("#kbStatus")).to_contain_text("No documents ingested")
+            passed("G30 real AX/Core knowledge definition creation, nonqueryable")
+            await page.locator("#refresh").click()
+            await page.locator("#graphKB").select_option(kb_id)
+            await expect(page.locator("#graphKB")).to_have_value(kb_id)
+            await page.locator("#graphAgent").select_option(agent_id)
+            await page.locator("#graphId").fill(graph_id)
+            await page.locator("#graphName").fill("CI Knowledge Review " + PHASE)
+            await page.locator("#graphForm button").click()
+            await expect(page.locator("#graphList")).to_contain_text(graph_id)
+            await expect(page.locator("#graphStatus")).to_contain_text("Execution remains disabled")
+            passed("G31 real typed graph creation and draft assignment")
+            assigned = await context.request.get(
+                AX + "/api/genesis/agents/" + agent_id + "/workflows")
+            assert assigned.status == 200
+            data = await assigned.json()
+            assert data["runnable"] is False
+            assert [item["graph_id"] for item in data["workflows"]] == [graph_id]
+            passed("G32 dropdown contract excludes unassigned and disabled workflows")
             cookies = await context.cookies()
             csrf = next((c["value"] for c in cookies if c["name"] == "ax_csrf"), "")
             assert csrf, "Expected CSRF cookie"
