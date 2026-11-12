@@ -87,6 +87,13 @@ class CatalogTests(unittest.TestCase):
              "edges": []},
             graph(("begin", "start", None), ("finish", "end", None),
                   edges=[("begin", "finish"), ("begin", "outside")]),
+            {"nodes": [{"id": "begin", "type": ["start"], "ref": None},
+                       {"id": "finish", "type": "end", "ref": None}],
+             "edges": [{"from": "begin", "to": "finish"}]},
+            {"nodes": [{"id": "begin", "type": "start", "ref": None},
+                       {"id": "finish", "type": "end", "ref": None}],
+             "edges": [{"from": {"untrusted": "object"}, "to": "finish"}]},
+
         ]
         for sample in invalids:
             with self.subTest(spec=sample), self.assertRaises(ValueError):
