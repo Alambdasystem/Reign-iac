@@ -536,6 +536,49 @@ async def genesis_audit(agent_id: str, request: Request):
     return JSONResponse(result.json(), headers={"Cache-Control": "no-store"})
 
 
+# Draft catalog only. These AX routes do not start agents or execute workflows.
+@app.get("/api/genesis/knowledge-bases")
+async def genesis_knowledge_list(request: Request):
+    user(request)
+    return JSONResponse((await core("GET", "/api/genesis/knowledge-bases")).json(),
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/genesis/knowledge-bases")
+async def genesis_knowledge_create(request: Request):
+    csrf(request)
+    return await genesis_mutation("POST", "/api/genesis/knowledge-bases", await request.json())
+
+
+@app.get("/api/genesis/graphs")
+async def genesis_graph_list(request: Request):
+    user(request)
+    return JSONResponse((await core("GET", "/api/genesis/graphs")).json(),
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/genesis/graphs")
+async def genesis_graph_create(request: Request):
+    csrf(request)
+    return await genesis_mutation("POST", "/api/genesis/graphs", await request.json())
+
+
+@app.post("/api/genesis/graphs/{graph_id}/assign")
+async def genesis_graph_assign(graph_id: str, request: Request):
+    csrf(request)
+    return await genesis_mutation(
+        "POST", f"/api/genesis/graphs/{genesis_agent_id(graph_id)}/assign",
+        await request.json())
+
+
+@app.get("/api/genesis/agents/{agent_id}/workflows")
+async def genesis_workflows_for_agent(agent_id: str, request: Request):
+    user(request)
+    return JSONResponse(
+        (await core("GET", f"/api/genesis/agents/{genesis_agent_id(agent_id)}/workflows")).json(),
+        headers={"Cache-Control": "no-store"})
+
+
 @app.delete("/api/chat/{tid}")
 async def chat_delete(tid: str, request: Request):
     csrf(request)
