@@ -71,6 +71,17 @@ class CatalogTests(unittest.TestCase):
         with self.assertRaises(DraftMissing):
             self.catalog.create_graph("now-unknown", "Deleted agent", self.valid())
 
+    def test_deleting_agent_revokes_assignment_even_if_id_reused(self):
+        self.catalog.create_kb("kb-one", "Policies")
+        self.catalog.create_graph("policy-review", "Policy Review", self.valid())
+        self.catalog.assign_draft("policy-review", "research-agent")
+        self.assertEqual(len(self.catalog.workflows_for_agent("research-agent")), 1)
+        self.pilot.delete_draft("research-agent", expected_revision=1)
+        with self.assertRaises(DraftMissing):
+            self.catalog.workflows_for_agent("research-agent")
+        self.pilot.create_draft("research-agent", "New identity with reused ID", [])
+        self.assertEqual(self.catalog.workflows_for_agent("research-agent"), [])
+
     def test_graph_spec_denies_code_unknown_nodes_cycles_and_unreachable(self):
         invalids = [
             graph(("begin", "start", None), ("unsafe", "python_exec", None),
