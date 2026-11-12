@@ -59,6 +59,44 @@ class CatalogTests(unittest.TestCase):
         with self.assertRaises(CatalogConflict):
             self.catalog.create_graph("policy-review", "Conflict", original)
 
+    def test_generate_preview_version_update_and_restart(self):
+        self.catalog.create_kb("kb-one", "Policy Knowledge")
+        generated = self.catalog.generate_graph("knowledge_review", "research-agent", "kb-one")
+        self.assertFalse(generated["executable"])
+        self.assertTrue(generated["requires_review"])
+        self.assertEqual([node["type"] for node in generated["spec"]["nodes"]],
+                         ["start", "kb_search", "knowledge_agent", "end"])
+        self.assertEqual(self.catalog.list_graphs(), [])
+        saved = self.catalog.create_graph("generated", "Generated", generated["spec"])
+        self.assertEqual(saved["revision"], 1)
+        updated = self.catalog.update_graph("generated", "Reviewed", generated["spec"], 1)
+        self.assertEqual(updated["revision"], 2)
+        self.assertEqual(self.catalog.get_graph("generated")["name"], "Reviewed")
+        self.assertFalse(updated["executable"])
+        with self.assertRaises(CatalogConflict):
+            self.catalog.update_graph("generated", "Stale", generated["spec"], 1)
+        restarted = GenesisCatalog(GenesisPilot(self.path))
+        self.assertEqual(restarted.get_graph("generated"), updated)
+        with self.assertRaises(CatalogMissing):
+            restarted.get_graph("missing-graph")
+
+    def test_generated_action_template_is_preview_only_and_denies_bad_references(self):
+        self.catalog.create_kb("kb-one", "Policy Knowledge")
+        proposed = self.catalog.generate_graph("approval_action", "action-agent", "kb-one")
+        self.assertEqual([node["type"] for node in proposed["spec"]["nodes"]],
+                         ["start", "kb_search", "knowledge_agent",
+                          "human_approval", "action_agent", "end"])
+        self.assertFalse(proposed["executable"])
+        with self.assertRaises(ValueError):
+            self.catalog.generate_graph("python_exec", "action-agent", "kb-one")
+        with self.assertRaises(CatalogMissing):
+            self.catalog.generate_graph("knowledge_review", "action-agent", "missing-kb")
+        with self.assertRaises(DraftMissing):
+            self.catalog.generate_graph("knowledge_review", "missing-agent", "kb-one")
+        with self.assertRaises(ValueError):
+            self.catalog.update_graph("missing-graph", "Unsafe",
+                                      {"nodes": [], "edges": []}, 1)
+
     def test_unknown_or_deleted_agent_and_unknown_kb_rejected(self):
         with self.assertRaises(CatalogMissing):
             self.catalog.create_graph("bad", "Unknown KB", self.valid())
