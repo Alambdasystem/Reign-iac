@@ -553,7 +553,7 @@ async def genesis_knowledge_create(request: Request):
 @app.post("/api/genesis/graphs/generate")
 async def genesis_graph_generate(request: Request):
     csrf(request)
-    return await genesis_catalog_mutation("POST", "/api/genesis/graphs/generate",
+    return await genesis_mutation("POST", "/api/genesis/graphs/generate",
                                           await request.json())
 
 
@@ -567,7 +567,7 @@ async def genesis_graph_detail(graph_id: str, request: Request):
 @app.put("/api/genesis/graphs/{graph_id}")
 async def genesis_graph_update(graph_id: str, request: Request):
     csrf(request)
-    return await genesis_catalog_mutation(
+    return await genesis_mutation(
         "PUT", f"/api/genesis/graphs/{genesis_agent_id(graph_id)}",
         await request.json())
 
