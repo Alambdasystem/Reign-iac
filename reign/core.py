@@ -330,6 +330,7 @@ class GenesisDraftRequest(BaseModel):
     agent_id: str = Field(min_length=2, max_length=63)
     name: str = Field(min_length=1, max_length=120)
     capabilities: list[str] = Field(default_factory=list, max_length=12)
+    agent_type: Literal["knowledge", "action"] = "knowledge"
 
 
 def genesis_pilot():
@@ -362,7 +363,8 @@ async def genesis_preview(data: GenesisDraftRequest):
 async def genesis_register(data: GenesisDraftRequest):
     from reign.sovereign_registry import RegistryDenied
     try:
-        return genesis_pilot().create_draft(data.agent_id, data.name, data.capabilities)
+        return genesis_pilot().create_draft(data.agent_id, data.name, data.capabilities,
+                                            data.agent_type)
     except (RegistryDenied, ValueError):
         raise HTTPException(422, "Genesis registration denied") from None
 
@@ -371,6 +373,7 @@ class GenesisUpdateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     capabilities: list[str] = Field(default_factory=list, max_length=12)
     expected_revision: int = Field(ge=1)
+    agent_type: Literal["knowledge", "action"] | None = None
 
 
 class GenesisRevisionRequest(BaseModel):
@@ -406,7 +409,8 @@ async def genesis_draft_detail(agent_id: str):
 async def genesis_draft_update(agent_id: str, data: GenesisUpdateRequest):
     try:
         return genesis_pilot().update_draft(
-            agent_id, data.name, data.capabilities, expected_revision=data.expected_revision)
+            agent_id, data.name, data.capabilities, expected_revision=data.expected_revision,
+            agent_type=data.agent_type)
     except Exception as error:
         genesis_lifecycle_error(error)
 
