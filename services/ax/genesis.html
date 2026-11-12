@@ -101,6 +101,45 @@ code{font-size:.9rem;color:#edc8df}
 <div id="graphList" class="status" aria-live="polite">Loading…</div>
 </div>
 </section>
+<section class="grid" aria-label="Guardrail policy draft manager">
+<div class="panel">
+<h2>Guardrail Studio · Draft policies</h2>
+<p>Define a read-only policy draft and simulate the result. This is NOT enforcement, agent approval or activation.</p>
+<form id="policyForm" autocomplete="off">
+<label for="policyId">Policy ID<input id="policyId" required maxlength="63" pattern="[a-z][a-z0-9-]{1,62}" placeholder="read-only-policy"></label>
+<label for="policyName">Policy name<input id="policyName" required maxlength="120" placeholder="Read-only workspace policy"></label>
+<fieldset><legend>Allowed read-only tools</legend>
+<label class="check"><input type="checkbox" class="policyAllow" value="workspace_status" checked>Workspace status</label>
+<label class="check"><input type="checkbox" class="policyAllow" value="browser_status">Browser status</label>
+<label class="check"><input type="checkbox" class="policyAllow" value="browser_observe">Browser observe</label>
+</fieldset>
+<label for="policyDeny">Explicit denied tool
+<select id="policyDeny">
+<option value="browser_click">Browser click</option>
+<option value="browser_fill">Browser fill</option>
+<option value="vault_use_account">Use saved account</option>
+<option value="open_browser">Open browser</option>
+<option value="navigate_browser">Navigate browser</option>
+</select></label>
+<label for="policyHost">Exact permitted HTTPS host<input id="policyHost" value="alambda-forge.onrender.com" maxlength="255"></label>
+<div class="actions"><button type="submit" id="policySave">Save policy draft</button><button type="button" id="policyReset" class="secondary">New policy</button></div>
+</form>
+<div role="status" id="policyStatus" class="status">Draft policy only. No production tool authorizations change.</div>
+</div>
+<div class="panel">
+<h2>Policy registry &amp; simulator</h2>
+<div id="policyList" class="status" aria-live="polite">Loading…</div>
+<label for="policyTestTool">Simulate tool request
+<select id="policyTestTool">
+<option value="workspace_status">Workspace status</option>
+<option value="browser_click">Browser click</option>
+<option value="vault_use_account">Saved account use</option>
+</select></label>
+<label for="policyTestUrl">Optional test destination<input id="policyTestUrl" value="https://alambda-forge.onrender.com/" maxlength="2048"></label>
+<div class="actions"><button type="button" id="policySimulate" class="secondary">Simulate — never execute</button></div>
+<div id="policyDecision" class="status" aria-live="polite">Choose a draft policy to simulate.</div>
+</div>
+</section>
 </main>
 <script>
 'use strict';
@@ -250,6 +289,75 @@ el('graphForm').onsubmit=async event=>{
  await refreshCatalog();
  }catch(error){el('graphStatus').textContent='Graph action failed: '+error.message}
 };
-el('refresh').onclick=()=>{refresh();refreshCatalog()};refresh();refreshCatalog();
+let selectedPolicy=null;
+function resetPolicy(){
+ selectedPolicy=null;el('policyId').disabled=false;el('policyForm').reset();
+ el('policyId').value='';el('policyHost').value='alambda-forge.onrender.com';
+ el('policySave').textContent='Save policy draft';el('policyStatus').textContent='New policy draft; no execution change.'
+}
+el('policyReset').onclick=resetPolicy;
+async function refreshPolicies(){
+ try{
+ const response=await call('/api/genesis/policies');
+ const root=el('policyList');root.replaceChildren();
+ if(!response.policies.length){root.textContent='No policy drafts yet.';return}
+ const ul=document.createElement('ul');
+ for(const policy of response.policies){
+  const li=document.createElement('li'), row=document.createElement('div');
+  row.className='draft-row';
+  const name=document.createElement('span');name.textContent=policy.name+' ('+policy.policy_id+') · draft v'+policy.revision;
+  const pick=document.createElement('button');pick.type='button';pick.className='secondary';pick.textContent='Edit';
+  pick.onclick=()=>loadPolicy(policy.policy_id);
+  row.append(name,pick);li.append(row);ul.append(li);
+ }
+ root.append(ul);
+ }catch(e){el('policyStatus').textContent='Policy catalog unavailable: '+e.message}
+}
+async function loadPolicy(id){
+ try{
+ const value=await call('/api/genesis/policies/'+encodeURIComponent(id));
+ selectedPolicy=value;
+ el('policyId').value=value.policy_id;el('policyId').disabled=true;
+ el('policyName').value=value.name;
+ document.querySelectorAll('.policyAllow').forEach(x=>x.checked=value.allowed_tools.includes(x.value));
+ el('policyDeny').value=value.blocked_tools[0]||'browser_click';
+ el('policyHost').value=value.allowed_hosts[0]||'';
+ el('policySave').textContent='Update draft policy';
+ el('policyStatus').textContent='Editing revision '+value.revision+' · never enforced';
+ }catch(e){el('policyStatus').textContent=e.message}
+}
+el('policyForm').onsubmit=async event=>{
+ event.preventDefault();
+ if(!el('policyForm').reportValidity())return;
+ const body={name:el('policyName').value.trim(),
+ allowed_tools:[...document.querySelectorAll('.policyAllow:checked')].map(x=>x.value),
+ blocked_tools:[el('policyDeny').value],allowed_hosts:el('policyHost').value.trim()?[el('policyHost').value.trim()]:[]};
+ try{
+ if(selectedPolicy){
+   await call('/api/genesis/policies/'+encodeURIComponent(selectedPolicy.policy_id),'PUT',
+              {...body,expected_revision:selectedPolicy.revision});
+   await loadPolicy(selectedPolicy.policy_id);
+ }else{
+   const created=await call('/api/genesis/policies','POST',
+             {...body,policy_id:el('policyId').value.trim()});
+   await loadPolicy(created.policy_id);
+ }
+ el('policyStatus').textContent='Policy draft saved. NOT enforced by MCP or runtime.';
+ await refreshPolicies();
+ }catch(e){el('policyStatus').textContent=e.message}
+};
+el('policySimulate').onclick=async()=>{
+ if(!selectedPolicy){el('policyDecision').textContent='Select a saved policy first.';return}
+ try{
+ const tool=el('policyTestTool').value,url=el('policyTestUrl').value.trim();
+ const outcome=await call('/api/genesis/policies/'+encodeURIComponent(selectedPolicy.policy_id)+'/simulate',
+                         'POST',{tool,url:url||null});
+ el('policyDecision').textContent=(outcome.allowed?'SIMULATED ALLOW':'SIMULATED DENY')+
+   ' · '+outcome.reason+' · policy draft revision '+outcome.revision+
+   ' · NOT an execution authorization';
+ }catch(e){el('policyDecision').textContent=e.message}
+};
+refreshPolicies();
+el('refresh').onclick=()=>{refresh();refreshCatalog();refreshPolicies()};refresh();refreshCatalog();
 </script>
 </body></html>

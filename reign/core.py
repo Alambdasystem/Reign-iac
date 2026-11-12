@@ -554,5 +554,92 @@ async def genesis_assigned_workflows(agent_id: str):
         genesis_catalog_error(error)
 
 
+# Guardrail Studio is a *draft simulation* plane only. The existing
+# MCP/Computer execution gates retain their independent deny-by-default rules.
+class GenesisPolicyDefinition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    policy_id: str = Field(min_length=2, max_length=63)
+    name: str = Field(min_length=1, max_length=120)
+    allowed_tools: list[str] = Field(default_factory=list, max_length=3)
+    blocked_tools: list[str] = Field(default_factory=list, max_length=14)
+    allowed_hosts: list[str] = Field(default_factory=list, max_length=20)
+
+
+class GenesisPolicyUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=120)
+    allowed_tools: list[str] = Field(default_factory=list, max_length=3)
+    blocked_tools: list[str] = Field(default_factory=list, max_length=14)
+    allowed_hosts: list[str] = Field(default_factory=list, max_length=20)
+    expected_revision: int = Field(ge=1)
+
+
+class GenesisPolicySimulation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tool: str = Field(min_length=2, max_length=80)
+    url: str | None = Field(default=None, max_length=2048)
+
+
+def genesis_policy_catalog():
+    from reign.genesis_policies import GenesisPolicies
+    return GenesisPolicies(genesis_pilot())
+
+
+def genesis_policy_error(error):
+    from reign.genesis_policies import PolicyMissing, PolicyConflict
+    if isinstance(error, PolicyMissing):
+        raise HTTPException(404, "Genesis policy draft not found") from None
+    if isinstance(error, PolicyConflict):
+        raise HTTPException(409, "Genesis policy draft revision conflict") from None
+    if isinstance(error, ValueError):
+        raise HTTPException(422, "Genesis policy draft rejected") from None
+    raise error
+
+
+@app.get("/api/genesis/policies", dependencies=[Depends(authorize)])
+async def genesis_policy_list():
+    return {"policies": genesis_policy_catalog().list(), "enforcement": "disabled"}
+
+
+@app.post("/api/genesis/policies", dependencies=[Depends(authorize)])
+async def genesis_policy_create(data: GenesisPolicyDefinition):
+    try:
+        return genesis_policy_catalog().create(**data.model_dump())
+    except Exception as error:
+        genesis_policy_error(error)
+
+
+@app.get("/api/genesis/policies/{policy_id}", dependencies=[Depends(authorize)])
+async def genesis_policy_detail(policy_id: str):
+    try:
+        return genesis_policy_catalog().get(policy_id)
+    except Exception as error:
+        genesis_policy_error(error)
+
+
+@app.put("/api/genesis/policies/{policy_id}", dependencies=[Depends(authorize)])
+async def genesis_policy_update(policy_id: str, data: GenesisPolicyUpdate):
+    try:
+        return genesis_policy_catalog().update(policy_id, **data.model_dump())
+    except Exception as error:
+        genesis_policy_error(error)
+
+
+@app.post("/api/genesis/policies/{policy_id}/simulate", dependencies=[Depends(authorize)])
+async def genesis_policy_simulate(policy_id: str, data: GenesisPolicySimulation):
+    try:
+        return genesis_policy_catalog().simulate(policy_id, data.tool, data.url)
+    except Exception as error:
+        genesis_policy_error(error)
+
+
+@app.get("/api/genesis/policies/{policy_id}/audit", dependencies=[Depends(authorize)])
+async def genesis_policy_audit(policy_id: str):
+    try:
+        return {"events": genesis_policy_catalog().audit(policy_id)}
+    except Exception as error:
+        genesis_policy_error(error)
+
+
 from reign.accounts import install as install_accounts, vault_tool
 install_accounts(app, authorize)

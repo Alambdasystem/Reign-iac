@@ -141,6 +141,28 @@ async def main():
             assert data["runnable"] is False
             assert [item["graph_id"] for item in data["workflows"]] == [graph_id]
             passed("G32 dropdown contract excludes unassigned and disabled workflows")
+            policy_id = "ci-policy-" + PHASE
+            await page.locator("#policyId").fill(policy_id)
+            await page.locator("#policyName").fill("CI Read-only Guardrail")
+            await page.locator("#policyForm button[type=submit]").click()
+            await expect(page.locator("#policyList")).to_contain_text(policy_id)
+            await expect(page.locator("#policyStatus")).to_contain_text("NOT enforced")
+            passed("G34 create policy draft through authenticated AX/Core")
+            await page.locator("#policyTestTool").select_option("browser_click")
+            await page.locator("#policySimulate").click()
+            await expect(page.locator("#policyDecision")).to_contain_text("SIMULATED DENY")
+            await expect(page.locator("#policyDecision")).to_contain_text("NOT an execution authorization")
+            passed("G35 simulate denied action without executing MCP tool")
+            await page.locator("#policyName").fill("Revised Read-only Guardrail")
+            await page.locator("#policyForm button[type=submit]").click()
+            await expect(page.locator("#policyList")).to_contain_text("draft v2")
+            passed("G36 edit policy with revision, preserving draft status")
+            await page.locator("#policyTestTool").select_option("workspace_status")
+            await page.locator("#policyTestUrl").fill("https://alambda-forge.onrender.com.evil.net/")
+            await page.locator("#policySimulate").click()
+            await expect(page.locator("#policyDecision")).to_contain_text("SIMULATED DENY")
+            await expect(page.locator("#policyDecision")).to_contain_text("draft_destination_denied")
+            passed("G37 block spoofed destination by exact host")
             cookies = await context.cookies()
             csrf = next((c["value"] for c in cookies if c["name"] == "ax_csrf"), "")
             assert csrf, "Expected CSRF cookie"

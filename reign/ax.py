@@ -601,6 +601,49 @@ async def genesis_workflows_for_agent(agent_id: str, request: Request):
         headers={"Cache-Control": "no-store"})
 
 
+# Draft-only policy control UI. Neither API nor simulation authorizes tools.
+@app.get("/api/genesis/policies")
+async def genesis_policy_list(request: Request):
+    user(request)
+    result = await core("GET", "/api/genesis/policies")
+    return JSONResponse(result.json(), headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/genesis/policies")
+async def genesis_policy_create(request: Request):
+    csrf(request)
+    return await genesis_mutation("POST", "/api/genesis/policies", await request.json())
+
+
+@app.get("/api/genesis/policies/{policy_id}")
+async def genesis_policy_detail(policy_id: str, request: Request):
+    user(request)
+    result = await core("GET", f"/api/genesis/policies/{genesis_agent_id(policy_id)}")
+    return JSONResponse(result.json(), headers={"Cache-Control": "no-store"})
+
+
+@app.put("/api/genesis/policies/{policy_id}")
+async def genesis_policy_update(policy_id: str, request: Request):
+    csrf(request)
+    return await genesis_mutation("PUT", f"/api/genesis/policies/{genesis_agent_id(policy_id)}",
+                                  await request.json())
+
+
+@app.post("/api/genesis/policies/{policy_id}/simulate")
+async def genesis_policy_simulate(policy_id: str, request: Request):
+    csrf(request)
+    return await genesis_mutation("POST",
+                                  f"/api/genesis/policies/{genesis_agent_id(policy_id)}/simulate",
+                                  await request.json())
+
+
+@app.get("/api/genesis/policies/{policy_id}/audit")
+async def genesis_policy_audit(policy_id: str, request: Request):
+    user(request)
+    result = await core("GET", f"/api/genesis/policies/{genesis_agent_id(policy_id)}/audit")
+    return JSONResponse(result.json(), headers={"Cache-Control": "no-store"})
+
+
 @app.delete("/api/chat/{tid}")
 async def chat_delete(tid: str, request: Request):
     csrf(request)
