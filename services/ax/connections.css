@@ -1,5 +1,5 @@
 /* Alambda cross-application navigation. Link-only; never shares credentials. */
-.alambda-connections{position:fixed;top:12px;right:14px;z-index:9999;font:500 14px/1.4 system-ui,-apple-system,Segoe UI,sans-serif;color:#f7f8fd}
+.alambda-connections{position:fixed;top:12px;right:14px;z-index:20;font:500 14px/1.4 system-ui,-apple-system,Segoe UI,sans-serif;color:#f7f8fd}
 .alambda-connections *{box-sizing:border-box}
 .alambda-connections details{position:relative}
 .alambda-connections summary{list-style:none;cursor:pointer;border:1px solid #a7b8d277;border-radius:11px;background:#14243beF;color:#f7f8fd;padding:9px 14px;box-shadow:0 5px 20px #0006}
