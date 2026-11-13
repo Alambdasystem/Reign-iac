@@ -19,7 +19,7 @@ jobs:
       - name: Inspect exact-main validation and gated release status
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: d0e1b4da353119f6a3f6db61de718551e3e71d5d
+          SOURCE_SHA: e476a080102a761c6ca31db8288922a4e93870ec
         run: |
           gh api "repos/$GITHUB_REPOSITORY/actions/runs?branch=main&per_page=50" \
             --jq '.workflow_runs[] | select(.head_sha == env.SOURCE_SHA) | [.id,.name,.event,.status,.conclusion] | @tsv'
@@ -27,7 +27,7 @@ jobs:
       - name: Inspect immutable main release image (no deployment)
         env:
           GHCR_TOKEN: ${{ github.token }}
-          SOURCE_SHA: d0e1b4da353119f6a3f6db61de718551e3e71d5d
+          SOURCE_SHA: e476a080102a761c6ca31db8288922a4e93870ec
         run: |
           set -euo pipefail
           trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
