@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>REIGN · Distributed Nodes</title><style>
+:root{color-scheme:dark;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#0c1321;color:#eff3fb}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 90% 5%,#422654,transparent 45%),#0c1321}
+main{max-width:1120px;margin:auto;padding:32px 18px 70px}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+h1{font-size:clamp(28px,5vw,44px);margin:8px 0}p{line-height:1.55;color:#c1c8da}
+a{color:#ebbbdf}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(315px,1fr));gap:18px;margin-top:26px}
+.panel{padding:24px;border:1px solid #6885a04a;border-radius:18px;background:#ffffff0b}
+h2{margin-top:0}label{display:block;margin:14px 0 8px}
+input,select{display:block;width:100%;border:1px solid #57627c;border-radius:9px;background:#101b2f;color:#fff;padding:11px;font:inherit;margin-top:5px}
+fieldset{border:1px solid #57627c;border-radius:10px;margin-top:20px;padding:13px}
+.check{display:flex;gap:10px;align-items:center}.check input{width:auto;margin:0}
+button{border:1px solid #c891be;background:#814e86;color:#fff;border-radius:10px;padding:11px 16px;font:inherit;cursor:pointer}
+button.secondary{background:#2d3e59;border-color:#6d839c}button:disabled{opacity:.5}
+#token{word-break:break-all;user-select:all;background:#24172a;padding:12px;border-radius:8px}
+.status{background:#111e30;border-radius:9px;padding:10px;min-height:38px}
+.node{padding:13px 0;border-top:1px solid #ffffff2a}
+.muted{font-size:13px;color:#acb5c9}.tag{font-size:12px;border:1px solid #9aa7bd;border-radius:30px;padding:3px 8px;margin-left:6px}
+</style></head><body><main><header><div><small>REIGN · SOVEREIGN INFRASTRUCTURE</small><h1>Distributed Node Manager</h1><p>Node inventory, heartbeat status, and non-executing capability routing preview.</p></div><a href="/genesis">Genesis Console</a></header>
+<div class="grid"><section class="panel"><h2>Enroll node</h2>
+<form id="form"><label>Node ID<input id="nodeId" required pattern="[a-z][a-z0-9-]{1,62}" placeholder="gpu-node-1" maxlength="63"></label>
+<label>Display label<input id="label" required maxlength="120" placeholder="On-prem GPU worker"></label>
+<label>Location / provider<select id="kind"><option value="render">Render</option><option value="aws">AWS (future)</option><option value="azure">Azure (future)</option><option value="onprem">On-prem (future)</option><option value="edge">Edge (future)</option></select></label>
+<fieldset><legend>Advertised capabilities — not execution permissions</legend>
+<label class="check"><input type="checkbox" name="cap" value="browser.observe">Browser observation</label>
+<label class="check"><input type="checkbox" name="cap" value="browser.action">Browser action</label>
+<label class="check"><input type="checkbox" name="cap" value="model.inference">Model inference</label>
+<label class="check"><input type="checkbox" name="cap" value="knowledge.retrieve">Knowledge retrieval</label>
+<label class="check"><input type="checkbox" name="cap" value="workflow.execute">Workflow execution</label></fieldset>
+<p class="muted">Enrollment saves metadata and issues a one-time heartbeat token. It does not install software, connect to a remote machine, or authorize agent execution.</p>
+<button type="submit">Enroll node</button></form>
+<p id="notice" role="status" class="status">Checking Node Manager…</p>
+<div id="tokenBox" hidden><p><strong>One-time enrollment token</strong> — store it securely. It won't be shown again.</p><p id="token"></p><button id="hideToken" type="button" class="secondary">Hide token</button></div>
+</section><section class="panel"><h2>Registered nodes</h2><button id="refresh" class="secondary" type="button">Refresh</button>
+<div id="nodes" aria-live="polite"><p>Loading…</p></div>
+<h2>Capability routing preview</h2><label>Required capability<select id="capability"><option value="browser.observe">Browser observation</option><option value="browser.action">Browser action</option><option value="model.inference">Model inference</option><option value="knowledge.retrieve">Knowledge retrieval</option><option value="workflow.execute">Workflow execution</option></select></label>
+<button id="preview" type="button" class="secondary">Preview candidates</button>
+<p id="routeResult" class="status">This is not live job dispatch.</p>
+</section></div></main><script>
+"use strict";
+const el=id=>document.getElementById(id);
+function csrf(){return document.cookie.split("; ").find(s=>s.startsWith("ax_csrf="))?.slice(8)||""}
+async function call(path,method="GET",body){
+ const headers={};if(method!=="GET"){headers["Content-Type"]="application/json";headers["X-CSRF-Token"]=csrf()}
+ const res=await fetch(path,{method,headers,credentials:"same-origin",cache:"no-store",body:body===undefined?undefined:JSON.stringify(body)});
+ const data=await res.json().catch(()=>({}));if(!res.ok)throw Error(data.detail||"Request denied");return data;
+}
+async function refresh(){
+ try{const result=await call("/api/nodes");const container=el("nodes");container.replaceChildren();
+ if(!result.nodes.length){container.textContent="No registered execution nodes yet.";return}
+ for(const n of result.nodes){const item=document.createElement("div");item.className="node";
+ const title=document.createElement("strong");title.textContent=n.label+" ("+n.node_id+")";
+ const tag=document.createElement("span");tag.className="tag";tag.textContent=n.status;
+ const details=document.createElement("p");details.className="muted";details.textContent=n.kind+" · "+(n.capabilities.join(", ")||"no capabilities")+" · dispatch disabled";
+ const disable=document.createElement("button");disable.type="button";disable.className="secondary";disable.textContent="Disable";disable.disabled=n.status==="disabled";disable.onclick=async()=>{if(!confirm("Disable heartbeat authentication for "+n.node_id+"?"))return;try{await call("/api/nodes/"+encodeURIComponent(n.node_id)+"/disable","POST",{});await refresh()}catch(err){el("notice").textContent=err.message}};
+ item.append(title,tag,details,disable);container.append(item)}
+ }catch(err){el("nodes").textContent="Node registry unavailable.";el("notice").textContent=err.message}
+}
+el("form").onsubmit=async event=>{event.preventDefault();if(!el("form").reportValidity())return;
+ const b=event.submitter;b.disabled=true;el("tokenBox").hidden=true;
+ try{const req={node_id:el("nodeId").value.trim(),label:el("label").value.trim(),kind:el("kind").value,capabilities:[...document.querySelectorAll("input[name=cap]:checked")].map(n=>n.value)};
+ const res=await call("/api/nodes/enroll","POST",req);el("token").textContent=res.enrollment_token;el("tokenBox").hidden=false;el("notice").textContent="Registered "+res.node_id+". Waiting for authenticated node heartbeat; no dispatch enabled.";await refresh()
+ }catch(err){el("notice").textContent=err.message}finally{b.disabled=false}};
+el("preview").onclick=async()=>{try{const result=await call("/api/nodes/route-preview/"+encodeURIComponent(el("capability").value));el("routeResult").textContent=result.eligible_count+" matching online node(s): "+(result.candidate_nodes.join(", ")||"none")+" — dispatch disabled."}catch(err){el("routeResult").textContent=err.message}};
+el("hideToken").onclick=()=>{el("token").textContent="";el("tokenBox").hidden=true};
+el("refresh").onclick=refresh;refresh();
+</script></body></html>

@@ -188,6 +188,19 @@ async def genesis_console(request: Request):
                                        "X-Content-Type-Options": "nosniff"})
 
 
+@app.get("/nodes")
+async def node_console(request: Request):
+    try:
+        user(request)
+    except HTTPException as error:
+        if error.status_code == 401:
+            return RedirectResponse(url="/", status_code=303,
+                                    headers={"Cache-Control": "no-store"})
+        raise
+    return FileResponse(ASSETS / "nodes.html", headers={
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+
+
 @app.get("/healthz")
 async def health():
     return {"status": "ok"}
@@ -641,6 +654,44 @@ async def genesis_policy_simulate(policy_id: str, request: Request):
 async def genesis_policy_audit(policy_id: str, request: Request):
     user(request)
     result = await core("GET", f"/api/genesis/policies/{genesis_agent_id(policy_id)}/audit")
+    return JSONResponse(result.json(), headers={"Cache-Control": "no-store"})
+
+
+
+
+# AX accepts only the signed administrator session; node workers heartbeat on
+# Core's private API with their own one-time enrollment token.
+@app.get("/api/nodes")
+async def node_inventory(request: Request):
+    user(request)
+    return JSONResponse((await core("GET", "/api/nodes")).json(),
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/nodes/enroll")
+async def node_enroll(request: Request):
+    csrf(request)
+    result = await core("POST", "/api/nodes/enroll", await request.json())
+    # This response includes a one-time node credential. Never cache it.
+    return JSONResponse(result.json(), headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/nodes/route-preview/{capability}")
+async def node_route_preview(capability: str, request: Request):
+    user(request)
+    if capability not in {"browser.observe", "browser.action", "model.inference",
+                          "knowledge.retrieve", "workflow.execute"}:
+        raise HTTPException(422, "Unsupported node capability")
+    result = await core("GET", f"/api/nodes/route-preview/{capability}")
+    return JSONResponse(result.json(), headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/nodes/{node_id}/disable")
+async def node_disable(node_id: str, request: Request):
+    csrf(request)
+    if not re.fullmatch(r"[a-z][a-z0-9-]{1,62}", node_id):
+        raise HTTPException(422, "Invalid node ID")
+    result = await core("POST", f"/api/nodes/{node_id}/disable")
     return JSONResponse(result.json(), headers={"Cache-Control": "no-store"})
 
 

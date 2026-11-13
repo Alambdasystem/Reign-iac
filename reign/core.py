@@ -42,10 +42,15 @@ async def lifespan(app: FastAPI):
     if os.environ.get("GENESIS_DRAFT_MODE", "disabled") == "enabled":
         from reign.genesis_pilot import GenesisPilot
         genesis = GenesisPilot.from_env()
+    nodes = None
+    if os.environ.get("REIGN_NODES_MODE", "disabled") == "inventory":
+        from reign.distributed_nodes import NodeRegistry
+        nodes = NodeRegistry.from_env()
     try:
         async with WorkspaceMCP().connect() as connection:
             app.state.agent = AgentRuntime(adapter=MCPTools(connection), archive=archive)
             app.state.genesis = genesis
+            app.state.nodes = nodes
             app.state.voice = VoiceBroker(app.state.http)
             try:
                 yield
@@ -640,6 +645,67 @@ async def genesis_policy_audit(policy_id: str):
     except Exception as error:
         genesis_policy_error(error)
 
+
+
+
+# Node inventory and routing previews only. The node heartbeat uses a
+# separate random token, not the administrator's CORE_TOKEN. This module
+# cannot provision, launch, invoke or dispatch a node.
+class NodeEnrollRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    node_id: str = Field(min_length=2, max_length=63)
+    kind: Literal["render", "aws", "azure", "onprem", "edge"]
+    label: str = Field(min_length=1, max_length=120)
+    capabilities: list[str] = Field(default_factory=list, max_length=12)
+
+
+def node_registry():
+    registry = getattr(app.state, "nodes", None)
+    if registry is None:
+        raise HTTPException(503, "Distributed node inventory unavailable")
+    return registry
+
+
+@app.get("/api/nodes", dependencies=[Depends(authorize)])
+async def nodes_list():
+    return {"nodes": node_registry().list_nodes(), "dispatch_enabled": False}
+
+
+@app.post("/api/nodes/enroll", dependencies=[Depends(authorize)])
+async def nodes_enroll(data: NodeEnrollRequest):
+    from reign.distributed_nodes import NodeDenied
+    try:
+        return node_registry().enroll(**data.model_dump())
+    except (NodeDenied, ValueError):
+        raise HTTPException(422, "Node enrollment rejected") from None
+
+
+@app.post("/api/nodes/{node_id}/heartbeat")
+async def node_heartbeat(node_id: str, request: Request):
+    from reign.distributed_nodes import NodeDenied
+    # Node credential is not a Core admin token and is never logged or returned.
+    token = request.headers.get("x-node-token", "")
+    try:
+        return node_registry().heartbeat(node_id, token)
+    except (NodeDenied, ValueError):
+        raise HTTPException(401, "Node authentication denied") from None
+
+
+@app.get("/api/nodes/route-preview/{capability}", dependencies=[Depends(authorize)])
+async def node_route_preview(capability: str):
+    try:
+        return node_registry().route_preview(capability)
+    except ValueError:
+        raise HTTPException(422, "Node routing preview rejected") from None
+
+
+@app.post("/api/nodes/{node_id}/disable", dependencies=[Depends(authorize)])
+async def node_disable(node_id: str):
+    from reign.distributed_nodes import NodeDenied
+    try:
+        return node_registry().disable(node_id)
+    except (NodeDenied, ValueError):
+        raise HTTPException(404, "Node not found") from None
 
 from reign.accounts import install as install_accounts, vault_tool
 install_accounts(app, authorize)
