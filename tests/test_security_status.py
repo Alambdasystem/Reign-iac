@@ -38,13 +38,14 @@ class CoreStatusTests(unittest.IsolatedAsyncioTestCase):
     async def test_status_never_infers_encryption_from_env_only(self):
         core_app.state.agent = SimpleNamespace(archive=None)
         try:
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=core_app),base_url="http://core.test"
-            ) as client, patch.dict(os.environ, SETTINGS):
-                data=(await client.get("/api/security/status",headers={
-                    "Authorization":"Bearer "+SETTINGS["CORE_TOKEN"]
-                })).json()
-                self.assertEqual(data["conversation_storage"],"no_verified_archive")
+            with patch.dict(os.environ, SETTINGS):
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=core_app),base_url="http://core.test"
+                ) as client:
+                    data=(await client.get("/api/security/status",headers={
+                        "Authorization":"Bearer "+SETTINGS["CORE_TOKEN"]
+                    })).json()
+                    self.assertEqual(data["conversation_storage"],"no_verified_archive")
         finally:
             del core_app.state.agent
 
