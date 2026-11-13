@@ -116,6 +116,9 @@ services:
   # provider provisioning, external IAM, or paid resources.
   - key: GENESIS_DRAFT_MODE
     value: enabled
+  # Core disk-backed node inventory only; no new workers or live dispatch.
+  - key: REIGN_NODES_MODE
+    value: inventory
   - key: CREDENTIAL_CHANNEL_KEY
     generateValue: true
   # Core derives both private endpoints from the referenced host variables.
@@ -126,7 +129,7 @@ services:
   # with ephemeral *test* memory and Genesis draft registration disabled in
   # this mountless pre-deploy container. Production startup still requires
   # the private disk for both transcript history and Genesis drafts.
-  preDeployCommand: env REIGN_HISTORY_MODE=disabled GENESIS_DRAFT_MODE=disabled python -m reign.voice_acceptance
+  preDeployCommand: env REIGN_HISTORY_MODE=disabled GENESIS_DRAFT_MODE=disabled REIGN_NODES_MODE=disabled python -m reign.voice_acceptance
   disk:
     name: reign-account-vault
     mountPath: /var/data/reign-vault
