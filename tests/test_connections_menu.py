@@ -26,4 +26,4 @@ class ConnectionsMenuTests(unittest.TestCase):
         for filename in ("index.html", "genesis.html", "nodes.html"):
             markup = (ROOT / filename).read_text(encoding="utf-8")
             self.assertNotIn("workmates-api.onrender.com", markup)
-            self.assertNotIn("workmates-core.onrender.com", markup)
+            self.assertIn("https://workmates-core.onrender.com/app", markup)
