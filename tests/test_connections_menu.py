@@ -14,9 +14,9 @@ class ConnectionsMenuTests(unittest.TestCase):
                 self.assertIn("/assets/connections.css", markup)
                 self.assertIn("https://reign-ax-pilot-d934.onrender.com/", markup)
                 self.assertIn("https://anthesis-v1-vtqh.onrender.com/", markup)
-                self.assertIn("https://alambda.systems/", markup)
+                self.assertIn("https://alambda.systems/", markup)\n                self.assertIn("https://workmates-core.onrender.com/app", markup)
                 self.assertIn('rel="noopener noreferrer"', markup)
-                self.assertIn('aria-disabled="true">LPR', markup)
+                self.assertIn('https://api.alambda.com/lpr/', markup)
                 self.assertNotIn("href=\"#lpr\"", markup)
 
     def test_menu_has_no_secrets_or_session_bridge(self):
