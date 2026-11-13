@@ -188,6 +188,26 @@ async def genesis_console(request: Request):
                                        "X-Content-Type-Options": "nosniff"})
 
 
+@app.get("/guardrails")
+async def guardrails_console(request: Request):
+    try:
+        user(request)
+    except HTTPException as error:
+        if error.status_code == 401:
+            return RedirectResponse(url="/", status_code=303,
+                                    headers={"Cache-Control": "no-store"})
+        raise
+    return FileResponse(ASSETS / "guardrails.html", headers={
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+
+
+@app.get("/api/security/status")
+async def guardrails_security_status(request: Request):
+    user(request)
+    result = await core("GET", "/api/security/status")
+    return JSONResponse(result.json(), headers={"Cache-Control": "no-store"})
+
+
 @app.get("/nodes")
 async def node_console(request: Request):
     try:
