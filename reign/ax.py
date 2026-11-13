@@ -689,7 +689,7 @@ async def node_route_preview(capability: str, request: Request):
 @app.post("/api/nodes/{node_id}/disable")
 async def node_disable(node_id: str, request: Request):
     csrf(request)
-    if not __import__("re").fullmatch(r"[a-z][a-z0-9-]{1,62}", node_id):
+    if not re.fullmatch(r"[a-z][a-z0-9-]{1,62}", node_id):
         raise HTTPException(422, "Invalid node ID")
     result = await core("POST", f"/api/nodes/{node_id}/disable")
     return JSONResponse(result.json(), headers={"Cache-Control": "no-store"})
