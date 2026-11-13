@@ -23,6 +23,7 @@ class ConnectionsMenuTests(unittest.TestCase):
     def test_menu_has_no_secrets_or_session_bridge(self):
         css = (ROOT / "connections.css").read_text(encoding="utf-8")
         self.assertIn("focus-visible", css)
+        self.assertIn("z-index:20", css)  # Below AX remote-overlay z-index:100
         for filename in ("index.html", "genesis.html", "nodes.html"):
             markup = (ROOT / filename).read_text(encoding="utf-8")
             self.assertNotIn("workmates-api.onrender.com", markup)
