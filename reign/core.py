@@ -150,6 +150,30 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/api/security/status", dependencies=[Depends(authorize)])
+async def security_status():
+    """Truthful control-plane status. No secrets, patient data or diagnostic bodies.
+
+    This endpoint is intentionally read-only. Draft policy simulations MUST NOT
+    be represented as runtime enforcement or HIPAA compliance.
+    """
+    agent = getattr(app.state, "agent", None)
+    encrypted_archive = bool(agent is not None and getattr(agent, "archive", None))
+    return JSONResponse({
+        "policy_enforcement": "not_active",
+        "phi_pii_egress_protection": "not_active",
+        "genesis_agent_execution": "disabled",
+        "dynamic_mcp_registration": "disabled",
+        "distributed_dispatch": "disabled",
+        "conversation_storage": "encrypted_finished_turn_archive" if encrypted_archive
+                                else "no_verified_archive",
+        "langgraph_checkpoints": "process_local",
+        "trace_storage": "in_memory_metadata_only",
+        "identity": "single_admin",
+        "status_note": "Draft policies cannot authorize agent or tool execution.",
+    }, headers={"Cache-Control": "no-store"})
+
+
 @app.get("/api/readyz", dependencies=[Depends(authorize)])
 async def ready():
     try:
