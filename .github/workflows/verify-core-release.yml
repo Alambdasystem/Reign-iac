@@ -1,0 +1,40 @@
+name: Verify existing REIGN Core GHCR release digest
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/verify-core-release.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  inspect-release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      packages: read
+      actions: read
+    steps:
+      - name: Inspect exact-main validation and gated release status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: e476a080102a761c6ca31db8288922a4e93870ec
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs?branch=main&per_page=50" \
+            --jq '.workflow_runs[] | select(.head_sha == env.SOURCE_SHA) | [.id,.name,.event,.status,.conclusion] | @tsv'
+
+      - name: Inspect immutable main release image (no deployment)
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          SOURCE_SHA: e476a080102a761c6ca31db8288922a4e93870ec
+        run: |
+          set -euo pipefail
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null
+          for service in core ax computer temporal; do
+            image="ghcr.io/alambdasystem/reign-$service:$SOURCE_SHA"
+            echo "Checking image: $image"
+            docker buildx imagetools inspect "$image"
+          done
+          echo "All four release tags exist; no deployment was performed."
