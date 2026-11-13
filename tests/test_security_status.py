@@ -18,19 +18,20 @@ class CoreStatusTests(unittest.IsolatedAsyncioTestCase):
     async def test_status_is_private_and_does_not_claim_protection(self):
         core_app.state.agent = SimpleNamespace(archive=object())
         try:
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=core_app),base_url="http://core.test"
-            ) as client, patch.dict(os.environ, SETTINGS):
-                self.assertEqual((await client.get("/api/security/status")).status_code, 401)
-                data=(await client.get("/api/security/status",headers={
-                    "Authorization":"Bearer "+SETTINGS["CORE_TOKEN"]
-                })).json()
-                self.assertEqual(data["policy_enforcement"],"not_active")
-                self.assertEqual(data["phi_pii_egress_protection"],"not_active")
-                self.assertEqual(data["conversation_storage"],"encrypted_finished_turn_archive")
-                self.assertEqual(data["langgraph_checkpoints"],"process_local")
-                self.assertEqual(data["identity"],"single_admin")
-                self.assertNotIn("token",str(data).lower())
+            with patch.dict(os.environ, SETTINGS):
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=core_app),base_url="http://core.test"
+                ) as client:
+                    self.assertEqual((await client.get("/api/security/status")).status_code, 401)
+                    data=(await client.get("/api/security/status",headers={
+                        "Authorization":"Bearer "+SETTINGS["CORE_TOKEN"]
+                    })).json()
+                    self.assertEqual(data["policy_enforcement"],"not_active")
+                    self.assertEqual(data["phi_pii_egress_protection"],"not_active")
+                    self.assertEqual(data["conversation_storage"],"encrypted_finished_turn_archive")
+                    self.assertEqual(data["langgraph_checkpoints"],"process_local")
+                    self.assertEqual(data["identity"],"single_admin")
+                    self.assertNotIn("token",str(data).lower())
         finally:
             del core_app.state.agent
 
