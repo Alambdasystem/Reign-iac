@@ -1,0 +1,13 @@
+/* Alambda cross-application navigation. Link-only; never shares credentials. */
+.alambda-connections{position:fixed;top:12px;right:14px;z-index:9999;font:500 14px/1.4 system-ui,-apple-system,Segoe UI,sans-serif;color:#f7f8fd}
+.alambda-connections *{box-sizing:border-box}
+.alambda-connections details{position:relative}
+.alambda-connections summary{list-style:none;cursor:pointer;border:1px solid #a7b8d277;border-radius:11px;background:#14243beF;color:#f7f8fd;padding:9px 14px;box-shadow:0 5px 20px #0006}
+.alambda-connections summary::-webkit-details-marker{display:none}
+.alambda-connections summary:focus-visible,.alambda-connections a:focus-visible{outline:2px solid #9ddaff;outline-offset:2px}
+.alambda-connections .alambda-menu{position:absolute;right:0;top:calc(100% + 7px);width:min(290px,calc(100vw - 28px));padding:8px;border:1px solid #8197b775;border-radius:13px;background:#111b2af9;box-shadow:0 12px 36px #0009;max-height:75vh;overflow:auto}
+.alambda-connections .alambda-menu a,.alambda-connections .alambda-menu span{display:block;width:100%;font:inherit;color:#eef4ff;padding:11px 12px;text-decoration:none;border-radius:8px}
+.alambda-connections .alambda-menu a:hover{background:#344965}
+.alambda-connections .alambda-menu .alambda-unavailable{color:#b3bdd0;cursor:not-allowed;opacity:.75}
+.alambda-connections .alambda-menu small{color:#b2c4db;font-size:11px;display:block;padding:7px 12px 3px;letter-spacing:.04em}
+@media(max-width:560px){.alambda-connections{top:9px;right:8px}.alambda-connections summary{font-size:12px;padding:7px 10px}}
