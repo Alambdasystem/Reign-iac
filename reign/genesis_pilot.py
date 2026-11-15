@@ -23,6 +23,7 @@ TENANT = "pilot-tenant"
 OWNER = "pilot-owner"
 ALLOWED = frozenset({"workspace_status", "browser_status", "browser_observe"})
 MAX_AGENTS = 40
+AGENT_TYPES = frozenset({"knowledge", "action"})
 
 
 class DraftMissing(Exception):
@@ -85,6 +86,12 @@ class GenesisPilot:
         db.execute("PRAGMA busy_timeout=5000")
         return db
 
+    @staticmethod
+    def _agent_type(value):
+        if type(value) is not str or value not in AGENT_TYPES:
+            raise ValueError("Unsupported agent type")
+        return value
+
     def _request(self, agent_id: str, name: str, capabilities: list[str]):
         if type(capabilities) is not list or len(capabilities) > 12:
             raise ValueError("Invalid requested capabilities")
@@ -112,13 +119,15 @@ class GenesisPilot:
             raise RegistryDenied("Genesis draft registry is full")
         return asdict(result)
 
-    def create_draft(self, agent_id: str, name: str, capabilities: list[str]) -> dict:
+    def create_draft(self, agent_id: str, name: str, capabilities: list[str],
+                     agent_type: str = "knowledge") -> dict:
+        agent_type = self._agent_type(agent_type)
         request = self._request(agent_id, name, capabilities)
         reg = GenesisRegistration(AgentRegistry(), self.constitution)
         record = reg.register_draft(request, tenant_id=TENANT, owner_id=OWNER,
                                     principal_id=OWNER)
         data = {"agent_id": record.agent_id, "name": record.name,
-                "revision": 1, "state": "draft", "provider": record.provider, "harness": record.harness,
+                "agent_type": agent_type, "revision": 1, "state": "draft", "provider": record.provider, "harness": record.harness,
                 "constitution_version": record.constitution_version,
                 "capabilities": sorted(record.capabilities), "provisioned": False}
         with closing(self._connect()) as db, db:
@@ -143,6 +152,7 @@ class GenesisPilot:
             raise DraftMissing("Draft not found")
         result = json.loads(row[0])
         result.setdefault("revision", 1)  # Older pilot records.
+        result.setdefault("agent_type", "knowledge")  # Legacy pilots were read-only.
         return result
 
     @staticmethod
@@ -152,8 +162,10 @@ class GenesisPilot:
         return value
 
     def update_draft(self, agent_id: str, name: str, capabilities: list[str],
-                     *, expected_revision: int) -> dict:
+                     *, expected_revision: int, agent_type: str | None = None) -> dict:
         self._expected_revision(expected_revision)
+        if agent_type is not None:
+            agent_type = self._agent_type(agent_type)
         # Validate the proposed configuration against the existing deny-by-default
         # constitution before opening the SQLite write transaction.
         request = self._request(agent_id, name, capabilities)
@@ -172,6 +184,7 @@ class GenesisPilot:
             if previous.get("state") != "draft" or previous.get("provisioned") is not False:
                 raise RegistryDenied("Only unprovisioned drafts may be modified")
             updated = {**previous, "name": record.name, "capabilities": sorted(record.capabilities),
+                       "agent_type": agent_type or previous.get("agent_type", "knowledge"),
                        "revision": revision + 1}
             db.execute("UPDATE agent_drafts SET metadata=? WHERE agent_id=?",
                        (json.dumps(updated, sort_keys=True), agent_id))
@@ -217,7 +230,7 @@ class GenesisPilot:
         # This only copies validated non-secret draft metadata. It never copies
         # runtime tokens, provider credentials, grants or execution state.
         return self.create_draft(new_agent_id, source["name"] + " (copy)",
-                                 list(source["capabilities"]))
+                                 list(source["capabilities"]), source["agent_type"])
 
     def audit_events(self, agent_id: str, *, limit: int = 50) -> list[dict]:
         if type(limit) is not int or not 1 <= limit <= 50:
@@ -236,6 +249,7 @@ class GenesisPilot:
         result = [json.loads(row[0]) for row in records]
         for draft in result:
             draft.setdefault("revision", 1)
+            draft.setdefault("agent_type", "knowledge")
         return result
 
     def status(self) -> dict:
