@@ -1,0 +1,60 @@
+name: Read-only Genesis AX GHCR provenance probe
+on:
+  pull_request:
+    paths:
+      - .github/workflows/ghcr-ax-readonly-probe.yml
+permissions:
+  contents: read
+  packages: read
+  actions: read
+jobs:
+  verify-ax-tag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Verify current main source is still exact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED: e0bdad4b3e19ecc701ec136ebbcbc8b33343634d
+        run: |
+          set -euo pipefail
+          actual="$(gh api repos/$GITHUB_REPOSITORY/branches/main --jq .commit.sha)"
+          test "$actual" = "$EXPECTED" || { echo "::error::Main moved; probe is stale"; exit 1; }
+      - name: Read available tested Genesis AX image digest without publishing
+        run: |
+          set -euo pipefail
+          for sha in e0bdad4b3e19ecc701ec136ebbcbc8b33343634d 9e884d8284df1df529a2e7e6ff08f9a95b7574f8 f151bda849e074a2f047d8576e94f87db183ce7c; do
+            image="ghcr.io/alambdasystem/reign-ax:$sha"
+            echo "Checking reviewed source tag $sha"
+            if output="$(docker buildx imagetools inspect "$image" 2>/dev/null)"; then
+              digest="$(printf '%s\n' "$output" | awk '$1=="Digest:" {print $2; exit}')"
+              if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                echo "VERIFIED_AX_IMAGE=ghcr.io/alambdasystem/reign-ax@$digest"
+                echo "SOURCE_SHA=$sha"
+                echo "Read-only inspection; release CI provenance still requires independent review"
+                exit 0
+              fi
+            fi
+          done
+          echo "::error::None of the reviewed Genesis UI main tags is published/readable"
+          exit 1
+      - name: Verify successful gated release artifact for the selected SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: 9e884d8284df1df529a2e7e6ff08f9a95b7574f8
+        run: |
+          set -euo pipefail
+          found=false
+          for run in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/reign-cd.yml/runs?per_page=30" --jq '.workflow_runs[] | select(.conclusion=="success") | .id'); do
+            artifact="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts?per_page=100" --jq ".artifacts[] | select(.name==\"tested-release-$SOURCE_SHA\" and .expired==false) | .id" | head -n 1)"
+            if [[ -n "$artifact" ]]; then
+              echo "VERIFIED_GATED_RELEASE_RUN=https://github.com/$GITHUB_REPOSITORY/actions/runs/$run"
+              echo "VERIFIED_RELEASE_ARTIFACT=$artifact"
+              found=true
+              break
+            fi
+          done
+          if [[ "$found" != true ]]; then
+            echo "::error::Gated publication receipt missing for selected AX SHA"
+            exit 1
+          fi
