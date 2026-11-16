@@ -1,0 +1,44 @@
+name: Read-only Genesis Graph and Guardrail release receipt
+on:
+  pull_request:
+    paths: [.github/workflows/genesis-graph-policy-receipt.yml]
+permissions:
+  contents: read
+  actions: read
+  packages: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_SHA: fee4c1d33bb324df1609b809e95f82635d4759ca
+    steps:
+      - name: Verify exact main release and publication
+        run: |
+          set -euo pipefail
+          test "$(gh api repos/$GITHUB_REPOSITORY/branches/main --jq .commit.sha)" = "$SOURCE_SHA"
+          echo "VALIDATION_STATUS"
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/validate.yml/runs?per_page=30" --jq '.workflow_runs[] | select(.head_sha==env.SOURCE_SHA) | {id,status,conclusion,html_url}' || true
+          echo "PUBLICATION_STATUS"
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/reign-cd.yml/runs?per_page=30" --jq '.workflow_runs[] | select(.head_sha==env.SOURCE_SHA) | {id,status,conclusion,html_url}' || true
+          found=false
+          for run in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/reign-cd.yml/runs?per_page=30" --jq '.workflow_runs[] | select(.conclusion=="success") | .id'); do
+            artifact="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts?per_page=100" --jq ".artifacts[] | select(.name==\"tested-release-$SOURCE_SHA\" and .expired==false) | .id" | head -n 1)"
+            if [[ -n "$artifact" ]]; then
+              echo "GATED_RELEASE_RUN=https://github.com/$GITHUB_REPOSITORY/actions/runs/$run"
+              echo "GATED_RELEASE_ARTIFACT=$artifact"
+              found=true;break
+            fi
+          done
+          [[ "$found" == true ]] || { echo "::error::No exact successful main release receipt"; exit 1; }
+      - name: Read immutable Core and AX digests
+        run: |
+          set -euo pipefail
+          for service in core ax; do
+            image="ghcr.io/alambdasystem/reign-$service:$SOURCE_SHA"
+            out="$(docker buildx imagetools inspect "$image")" || exit 1
+            digest="$(printf '%s\n' "$out" | awk '$1=="Digest:" {print $2; exit}')"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || exit 1
+            echo "VERIFIED_$service=ghcr.io/alambdasystem/reign-$service@$digest"
+          done
