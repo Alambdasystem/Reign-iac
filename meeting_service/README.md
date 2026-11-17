@@ -23,3 +23,5 @@ service. OpenAI receives the supplied discussion when participants invoke REIGN.
 Tests exercise the real graph with a fake model, independent-meeting isolation,
 authorization, body bounds and lack of administrator endpoints. Actual provider
 and deployed game tests are required separately.
+
+Open STL may authenticate with timestamped, nonce-protected HMAC-SHA256 requests. A dedicated signing key is derived from the already shared OpenAI configuration using domain `open-stl/reign-meetings/v1`; the provider credential is never transmitted between services. Signatures bind the method, path and exact body, expire after 60 seconds, and cannot replay within the same process. Rotating the shared provider credential must update both services. The separately generated bearer token remains a supported alternative. Run one instance; replay tracking and budgets are in process.
