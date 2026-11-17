@@ -20,4 +20,4 @@ services:
           name: workmates-api
           envVarKey: OPENAI_API_KEY
       - key: MEETING_TOKEN
-        sync: false
+        generateValue: true
