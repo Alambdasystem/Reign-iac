@@ -1,0 +1,1 @@
+from meeting_service.test_app import BoundaryTest
