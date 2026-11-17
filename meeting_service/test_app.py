@@ -46,3 +46,19 @@ class BoundaryTest(unittest.TestCase):
         self.assertTrue(budget.reserve())
         self.assertTrue(budget.reserve())
         self.assertFalse(budget.reserve())
+
+    def test_signed_server_request_rejects_replay_tamper_and_expiry(self):
+        import hmac, hashlib, time, secrets, json
+        def signed(body, stamp=None):
+            stamp = str(stamp or int(time.time()))
+            nonce = secrets.token_hex(16)
+            key = hmac.new(b"test", b"open-stl/reign-meetings/v1", hashlib.sha256).digest()
+            payload = (stamp + "\n" + nonce + "\nPOST\n/reply\n").encode() + body
+            return {"content-type": "application/json", "x-meeting-time": stamp, "x-meeting-nonce": nonce,
+                    "x-meeting-signature": hmac.new(key, payload, hashlib.sha256).hexdigest()}
+        body = json.dumps({"message": "Hello REIGN"}).encode()
+        headers = signed(body)
+        self.assertEqual(self.client.post("/reply", content=body, headers=headers).status_code, 200)
+        self.assertEqual(self.client.post("/reply", content=body, headers=headers).status_code, 401)
+        self.assertEqual(self.client.post("/reply", content=body+b" ", headers=signed(body)).status_code, 401)
+        self.assertEqual(self.client.post("/reply", content=body, headers=signed(body, int(time.time())-120)).status_code, 401)

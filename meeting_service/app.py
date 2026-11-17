@@ -5,6 +5,8 @@ database, browser or workspace tools. Context arrives from the game server.
 """
 import asyncio
 import hmac
+import hashlib
+import re
 import os
 import time
 from collections import deque
@@ -100,6 +102,33 @@ class Allowance:
 
 
 allowance = Allowance()
+seen_signatures = {}
+
+
+def signed_request(request, body):
+    # Domain-separated key: the provider credential never travels on this link.
+    # Both user-owned services already receive the same provider configuration.
+    secret = os.getenv("OPENAI_API_KEY", "")
+    stamp = request.headers.get("x-meeting-time", "")
+    nonce = request.headers.get("x-meeting-nonce", "")
+    signature = request.headers.get("x-meeting-signature", "")
+    if not secret or not stamp.isdigit() or len(stamp) > 12 or not re.fullmatch(r"[a-f0-9]{32}", nonce):
+        return False
+    now = time.time()
+    if abs(now - int(stamp)) > 60 or nonce in seen_signatures:
+        return False
+    key = hmac.new(secret.encode(), b"open-stl/reign-meetings/v1", hashlib.sha256).digest()
+    payload = (stamp + "\n" + nonce + "\n" + request.method + "\n" + request.url.path + "\n").encode() + body
+    expected = hmac.new(key, payload, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        return False
+    for old, expires in list(seen_signatures.items()):
+        if expires < now:
+            del seen_signatures[old]
+    if len(seen_signatures) > 5000:
+        return False
+    seen_signatures[nonce] = now + 120
+    return True
 
 
 @app.middleware("http")
@@ -107,8 +136,6 @@ async def boundary(request: Request, call_next):
     if request.url.path != "/healthz":
         expected = os.getenv("MEETING_TOKEN", "")
         supplied = request.headers.get("authorization", "").removeprefix("Bearer ")
-        if len(expected) < 32 or not hmac.compare_digest(supplied, expected):
-            return JSONResponse({"error": "unauthorized"}, status_code=401)
         try:
             size = int(request.headers.get("content-length", "0"))
         except ValueError:
@@ -121,6 +148,9 @@ async def boundary(request: Request, call_next):
                 return JSONResponse({"error": "request_too_large"}, status_code=413)
             body.extend(part)
         request._body = bytes(body)
+        bearer_ok = len(expected) >= 32 and hmac.compare_digest(supplied, expected)
+        if not bearer_ok and not signed_request(request, bytes(body)):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
     response = await call_next(request)
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -134,8 +164,8 @@ async def invalid(request, error):
 
 @app.get("/healthz")
 async def health():
-    return {"ok": True, "service": "reign-meetings", "version": "1.0.0",
-            "configured": bool(os.getenv("OPENAI_API_KEY")) and len(os.getenv("MEETING_TOKEN", "")) >= 32,
+    return {"ok": True, "service": "reign-meetings", "version": "1.0.1",
+            "configured": bool(os.getenv("OPENAI_API_KEY")),
             "orchestration": "langgraph", "workspace_access": False}
 
 
