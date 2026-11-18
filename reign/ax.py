@@ -1,4 +1,5 @@
 """UltraView AX: authenticated human console for the private REIGN Core."""
+import asyncio
 import json
 import os
 import re
@@ -14,6 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from pydantic import BaseModel
+from reign.openstl import OpenSTLBridge
 from reign.config import checked_url
 from reign.session_errors import BROWSER_OCCUPIED_CODE, BrowserOccupied, browser_occupied_response
 from reign.voice import VOICE_ERRORS, VoiceError, read_offer, voice_error_response
@@ -150,8 +152,17 @@ def csrf(request: Request):
 async def lifespan(app):
     # Browser startup/Temporal dispatch can take longer than a normal API call.
     app.state.http = httpx.AsyncClient(timeout=120, trust_env=False)
-    yield
-    await app.state.http.aclose()
+    sweeper = asyncio.create_task(openstl.sweeper())
+    try:
+        yield
+    finally:
+        sweeper.cancel()
+        await asyncio.gather(sweeper, return_exceptions=True)
+        for grant in list(openstl.grants.values()):
+            await openstl.cleanup(grant)
+        openstl.pending.clear()
+        openstl.grants.clear()
+        await app.state.http.aclose()
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.add_exception_handler(VoiceError, voice_error_response)
@@ -254,6 +265,10 @@ async def login(data: Login):
 @app.post("/logout")
 async def logout(request: Request):
     csrf(request)
+    openstl.pending.clear()
+    for grant in list(openstl.grants.values()):
+        grant.revoked = True
+    await openstl.reap()
     response = JSONResponse({"status": "logged_out"})
     response.delete_cookie("ax_session")
     response.delete_cookie("ax_csrf")
@@ -719,3 +734,15 @@ async def node_disable(node_id: str, request: Request):
 async def chat_delete(tid: str, request: Request):
     csrf(request)
     return (await core("DELETE", f"/api/chat/{session_id(tid)}")).json()
+
+
+openstl = OpenSTLBridge(core, user, csrf)
+openstl.install(app)
+
+
+@app.get("/connect/openstl")
+async def connect_openstl():
+    return FileResponse(ASSETS / "openstl.html", headers={
+        "Cache-Control": "no-store", "X-Frame-Options": "DENY",
+        "Referrer-Policy": "no-referrer",
+        "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'"})
