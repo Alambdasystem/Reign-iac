@@ -706,11 +706,15 @@ async def nodes_enroll(data: NodeEnrollRequest):
 
 @app.post("/api/nodes/{node_id}/heartbeat")
 async def node_heartbeat(node_id: str, request: Request):
-    from reign.distributed_nodes import NodeDenied
+    from reign.distributed_nodes import NodeDenied, heartbeat_body
     # Node credential is not a Core admin token and is never logged or returned.
     token = request.headers.get("x-node-token", "")
     try:
-        return node_registry().heartbeat(node_id, token)
+        apps = await heartbeat_body(request)
+    except ValueError:
+        raise HTTPException(422, "Invalid heartbeat") from None
+    try:
+        return node_registry().heartbeat(node_id, token, apps)
     except (NodeDenied, ValueError):
         raise HTTPException(401, "Node authentication denied") from None
 

@@ -281,15 +281,16 @@ def session_id(value: str) -> str:
         raise HTTPException(422, "Invalid session identifier")
 
 
-async def core(method, path, data=None, voice_errors=False, account_errors=False):
+def core_origin():
     base = os.environ.get("CORE_URL", "").rstrip("/")
     if not base.startswith("https://") and not (os.environ.get("AX_ALLOW_INTERNAL_HTTP") == "1" and base.startswith("http://")):
-        if account_errors:
-            raise AccountError("vault_unavailable")
-        if voice_errors:
-            raise VoiceError("voice_core_unavailable")
         raise HTTPException(503, "Core endpoint not configured securely")
+    return base
+
+
+async def core(method, path, data=None, voice_errors=False, account_errors=False):
     try:
+        base = core_origin()
         result = await app.state.http.request(method, base + path,
             headers={"Authorization": "Bearer " + configured("CORE_TOKEN")}, json=data,
             **({"timeout": 40} if voice_errors else {}),
@@ -297,6 +298,8 @@ async def core(method, path, data=None, voice_errors=False, account_errors=False
     except HTTPException:
         if account_errors:
             raise AccountError("vault_unavailable") from None
+        if voice_errors:
+            raise VoiceError("voice_core_unavailable") from None
         raise
     except httpx.RequestError:
         if account_errors:
@@ -694,8 +697,37 @@ async def genesis_policy_audit(policy_id: str, request: Request):
 
 
 
-# AX accepts only the signed administrator session; node workers heartbeat on
-# Core's private API with their own one-time enrollment token.
+# Only the heartbeat accepts a device's own credential. Never attach CORE_TOKEN.
+@app.post("/api/nodes/{node_id}/heartbeat")
+async def device_heartbeat(node_id: str, request: Request):
+    from reign.distributed_nodes import ID_PATTERN, heartbeat_body
+    token = request.headers.get("x-node-token", "")
+    if not ID_PATTERN.fullmatch(node_id) or not re.fullmatch(r"[a-f0-9]{64}", token):
+        raise HTTPException(401, "Node authentication denied")
+    try:
+        apps = await heartbeat_body(request)
+    except ValueError:
+        raise HTTPException(422, "Invalid heartbeat") from None
+    try:
+        upstream = await app.state.http.post(core_origin() + f"/api/nodes/{node_id}/heartbeat",
+            headers={"x-node-token": token}, json={"apps": apps} if apps is not None else None,
+            follow_redirects=False, timeout=8)
+    except httpx.RequestError:
+        raise HTTPException(503, "Node inventory unavailable") from None
+    if upstream.status_code in (401, 403):
+        raise HTTPException(401, "Node authentication denied")
+    if upstream.status_code != 200:
+        raise HTTPException(503, "Node inventory unavailable")
+    try:
+        value = upstream.json()
+        if not isinstance(value, dict) or value.get("accepted") is not True or value.get("node_id") != node_id:
+            raise ValueError()
+    except ValueError:
+        raise HTTPException(503, "Node inventory unavailable") from None
+    return JSONResponse({"node_id": node_id, "accepted": True,
+                         "inventory_updated": value.get("inventory_updated") is True,
+                         "dispatch_enabled": False}, headers={"Cache-Control": "no-store"})
+
 @app.get("/api/nodes")
 async def node_inventory(request: Request):
     user(request)
