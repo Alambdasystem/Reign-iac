@@ -231,3 +231,35 @@ and actual external account/repository creation. CI also tests Accounts UI,
 one-use and wrong-context grants, secret exclusions, and account persistence
 across new service/container and browser instances. Controlled fixture success
 does not assert that a live external account or repository was created.
+
+### Open STL owner workspace bridge
+
+`/connect/openstl` is a top-level REIGN sign-in/consent page. The game starts a
+five-minute device connection at `/api/openstl/connect`, displays a matching code,
+and polls with a separate 256-bit device secret. Approval requires the existing
+AX administrator cookie, exact AX Origin and CSRF token. Redemption is single-use.
+The returned opaque access token stays in game memory, lasts at most one hour,
+and is bound to the exact approved game origin (production HTTPS or the packaged
+Android `https://localhost` WebView). Credentials and service tokens never cross
+to Open STL. There is no refresh token, URL bearer, local-storage bearer or public
+WebSocket tool invocation.
+
+The pilot allows one owner connection. It must create its own browser; it cannot
+attach the existing active browser. Browser and chat identifiers are server-owned
+and cannot be provided by the game. The bridge exposes only this new thread,
+its frame, bounded input, navigation, ownership control and task resume. It does
+not expose accounts/history/admin endpoints. Agent tasks retain REIGN's existing
+MCP tools (including authorized saved-account use), origin policy, human takeover,
+epoch fencing and budgets. A browser must exist before a task starts so revocation
+can stop that known browser even if the agent is running.
+
+Disconnect, REIGN logout, expiry and graceful AX shutdown revoke the grant and
+cancel its thread/close its browser. Failed cleanup is retried by the 15-second
+sweeper; no replacement connection is approved while cleanup remains pending.
+AX restarts lose in-memory grants, and an ungraceful crash can leave a browser to
+be closed by the administrator in AX. This is intentionally a single-owner pilot,
+not tenant isolation for multiple REIGN accounts.
+
+The floating game workspace is private and is not sent to meeting participants.
+Minimize preserves its connection and task; disconnect stops it. Top-level mobile
+sign-in can interrupt a game call, so authenticate before joining a meeting.
