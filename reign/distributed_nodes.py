@@ -7,6 +7,7 @@ No cloud provisioning or tool execution is performed by this module.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import secrets
@@ -47,6 +48,42 @@ def _capabilities(values) -> tuple[str, ...]:
     return tuple(sorted(values))
 
 
+def app_inventory(values):
+    fields = {"app_id": 128, "name": 80, "version": 32, "model": 120, "runtime": 80}
+    if not isinstance(values, list) or len(values) > 12:
+        raise ValueError("Invalid app inventory")
+    ids = set()
+    for item in values:
+        if not isinstance(item, dict) or set(item) != set(fields):
+            raise ValueError("Invalid app inventory")
+        for key, limit in fields.items():
+            value = item[key]
+            if not isinstance(value, str) or not 1 <= len(value) <= limit or not value.isprintable() or not value.strip():
+                raise ValueError("Invalid app metadata")
+        if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._-]*", item["app_id"]) or item["app_id"] in ids:
+            raise ValueError("Invalid app identity")
+        ids.add(item["app_id"])
+    return json.dumps(values, separators=(",", ":"))
+
+
+async def heartbeat_body(request):
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > 8192:
+            raise ValueError("Oversized heartbeat")
+        body.extend(chunk)
+    if not body:
+        return None
+    try:
+        payload = json.loads(body)
+    except (ValueError, UnicodeError, RecursionError):
+        raise ValueError("Invalid heartbeat") from None
+    if not isinstance(payload, dict) or set(payload) != {"apps"}:
+        raise ValueError("Invalid heartbeat")
+    app_inventory(payload["apps"])
+    return payload["apps"]
+
+
 class NodeRegistry:
     def __init__(self, path: str, *, clock=None):
         self.path = path
@@ -61,6 +98,10 @@ class NodeRegistry:
                 enabled INTEGER NOT NULL DEFAULT 1,
                 last_seen INTEGER,
                 created_at INTEGER NOT NULL
+            )""")
+
+            db.execute("""CREATE TABLE IF NOT EXISTS node_apps (
+                node_id TEXT PRIMARY KEY, inventory TEXT NOT NULL, reported_at INTEGER NOT NULL
             )""")
 
     @classmethod
@@ -115,7 +156,6 @@ class NodeRegistry:
         scopes = _capabilities(capabilities)
         token = secrets.token_hex(32)
         digest = self._digest(token)
-        import json
         with closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             if db.execute("SELECT COUNT(*) FROM nodes").fetchone()[0] >= MAX_NODES:
@@ -131,7 +171,7 @@ class NodeRegistry:
         return {"node_id": node_id, "enrollment_token": token,
                 "status": "awaiting_heartbeat", "dispatch_enabled": False}
 
-    def heartbeat(self, node_id: str, token: str) -> dict:
+    def heartbeat(self, node_id: str, token: str, apps=None) -> dict:
         node_id = _id(node_id)
         digest = self._digest(token)
         with closing(self._connect()) as db, db:
@@ -142,25 +182,30 @@ class NodeRegistry:
             if row is None or not row[1] or not secrets.compare_digest(digest, row[0]):
                 raise NodeDenied("Node authentication denied")
             seen = self._now()
+            if apps is not None:
+                inventory = app_inventory(apps)
+                db.execute("INSERT INTO node_apps VALUES (?,?,?) ON CONFLICT(node_id) DO UPDATE SET "
+                           "inventory=excluded.inventory, reported_at=excluded.reported_at",
+                           (node_id, inventory, seen))
             db.execute("UPDATE nodes SET last_seen=? WHERE node_id=?", (seen, node_id))
-        return {"node_id": node_id, "accepted": True, "dispatch_enabled": False}
+        return {"node_id": node_id, "accepted": True, "inventory_updated": apps is not None, "dispatch_enabled": False}
 
     def list_nodes(self) -> list[dict]:
-        import json
         now = self._now()
         with closing(self._connect()) as db:
             rows = db.execute(
-                "SELECT node_id,kind,label,capabilities,enabled,last_seen "
-                "FROM nodes ORDER BY node_id LIMIT ?", (MAX_NODES,)
+                "SELECT n.node_id,kind,label,capabilities,enabled,last_seen,a.inventory,a.reported_at "
+                "FROM nodes n LEFT JOIN node_apps a ON n.node_id=a.node_id ORDER BY n.node_id LIMIT ?", (MAX_NODES,)
             ).fetchall()
         result = []
-        for node_id, kind, label, values, enabled, seen in rows:
+        for node_id, kind, label, values, enabled, seen, inventory, reported in rows:
             online = bool(enabled and seen is not None and 0 <= now - seen <= HEARTBEAT_TTL_SECONDS)
             result.append({
                 "node_id": node_id, "kind": kind, "label": label,
                 "capabilities": json.loads(values),
                 "status": "disabled" if not enabled else "online" if online else "offline",
                 "last_seen": seen, "dispatch_enabled": False,
+                "apps": json.loads(inventory) if inventory is not None else [], "apps_reported_at": reported,
             })
         return result
 

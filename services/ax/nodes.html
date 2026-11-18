@@ -22,7 +22,7 @@ button.secondary{background:#2d3e59;border-color:#6d839c}button:disabled{opacity
 <div class="grid"><section class="panel"><h2>Enroll node</h2>
 <form id="form"><label>Node ID<input id="nodeId" required pattern="[a-z][a-z0-9-]{1,62}" placeholder="gpu-node-1" maxlength="63"></label>
 <label>Display label<input id="label" required maxlength="120" placeholder="On-prem GPU worker"></label>
-<label>Location / provider<select id="kind"><option value="render">Render</option><option value="aws">AWS (future)</option><option value="azure">Azure (future)</option><option value="onprem">On-prem (future)</option><option value="edge">Edge (future)</option></select></label>
+<label>Location / provider<select id="kind"><option value="render">Render</option><option value="aws">AWS (future)</option><option value="azure">Azure (future)</option><option value="onprem">On-prem (future)</option><option value="edge">Edge / phone</option></select></label>
 <fieldset><legend>Advertised capabilities — not execution permissions</legend>
 <label class="check"><input type="checkbox" name="cap" value="browser.observe">Browser observation</label>
 <label class="check"><input type="checkbox" name="cap" value="browser.action">Browser action</label>
@@ -55,7 +55,10 @@ async function refresh(){
  const tag=document.createElement("span");tag.className="tag";tag.textContent=n.status;
  const details=document.createElement("p");details.className="muted";details.textContent=n.kind+" · "+(n.capabilities.join(", ")||"no capabilities")+" · dispatch disabled";
  const disable=document.createElement("button");disable.type="button";disable.className="secondary";disable.textContent="Disable";disable.disabled=n.status==="disabled";disable.onclick=async()=>{if(!confirm("Disable heartbeat authentication for "+n.node_id+"?"))return;try{await call("/api/nodes/"+encodeURIComponent(n.node_id)+"/disable","POST",{});await refresh()}catch(err){el("notice").textContent=err.message}};
- item.append(title,tag,details,disable);container.append(item)}
+ item.append(title,tag,details);
+ if(n.apps_reported_at){const reported=document.createElement("p");reported.className="muted";reported.textContent="Apps last reported "+new Date(n.apps_reported_at*1000).toLocaleString();item.append(reported)}
+ for(const app of n.apps||[]){const row=document.createElement("p");row.textContent=app.name+" "+app.version+" · "+app.model+" · "+app.runtime;item.append(row)}
+ item.append(disable);container.append(item)}
  }catch(err){el("nodes").textContent="Node registry unavailable.";el("notice").textContent=err.message}
 }
 el("form").onsubmit=async event=>{event.preventDefault();if(!el("form").reportValidity())return;
