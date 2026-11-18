@@ -8,6 +8,8 @@ jobs:
   offline:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      ANDROID_AVD_HOME: /tmp/reign-qa-avd
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -15,12 +17,18 @@ jobs:
       - name: Prepare Android 15 hardware-accelerated emulator and Gradle
         run: |
           set -euo pipefail
+          mkdir -p "$ANDROID_AVD_HOME"
           sudo setfacl -m "u:$USER:rw" /dev/kvm
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;35.0.0" "system-images;android-35;google_apis;x86_64"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "emulator" "platform-tools" "platforms;android-36" "build-tools;35.0.0" "system-images;android-35;google_apis;x86_64"
           echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -f -n reign-phone -k "system-images;android-35;google_apis;x86_64"
           curl -sfL --retry 2 https://services.gradle.org/distributions/gradle-8.14.3-bin.zip -o /tmp/gradle.zip
           echo 'bd71102213493060956ec229d946beee57158dbd89d0e62b91bca0fa2c5f3531  /tmp/gradle.zip' | sha256sum -c -
           unzip -q /tmp/gradle.zip -d /tmp/reign-gradle
+          rm /tmp/gradle.zip
+          echo disk.dataPartition.size=2300M >> "$ANDROID_AVD_HOME/reign-phone.avd/config.ini"
+          "$ANDROID_HOME/emulator/emulator" -list-avds
+          "$ANDROID_HOME/emulator/emulator" -accel-check
+          df -h /tmp
       - name: Build the phone app and the same-signature test driver
         run: |
           python3 mobile/android/prepare_assets.py
@@ -29,9 +37,11 @@ jobs:
       - name: Load the bundled model and answer in airplane mode
         run: |
           set -euo pipefail
-          "$ANDROID_HOME/emulator/emulator" -avd reign-phone -accel on -memory 3500 -cores 2 -no-window -no-audio -no-snapshot -gpu swiftshader_indirect -no-boot-anim > /tmp/emulator.log 2>&1 &
+          "$ANDROID_HOME/emulator/emulator" -avd reign-phone -accel on -memory 2800 -cores 2 -no-window -no-audio -no-snapshot -gpu swiftshader_indirect -no-boot-anim > /tmp/emulator.log 2>&1 &
           emupid=$!
-          trap 'kill "$emupid" || true' EXIT
+          trap 'tail -50 /tmp/emulator.log; kill "$emupid" 2>/dev/null || true' EXIT
+          sleep 3
+          kill -0 "$emupid"
           timeout 300 bash -c 'until adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r" | grep -qx 1; do sleep 2; done'
           adb shell input keyevent 82
           adb install --no-incremental mobile/android/build/outputs/apk/debug/ReignNode-debug.apk
