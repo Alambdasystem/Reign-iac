@@ -1,0 +1,10 @@
+buildscript {
+ repositories { google(); mavenCentral() }
+ dependencies { classpath 'com.android.tools.build:gradle:8.13.0' }
+}
+apply plugin: 'com.android.application'
+android {
+ namespace 'systems.alambda.reignprobe'
+ compileSdk 36
+ defaultConfig { applicationId 'systems.alambda.reignprobe'; minSdk 28; targetSdk 35; versionCode 1; versionName '1' }
+}
