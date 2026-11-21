@@ -12,8 +12,10 @@ AX preserves this exact destination and returns to the lab after authentication.
 2. The first generated frame replaces the source photograph only after real
    inference succeeds. **Small turn**, **Mouth open**, **Soft smile**, and **Blink**
    expose the model's pose and expression controls.
-3. **Play motion** repeatedly generates modest variations. **Pause motion**
-   stops scheduling new frames; an already-running frame can finish.
+3. **Play motion** advances through small pose steps and plays intermediate
+   frames between completed neural renders. Slower devices show slower movement.
+   **Pause motion** stops advancing the pose; an already-running render and
+   transition can finish.
 4. **Choose a photo** accepts JPEG, PNG, and WebP files up to 15 MB. Use one
    front-facing face with even lighting and a closed mouth. Adjust the square
    crop and select **Apply crop**. The image is decoded, cropped, and processed
@@ -51,6 +53,31 @@ CPU preview can take several seconds per frame and is not a realtime claim.
 Only one inference runs at a time, and control changes are coalesced. The
 512 MB AX server only serves files; it does not run these neural models.
 
+### Smooth motion playback
+
+The motion phase advances in bounded steps after accepted renders, rather than
+sampling a new pose from wall-clock time after a slow model call. A separate
+animation clock presents intermediate images between real neural endpoints.
+Playback uses the recent inference duration, with a finite upper limit, to
+spread a small movement across the next render interval. CPU fallback can
+therefore show smooth, slow movement; unusually slow rendering can still leave
+the last completed image on screen.
+
+`portrait-motion.js` estimates small forward and backward movements on reduced
+images, then warps and blends the two real neural frames. It does not download
+another model, request more inference for every display frame, or predict past
+the newest available neural frame. Both endpoints remain exact model output.
+Low-confidence regions use a conservative blend; occlusions, teeth, hair and
+large expression changes can still show artifacts. This is an interpolation
+prototype, not a claim of additional neural frames or photorealistic video.
+
+The compositor retains one pair of neural images, a reusable display buffer,
+and small motion fields. The UI may hold at most one next neural image while a
+transition finishes. Source changes, crop application, errors and logout clear
+the interpolation state; logout also releases the inference worker immediately.
+This bounds the extra playback memory but does not move the existing model
+weights or inference to Render.
+
 ## Reproducible assets and security
 
 `services/ax/portrait-assets.json` pins immutable model revisions, exact runtime
@@ -78,7 +105,11 @@ runtime tests do not establish model quality or live deployment.
 The existing container smoke gate additionally loads the **real bundled model
 in Chromium** and renders neutral, mouth, turn, and smile frames from the
 fictional sample. It checks nonblank pixels, control-dependent pixel changes,
-same-origin GET-only requests, and desktop/mobile layout. It writes
+same-origin GET-only requests, and desktop/mobile layout. The motion gate also
+checks changing intermediate canvas pixels while the neural-frame count stays
+fixed, exact endpoint pixels, bounded workers/render requests, crop reset and
+immediate logout disposal. It saves the earlier, intermediate and later images
+from a real model transition for visual review. It writes
 `avatar-neural-acceptance.json` and screenshots to the normal CI evidence
 artifact. This is a disposable container/browser test, separate from production
 browser verification and James's visual acceptance.
