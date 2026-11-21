@@ -99,7 +99,7 @@ function rgbaToChw(rgba) {
  * init() -> engine
  * encode(canvas256) -> {width, height, provider}
  * render({yaw,pitch,roll,mouth,blink,smile}) -> {imageData,width,height,ms,provider}
- * dispose() -> Promise<void>
+ * dispose({immediate?: boolean}) -> Promise<void>
  *
  * onStatus receives {phase,message,provider,runtimeLabel,progress?}; download
  * progress is 0..100, measured from bytes received across both models.
@@ -188,7 +188,19 @@ export function createPortraitEngine({onStatus = () => {}} = {}) {
       const imageData = new ImageData(result.pixels, PORTRAIT_SIZE, PORTRAIT_SIZE);
       return {imageData, width: PORTRAIT_SIZE, height: PORTRAIT_SIZE, ms: result.ms, provider: result.provider};
     },
-    dispose() {
+    dispose({immediate = false} = {}) {
+      if (immediate) {
+        // Logout/unmount must stop active inference now, without waiting behind
+        // the worker queue. Terminating its realm also releases model memory.
+        disposed = true;
+        worker?.terminate();
+        worker = null;
+        provider = null;
+        initPromise = null;
+        failPending(new Error('The portrait engine has been disposed.'));
+        disposePromise = Promise.resolve();
+        return disposePromise;
+      }
       if (disposePromise) return disposePromise;
       disposed = true;
       if (!worker) { disposePromise = Promise.resolve(); return disposePromise; }

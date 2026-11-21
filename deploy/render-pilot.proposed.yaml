@@ -159,6 +159,8 @@ services:
     generateValue: true
   - key: AX_ADMIN_PASSWORD
     generateValue: true
+  - key: AX_AVATAR_USERS_JSON
+    sync: false
   - key: AX_PUBLIC_ORIGIN
     fromService:
       name: reign-ax-pilot

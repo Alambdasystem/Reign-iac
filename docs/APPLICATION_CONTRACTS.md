@@ -21,8 +21,8 @@ browser, and physical-device acceptance requirements.
   `COMPUTER_TOKEN`, `CORE_TOKEN`. Use server-side authenticated requests.
 - AX consumes `CORE_URL`, `CORE_TOKEN`, `AX_SESSION_KEY`. AX owns an authenticated
   browser session; service tokens must not be shipped in JavaScript, localStorage,
-  URL query strings, screenshots or logs. Define a proper user login before
-  exposing session actions. Use secure HttpOnly cookies and CSRF protection.
+  URL query strings, screenshots or logs. Owner and Avatar Lab access use separate
+  roles, secure HttpOnly session cookies and session-bound CSRF protection.
 - `GET /api/voice` reports sanitized provider configuration. `configured` means
   server configuration is present, not that a provider connection has passed.
   `POST /api/voice/offer` validates and brokers an SDP offer with session/CSRF
@@ -39,9 +39,54 @@ browser, and physical-device acceptance requirements.
   through Core. Tie each session and frame to the authenticated human owner.
   Establish endpoint schemas before implementing the AX client and its tests.
 
+### Owner and Avatar Lab access
+
+`POST /login` accepts `password` and an optional `username`. An empty username,
+`admin`, or `owner` retains the existing owner password flow. Named users are
+configured in the private `AX_AVATAR_USERS_JSON` environment variable as an object
+keyed by their lowercase username, with `display_name` and `password_hash` fields.
+These accounts have the fixed `avatar` role; configuration cannot grant owner
+access. Only a salted password verifier belongs in the service configuration.
+Never place a real password or verifier in Git, images, CI fixtures or logs.
+Create a verifier with `python scripts/hash_ax_password.py --output
+/private/path/outside-this-repository`. The helper reads the password with a
+hidden terminal prompt and writes a new mode-0600 file; automation can use
+`--stdin` with redirected input. Passwords must contain at least 15 UTF-8 bytes.
+Put the resulting verifier in the private environment JSON, then remove the
+temporary verifier file after configuration. To revoke access, remove that
+username; to change its password, replace its verifier and deploy the updated
+environment. Existing sessions for that account then require a fresh login.
+
+Login and `GET /api/me` return the authenticated username, display name, role,
+capabilities and `landing_path`. Owners retain the existing workspace capabilities.
+Avatar users land directly on `/avatar-lab`, before any workspace recovery calls,
+and can use only their profile, the lab and logout. Owner API routes reject an
+avatar session, including browser, saved accounts, chat, voice and Open STL
+management. The Core pilot remains a single-owner workspace; this limited lab
+role does not add multi-user data isolation to Core.
+
+Sessions are signed and tracked by the current AX process. Logout revokes the
+session on the server before clearing its cookies, so copying an old cookie does
+not keep it valid. Sessions also expire after a process restart or account
+verifier removal/rotation. Legacy owner cookies are rejected on first deployment
+of this change; the owner signs in once again with the same password. Scaling AX
+beyond its existing one process/one instance requires a shared session store.
+
+Both interfaces expose **Log out**. Active-session logout requires same-origin
+and CSRF validation; a same-origin request can clear an already expired cookie.
+Avatar logout never closes the owner's browser or revokes the owner's Open STL
+grants. The browser confirms server logout before showing a signed-out state,
+releases avatar workers/model memory, and propagates sign-out to other tabs.
+
+The Blueprint declares `AX_AVATAR_USERS_JSON` with `sync: false`. Because adding
+such a field to an existing Blueprint does not provision its value, set the
+private value separately on the existing AX service, preserving all other
+environment variables. Promote the tested AX image through the same Blueprint;
+do not create another service or change the compute plan for member access.
+
 ### Browser session recovery
 
-This pilot has one authenticated administrator and one active managed browser.
+The Core workspace has one authenticated administrator and one active managed browser.
 `GET /api/sessions/active` requires the AX login session (Core and Computer use
 their existing service authorization) and returns `{"session":null}` or the
 active session's public metadata. Responses are not cached. This discovery

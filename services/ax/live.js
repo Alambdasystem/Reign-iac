@@ -9,6 +9,8 @@ let chatOwner=null, chatPending=null, chatGeneration=0, chatInfo=null;
 let accountsVisible=false, accountsLoading=false, accountsMutation=false, accountsGeneration=0, accountsLoadId=0;
 let accountsReadAbort=null, accountsFocus=null, accountRemovalId=null, savedAccounts=[];
 let accountsVault={ready:false,durable:false,code:'vault_not_ready'};
+let accountRole=null, loggingOut=false, logoutFailed=false;
+const SIGNOUT_KEY='reign:ax:signed-out';
 const ACCOUNT_MESSAGES={
   vault_not_ready:'Secure saved accounts are not ready for this workspace.',
   vault_unavailable:'Secure saved accounts are unavailable. Refresh and try again.',
@@ -58,7 +60,7 @@ async function request(path,method='GET',body,options={}){
   if(method!=='GET'){headers['Content-Type']='application/json';headers['X-CSRF-Token']=csrf()}
   const cancel=()=>requestAbort.abort();
   if(options.signal?.aborted)cancel();else options.signal?.addEventListener('abort',cancel,{once:true});
-  const timeout=setTimeout(()=>{timedOut=true;requestAbort.abort()},path.startsWith('/api/chat')||path.startsWith('/api/accounts')?15000:path.startsWith('/api/voice')?40000:90000);
+  const timeout=setTimeout(()=>{timedOut=true;requestAbort.abort()},path==='/logout'||path.startsWith('/api/chat')||path.startsWith('/api/accounts')?15000:path.startsWith('/api/voice')?40000:90000);
   try{
     const response=await fetch(path,{method,headers,credentials:'same-origin',body:body===undefined?undefined:JSON.stringify(body),cache:'no-store',signal:requestAbort.signal,keepalive:!!options.keepalive});
     if(!response.ok){
@@ -98,9 +100,9 @@ function accountErrorMessage(error,mutation=false){
 function showAccountError(message){$('accountsError').textContent=message||'';$('accountsError').hidden=!message}
 function accountStoreReady(){return accountsVault.ready===true&&accountsVault.durable===true}
 function refreshAccountsControls(){
-  const blocked=!authenticated||restoringWorkspace||accountsLoading||accountsMutation;
+  const blocked=!authenticated||loggingOut||logoutFailed||restoringWorkspace||accountsLoading||accountsMutation;
   const secureInput=accountStoreReady()&&!blocked&&(!voiceUi.active||voiceUi.muted===true);
-  $('accountsOpen').disabled=!authenticated||restoringWorkspace;
+  $('accountsOpen').disabled=!authenticated||loggingOut||logoutFailed||restoringWorkspace;
   for(const id of ['accountLabel','accountOrigin','accountUsername','accountPassword','accountSave'])$(id).disabled=!secureInput;
   $('accountsRefresh').disabled=blocked;
   const useBlocked=!secureInput||busy||!sid||!connected||!agentReady||chatOccupied()||!!accountRemovalId;
@@ -220,7 +222,7 @@ async function useSavedAccount(id){
   try{await startChatRun('',{owner:'account-'+id,accountId:id})}
   catch(error){if(error.name!=='AbortError')entry('ACCOUNTS',accountErrorMessage(error,true),true)}
 }
-function refreshControls(){const blocked=busy||restoringWorkspace;const human=connected&&controller==='human'&&!blocked;const agent=connected&&controller==='agent'&&!blocked;$('open').disabled=!!sid||blocked||!authenticated;for(const id of ['take','takeExpanded'])$(id).disabled=!agent;for(const id of ['return','returnExpanded','tabKey','enterKey','scroll','scrollUp','send','text'])$(id).disabled=!human;$('close').disabled=!sid||blocked;$('expandRemote').disabled=!sid||!connected||restoringWorkspace;$('reconnect').hidden=!sid||connected;$('reconnect').disabled=blocked;$('logout').disabled=blocked;$('sendCommand').disabled=blocked||chatOccupied();$('resumeAgent').hidden=chatState!=='paused';$('resumeAgent').disabled=controller!=='agent'||restoringWorkspace;$('cancelAgent').hidden=!threadId&&!chatPending;$('cancelAgent').disabled=restoringWorkspace;$('session').textContent=sid||'None';$('controller').textContent=controller||'—';$('epoch').textContent=epoch??'—';$('controlLabel').textContent=!sid?'No active session':!connected?'Connection interrupted':human||controller==='human'?'You have control':'REIGN has control';$('remoteStatus').textContent=$('controlLabel').textContent;$('connection').textContent=!authenticated?'SIGN IN':connected?'CONNECTED':'WORKSPACE';$('liveLabel').textContent=connected?'● LIVE BROWSER':sid?'CONNECTION INTERRUPTED':'COMPUTER · NOT CONNECTED';refreshVoiceControls();refreshAccountsControls()}
+function refreshControls(){const blocked=busy||restoringWorkspace||loggingOut||logoutFailed;const human=connected&&controller==='human'&&!blocked;const agent=connected&&controller==='agent'&&!blocked;$('open').disabled=!!sid||blocked||!authenticated;for(const id of ['take','takeExpanded'])$(id).disabled=!agent;for(const id of ['return','returnExpanded','tabKey','enterKey','scroll','scrollUp','send','text'])$(id).disabled=!human;$('close').disabled=!sid||blocked;$('expandRemote').disabled=!sid||!connected||restoringWorkspace||loggingOut||logoutFailed;$('reconnect').hidden=!sid||connected;$('reconnect').disabled=blocked;$('logout').disabled=loggingOut;$('logout').hidden=!authenticated&&!loggingOut&&!logoutFailed;$('sendCommand').disabled=blocked||chatOccupied();$('resumeAgent').hidden=chatState!=='paused';$('resumeAgent').disabled=controller!=='agent'||restoringWorkspace||loggingOut||logoutFailed;$('cancelAgent').hidden=!threadId&&!chatPending;$('cancelAgent').disabled=restoringWorkspace||loggingOut||logoutFailed;$('session').textContent=sid||'None';$('controller').textContent=controller||'—';$('epoch').textContent=epoch??'—';$('controlLabel').textContent=!sid?'No active session':!connected?'Connection interrupted':human||controller==='human'?'You have control':'REIGN has control';$('remoteStatus').textContent=$('controlLabel').textContent;$('connection').textContent=!authenticated?'SIGN IN':connected?'CONNECTED':'WORKSPACE';$('liveLabel').textContent=connected?'● LIVE BROWSER':sid?'CONNECTION INTERRUPTED':'COMPUTER · NOT CONNECTED';refreshVoiceControls();refreshAccountsControls()}
 function clearFrame(){for(const id of ['screen','fullScreen'])$(id).removeAttribute('src');$('screen').hidden=true;$('emptyScreen').hidden=false;if(frameURL)URL.revokeObjectURL(frameURL);frameURL=null;frameSequence=0;$('frameStatus').textContent='Waiting for a session'}
 function pausePolling(){if(poll)clearTimeout(poll);poll=null}
 function stop(){pausePolling();sid=null;epoch=null;controller=null;connected=false;remember(null);clearFrame();closeExpanded();refreshControls()}
@@ -248,8 +250,8 @@ async function sync(){
   })();
   syncing=operation;try{await operation}finally{if(syncing===operation)syncing=null}
 }
-function schedule(){pausePolling();if(sid&&connected)poll=setTimeout(async()=>{await sync();schedule()},1500)}
-async function perform(action){if(busy||restoringWorkspace)return;busy=true;refreshControls();try{await action()}catch(error){entry('WORKSPACE',error.message,true);say(error.message,'Needs attention');if(error.status===401||error.status===404)lost(error);else if(error.status===409&&sid)await sync()}finally{busy=false;refreshControls();schedule()}}
+function schedule(){pausePolling();if(authenticated&&!loggingOut&&sid&&connected)poll=setTimeout(async()=>{await sync();schedule()},1500)}
+async function perform(action){if(busy||restoringWorkspace||loggingOut||logoutFailed)return;busy=true;refreshControls();try{await action()}catch(error){entry('WORKSPACE',error.message,true);say(error.message,'Needs attention');if(error.status===401||error.status===404)lost(error);else if(error.status===409&&sid)await sync()}finally{busy=false;refreshControls();schedule()}}
 async function recoverBrowserSession({useStored=true}={}){
   const stored=useStored?recalled():null;
   let session=null;
@@ -260,10 +262,10 @@ async function recoverBrowserSession({useStored=true}={}){
       expiredSessions.add(stored);remember(null);
     }
   }else if(stored)remember(null);
-  if(!authenticated)return null;
+  if(!authenticated||loggingOut)return null;
   if(!session){
     const result=await api('/api/sessions/active');
-    if(!authenticated)return null;
+    if(!authenticated||loggingOut)return null;
     session=result.session;
   }
   if(!session){stop();return null}
@@ -316,8 +318,12 @@ function avatarReturnPath(search){
   const targets=new URLSearchParams(search).getAll('next');
   return targets.length===1&&targets[0]==='/avatar-lab'?'/avatar-lab':null;
 }
-async function signedIn(){
-  const destination=avatarReturnPath(window.location?.search||'');
+async function signedIn(profile){
+  if(loggingOut)return;
+  if(!profile?.authenticated||!['owner','avatar'].includes(profile.role))throw Error('Your account could not be verified. Reload and sign in again.');
+  accountRole=profile.role;logoutFailed=false;
+  // Restricted accounts must leave before any Core, browser, chat or voice read.
+  const destination=accountRole==='avatar'?'/avatar-lab':avatarReturnPath(window.location?.search||'');
   if(destination){
     authenticated=true;$('loginMessage').textContent='Opening Avatar Lab…';
     window.location.replace(destination);return;
@@ -325,26 +331,67 @@ async function signedIn(){
   authenticated=true;restoringWorkspace=true;$('loginPanel').hidden=true;$('console').hidden=false;$('loginMessage').textContent='';
   refreshControls();entry('WORKSPACE','Signed in. Reconnecting to your existing workspace…');
   try{
-    await recoverBrowserSession();if(!authenticated)return;
-    await restoreChat();if(!authenticated)return;
-    await loadVoiceCapability();if(!authenticated)return;
+    await recoverBrowserSession();if(!authenticated||loggingOut)return;
+    await restoreChat();if(!authenticated||loggingOut)return;
+    await loadVoiceCapability();if(!authenticated||loggingOut)return;
     try{await checkStatus()}
     catch(error){if(authenticated){say('Signed in. Workspace dependencies are still reconnecting.','Reconnecting');entry('WORKSPACE',error.message,true)}}
   }catch(error){
     if(authenticated){say('The existing workspace could not be recovered. Reload to try again.','Needs attention');entry('WORKSPACE',error.message,true)}
   }finally{restoringWorkspace=false;refreshControls()}
 }
+function announceSignout(){try{localStorage.setItem(SIGNOUT_KEY,`${Date.now()}:${Math.random()}`)}catch{}}
+function leaveWorkspace(message){
+  authenticated=false;accountRole=null;logoutFailed=false;closeAccounts();
+  // Local teardown must not depend on cancellation or other server cleanup.
+  voiceController?.stop({reason:message}).catch(()=>{});
+  chatGeneration++;clearTimeout(chatPoll);chatPoll=null;
+  stop();$('console').hidden=true;$('loginPanel').hidden=false;
+  $('loginMessage').textContent=message;$('password').value='';refreshControls();
+}
+async function logout(){
+  if(loggingOut)return;
+  loggingOut=true;logoutFailed=false;closeAccounts();pausePolling();clearTimeout(chatPoll);chatPoll=null;
+  $('loginForm').querySelector('button').disabled=true;
+  $('logout').textContent='Logging out…';refreshControls();
+  let cleanupTimeout,cleanupComplete=false;
+  const cleanup=(async()=>{
+    // The microphone stops synchronously; any server cleanup is best effort.
+    try{await voiceController.stop({reason:'Logging out. Microphone off.'})}catch{}
+    if(accountRole==='owner'){
+      try{await clearChat()}catch{}
+      try{if(sid)await closeSession()}catch{}
+    }
+    cleanupComplete=true;
+  })();
+  try{
+    await Promise.race([cleanup,new Promise(resolve=>{cleanupTimeout=setTimeout(resolve,2500)})]);
+    // Always reach logout, including after an expired session or failed cleanup.
+    await request('/logout','POST');
+    announceSignout();
+    leaveWorkspace(cleanupComplete?'You’re logged out.':'You’re logged out. Background task cleanup could not be confirmed.');
+    window.location.replace('/');
+  }catch{
+    logoutFailed=true;
+    const message='Couldn’t confirm log out. Check your connection and try Log out again.';
+    $('loginMessage').textContent=message;say(message,'Needs attention');entry('WORKSPACE',message,true);
+  }finally{
+    clearTimeout(cleanupTimeout);loggingOut=false;
+    $('loginForm').querySelector('button').disabled=logoutFailed;
+    $('logout').textContent=logoutFailed?'Retry log out':'Log out';refreshControls();
+  }
+}
 $('accountsOpen').onclick=()=>openAccounts();$('accountsClose').onclick=closeAccounts;
 $('accountsRefresh').onclick=()=>loadAccounts();$('accountForm').onsubmit=saveAccount;
 $('accountRemoveCancel').onclick=clearAccountRemoval;$('accountRemoveConfirm').onclick=removeSelectedAccount;
 $('accountsDialog').addEventListener('cancel',event=>{event.preventDefault();closeAccounts()});
 $('accountsDialog').addEventListener('close',()=>{if(accountsVisible&&!$('accountsDialog').open)closeAccounts()});
-$('loginForm').onsubmit=async e=>{e.preventDefault();const button=e.currentTarget.querySelector('button');button.disabled=true;$('loginMessage').textContent='Signing in…';try{await api('/login','POST',{password:$('password').value});$('password').value='';await signedIn()}catch(error){$('loginMessage').textContent=error.status===401?'That password wasn’t accepted. Try again.':error.message}finally{button.disabled=false}};
+$('loginForm').onsubmit=async e=>{e.preventDefault();if(loggingOut||logoutFailed)return;const button=e.currentTarget.querySelector('button');button.disabled=true;$('loginMessage').textContent='Signing in…';try{const profile=await api('/login','POST',{username:$('username').value.trim(),password:$('password').value});$('password').value='';await signedIn(profile)}catch(error){$('loginMessage').textContent=error.status===401?'That username or password wasn’t accepted. Try again.':error.message}finally{button.disabled=false}};
 $('open').onclick=()=>perform(openSession);$('take').onclick=$('takeExpanded').onclick=()=>perform(()=>control('human'));$('return').onclick=$('returnExpanded').onclick=()=>perform(()=>control('agent'));$('close').onclick=()=>perform(closeSession);$('reconnect').onclick=()=>perform(async()=>{frameSequence=0;await sync()});$('expandRemote').onclick=openExpanded;$('closeRemote').onclick=closeExpanded;
-$('logout').onclick=()=>{closeAccounts();perform(async()=>{await voiceController.stop({reason:'Signed out. Microphone off.'});await clearChat();if(sid)await closeSession();await api('/logout','POST');stop();authenticated=false;$('console').hidden=true;$('loginPanel').hidden=false;$('password').focus();$('feed').replaceChildren();refreshControls()})};
+$('logout').onclick=logout;
 $('inputForm').onsubmit=e=>{e.preventDefault();perform(async()=>{await input({kind:'text',text:$('text').value});$('text').value=''})};$('scroll').onclick=()=>perform(()=>input({kind:'scroll',dy:450}));$('scrollUp').onclick=()=>perform(()=>input({kind:'scroll',dy:-450}));$('tabKey').onclick=()=>perform(()=>input({kind:'key',key:'Tab'}));$('enterKey').onclick=()=>perform(()=>input({kind:'key',key:'Enter'}));
 for(const id of ['screen','fullScreen'])$(id).onclick=e=>{if(controller!=='human'||busy||!connected)return;const image=e.currentTarget,rect=image.getBoundingClientRect(),scale=Math.min(rect.width/1280,rect.height/800),left=rect.left+(rect.width-1280*scale)/2,top=rect.top+(rect.height-800*scale)/2,x=(e.clientX-left)/scale,y=(e.clientY-top)/scale;if(x<0||x>=1280||y<0||y>=800)return;perform(()=>input({kind:'click',x,y}))};
-$('form').onsubmit=e=>{e.preventDefault();const text=$('message').value.trim();if(!text||busy||restoringWorkspace||chatOccupied())return;$('message').value='';entry('YOU',text);const command=text.toLowerCase().replace(/[.!?]+$/,'');const actions={'open git high':openSession,'open':openSession,'take control':()=>control('human'),'return control':()=>control('agent'),'return to reign':()=>control('agent'),'close session':closeSession,'close':closeSession,'status':checkStatus};if(actions[command])perform(actions[command]);else sendChat(text)};
+$('form').onsubmit=e=>{e.preventDefault();const text=$('message').value.trim();if(!text||busy||restoringWorkspace||loggingOut||logoutFailed||chatOccupied())return;$('message').value='';entry('YOU',text);const command=text.toLowerCase().replace(/[.!?]+$/,'');const actions={'open git high':openSession,'open':openSession,'take control':()=>control('human'),'return control':()=>control('agent'),'return to reign':()=>control('agent'),'close session':closeSession,'close':closeSession,'status':checkStatus};if(actions[command])perform(actions[command]);else sendChat(text)};
 document.querySelectorAll('[data-tab]').forEach(button=>button.onclick=()=>selectTab(button.dataset.tab));
 $('pin').onclick=()=>{pinned=!pinned;$('pin').textContent=pinned?'Unpin':'Pin visible';$('pin').setAttribute('aria-pressed',String(pinned));wake()};pinned=false;
 $('motion').onclick=e=>{run=!run;e.currentTarget.innerHTML=run?'<i aria-hidden="true">◉</i>Pause fluid':'<i aria-hidden="true">▶</i>Resume fluid';if(run)animate()};if(!run)$('motion').innerHTML='<i aria-hidden="true">▶</i>Resume fluid';
@@ -352,6 +399,10 @@ document.addEventListener('pointerdown',wake,{passive:true});setInterval(()=>{if
 document.addEventListener('keydown',e=>{if($('remoteOverlay').hidden)return;if(e.key==='Escape'){closeExpanded();return}if(e.key==='Tab'){const nodes=[...$('remoteOverlay').querySelectorAll('button:not(:disabled),input:not(:disabled)')].filter(x=>!x.hidden);const first=nodes[0],last=nodes.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus()}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus()}}});
 document.addEventListener('visibilitychange',()=>{if(document.hidden){closeAccounts();pausePolling();if(voiceUi.active)voiceController.stop({reason:'Call ended because REIGN moved to the background.'})}else if(sid)sync().then(schedule)});
 window.addEventListener('pagehide',()=>{closeAccounts();if(voiceUi.active)voiceController.stop({reason:'Call ended because the page closed.'})});
+window.addEventListener('storage',event=>{
+  if(event.key!==SIGNOUT_KEY||!event.newValue)return;
+  leaveWorkspace('You logged out in another tab.');window.location.replace('/');
+});
 
 
 // Voice and typed requests share one graph lease. No new turn can overtake an
@@ -403,7 +454,7 @@ async function restoreChat(){
   }
 }
 async function startChatRun(text,{owner='typed',signal,onStatus,connectionCheck=false,accountId=null}={}){
-  if(restoringWorkspace)throw Error('Wait for the existing workspace to reconnect before sending a request.');
+  if(restoringWorkspace||loggingOut||logoutFailed)throw Error('Wait for the existing workspace to reconnect before sending a request.');
   while(chatOccupied())await waitForChat(signal,onStatus);
   if(signal?.aborted)throw abortError();
   if(!authenticated)throw Error('Sign in before sending a voice request.');
@@ -525,18 +576,18 @@ async function clearChat(expectedOwner){
   }catch(error){
     if(job){job.cancelled=false;job.generation=chatGeneration;if(job.threadId){threadId=job.threadId;rememberChat()}}
     chatState='disconnected';refreshControls();
-    if(threadId)chatPoll=setTimeout(pollChat,1000);
+    if(threadId&&authenticated&&!loggingOut)chatPoll=setTimeout(pollChat,1000);
     throw error;
   }
 }
 async function runVoiceTurn(message,options){return startChatRun(message,{...options,owner:options.voiceCallId})}
-async function cancelVoiceTurn(owner){if(chatPending?.owner===owner)await clearChat(owner)}
+async function cancelVoiceTurn(owner){if(authenticated&&accountRole==='owner'&&chatPending?.owner===owner)await clearChat(owner)}
 $('cancelAgent').onclick=async()=>{try{if(voiceUi.active)await voiceController.stop({reason:'Call ended. Microphone off.'});await clearChat()}catch(error){entry('AGENT',error.message,true)}};
 $('resumeAgent').onclick=async()=>{if(!threadId)return;try{await api('/api/chat/'+encodeURIComponent(threadId)+'/resume','POST');chatRun=null;await pollChat()}catch(error){entry('AGENT','Return browser control before resuming. '+error.message,true)}};
 
 function refreshVoiceControls(){
   const active=!!voiceUi.active,ending=voiceUi.phase==='ending';
-  $('voiceStart').hidden=active||ending;$('voiceStart').disabled=!authenticated||restoringWorkspace||accountsVisible||!voiceCapability?.configured||ending;
+  $('voiceStart').hidden=active||ending;$('voiceStart').disabled=!authenticated||loggingOut||logoutFailed||restoringWorkspace||accountsVisible||!voiceCapability?.configured||ending;
   $('voiceEnd').hidden=!active&&!ending;$('voiceEnd').disabled=ending;
   $('mute').hidden=!active;$('mute').disabled=!active||accountsVisible||['checking','microphone'].includes(voiceUi.phase);
   $('mute').setAttribute('aria-pressed',String(!!voiceUi.muted));$('mute').querySelector('span').textContent=voiceUi.muted?'Unmute':'Mute';

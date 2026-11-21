@@ -1,4 +1,25 @@
-## Current checkpoint: live browser/vault acceptance; source fixes pending (2026-11-09)
+## Current implementation: separate Avatar Lab access (2026-11-21)
+
+James requested a separate login for Mayur and a logout option. The source adds
+named, Avatar Lab-only accounts and visible **Log out** controls in the lab and
+main workspace. The existing owner password remains valid. Member sessions must
+not access Core's single-owner browser, saved accounts, chat, voice or Open STL
+management. The account configuration and password stay outside this public
+repository; only a salted verifier is configured on the existing AX service.
+
+Login/logout validation must cover named-user routing, owner API denial, server
+session revocation, rejection of copied cookies, and survival of a separate owner
+session. The existing real neural-model browser acceptance remains a release
+gate. These source changes are subject to the normal tested-image release and
+manual Blueprint promotion; this implementation note is not a deployment receipt.
+See [the access contract](APPLICATION_CONTRACTS.md#owner-and-avatar-lab-access).
+
+The user confirmed the existing portrait prototype works on their device.
+Server-side avatar rendering, talking-avatar synthesis and Voicebox integration
+remain separate future work. This access change keeps the current browser-based
+portrait model and existing Render compute plans.
+
+## Previous checkpoint: live browser/vault acceptance; source fixes pending (2026-11-09)
 
 Deployed application source `08bad55dc8bd483fe78b13f90ae249872ace71af` has now
 executed live prompt-driven `workspace_status` and `vault_status` checks through
