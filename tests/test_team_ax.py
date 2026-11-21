@@ -1,0 +1,191 @@
+"""Exercise real AX sessions against a disposable private team directory."""
+import json
+import os
+import re
+import tempfile
+import unittest
+from unittest.mock import AsyncMock, patch
+from urllib.parse import urlsplit
+
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
+import httpx
+
+from reign import ax, ax_auth
+from reign.team_api import TeamRuntime, install
+from reign.team_identity import ACTOR_HEADER, OWNER_ID, verify_actor
+from reign.team_store import TeamStore, owner_identity
+
+ORIGIN = "https://ax.example.com"
+TOKEN = "synthetic-core-token-for-team-boundary-tests-123456"
+OWNER_PASSWORD = "synthetic-owner-password-team-boundary-tests-123456"
+AVATAR_PASSWORD = "synthetic-avatar-password-team-boundary-tests"
+
+
+class TeamAXTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.avatar_hash = ax_auth.hash_password(AVATAR_PASSWORD)
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="reign-team-ax-"); self.addCleanup(self.temp.cleanup)
+        self.env = patch.dict(os.environ, {
+            "AX_TEAM_ENABLED": "1", "AX_SESSION_KEY": "synthetic-session-key-for-team-boundary-tests-123456",
+            "AX_ADMIN_PASSWORD": OWNER_PASSWORD, "AX_PUBLIC_ORIGIN": ORIGIN,
+            "CORE_TOKEN": TOKEN, "CORE_URL": "https://core.example.com",
+            "AX_AVATAR_USERS_JSON": json.dumps({"mayur": {"display_name": "Mayur", "password_hash": self.avatar_hash}}),
+        }); self.env.start(); self.addCleanup(self.env.stop)
+        self.store = TeamStore(self.temp.name, bytes(range(32))); self.store.initialize()
+        self.owner = owner_identity()
+        created = self.store.create_member(self.owner, "fixture-employee", "Fixture Employee")
+        self.member, self.password = created["member"], created["temporary_password"]
+        self.runtime = TeamRuntime(self.store)
+        self.core_app = FastAPI(); self.core_app.state.team = self.runtime
+        def service_auth(request):
+            if request.headers.get("authorization") != "Bearer " + TOKEN: raise HTTPException(401, "Unauthorized")
+        install(self.core_app, service_auth)
+        ax.openstl.pending.clear(); ax.openstl.grants.clear(); ax.openstl.starts.clear()
+        self.client = TestClient(ax.app, base_url=ORIGIN); self.client.__enter__()
+        self.addCleanup(self.client.__exit__, None, None, None)
+        self.forwarded = []
+        self.upstream = None
+        async def forward(method, url, **kwargs):
+            self.forwarded.append((method, url, kwargs))
+            if self.upstream is not None: return self.upstream
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.core_app), base_url="https://core.example.com") as client:
+                return await client.request(method, url, **kwargs)
+        self.transport = patch.object(ax.app.state.http, "request", new=forward)
+        self.transport.start(); self.addCleanup(self.transport.stop)
+
+    def login(self, username="fixture-employee", password=None):
+        result = self.client.post("/login", json={"username": username, "password": self.password if password is None else password})
+        self.assertEqual(result.status_code, 200, result.text)
+        return result
+
+    def csrf(self):
+        return {"Origin": ORIGIN, "X-CSRF-Token": self.client.cookies.get("ax_csrf", "")}
+
+    def cookies(self):
+        return self.client.cookies.get("ax_session"), self.client.cookies.get("ax_csrf")
+
+    def restore(self, value):
+        self.client.cookies.clear()
+        for name, cookie in zip(("ax_session", "ax_csrf"), value):
+            self.client.cookies.set(name, cookie, domain="ax.example.com", path="/")
+
+    def test_employee_login_profile_and_protected_page_keep_local_owner_and_avatar_accounts(self):
+        self.login(" FIXTURE-EMPLOYEE ")
+        profile = self.client.get("/api/me").json()
+        self.assertEqual((profile["username"], profile["role"], profile["landing_path"]), ("fixture-employee", "employee", "/team"))
+        self.assertFalse(profile["capabilities"]["managed_browser"])
+        self.assertEqual(self.client.get("/", follow_redirects=False).headers["location"], "/team")
+        page = self.client.get("/team")
+        self.assertEqual(page.status_code, 200)
+        self.assertEqual(page.headers["cache-control"], "no-store")
+        self.assertIn("frame-ancestors 'none'", page.headers["content-security-policy"])
+        for path in ("/assets/team.html", "/assets/%74eam.html"):
+            self.assertEqual(self.client.get(path).status_code, 404)
+        self.assertEqual(self.client.get("/avatar-lab").status_code, 200)
+        before = len(self.forwarded)
+        self.login("owner", OWNER_PASSWORD)
+        self.assertEqual(self.client.get("/api/me").json()["role"], "owner")
+        self.login("mayur", AVATAR_PASSWORD)
+        self.assertEqual(self.client.get("/api/me").json()["role"], "avatar")
+        self.assertEqual(len(self.forwarded), before, "local accounts must never try the employee directory")
+        self.assertEqual(self.client.get("/team").status_code, 403)
+        self.assertEqual(self.client.get("/api/team").status_code, 403)
+
+    def test_employee_denied_every_legacy_api_before_any_core_forwarding(self):
+        self.login(); before = len(self.forwarded)
+        with patch.object(ax, "core", new_callable=AsyncMock) as legacy, patch.object(ax.openstl, "core", new_callable=AsyncMock) as external:
+            for route in ax.app.routes:
+                path = getattr(route, "path", "")
+                if not path.startswith("/api/") or path == "/api/me" or path == "/api/team" or path.startswith("/api/team/"): continue
+                path = re.sub(r"\{[^}]+\}", "123e4567-e89b-42d3-a456-426614174000", path)
+                for method in route.methods:
+                    with self.subTest(path=path, method=method):
+                        result = self.client.request(method, path, headers={**self.csrf(), "Authorization": "Bearer " + TOKEN}, json={}, follow_redirects=False)
+                        self.assertEqual(result.status_code, 403)
+            for path in ("/api", "/api/unknown-future-owner-route", "/api/me/", "/genesis", "/guardrails", "/nodes", "/connect/openstl"):
+                self.assertEqual(self.client.get(path, follow_redirects=False).status_code, 403)
+            legacy.assert_not_awaited(); external.assert_not_awaited()
+        self.assertEqual(len(self.forwarded), before)
+
+    def test_team_csrf_and_server_signed_actor_ignore_browser_credentials(self):
+        self.login(); before = len(self.forwarded)
+        for headers in ({}, {"Origin": ORIGIN}, {**self.csrf(), "Origin": "https://evil.example"}):
+            self.assertEqual(self.client.post("/api/team/rooms", headers=headers, json={"title": "Must not exist"}).status_code, 403)
+        self.assertEqual(len(self.forwarded), before)
+        result = self.client.post("/api/team/rooms", headers={**self.csrf(), ACTOR_HEADER: "forged-owner", "Authorization": "Bearer browser-supplied"}, json={"title": "Authorized employee room"})
+        self.assertEqual(result.status_code, 201)
+        _, url, sent = self.forwarded[-1]
+        self.assertEqual(urlsplit(url).path, "/api/team/rooms")
+        self.assertEqual(sent["headers"]["Authorization"], "Bearer " + TOKEN)
+        claims = verify_actor(sent["headers"][ACTOR_HEADER])
+        self.assertEqual((claims["sub"], claims["role"], claims["rev"]), (self.member["id"], "employee", 1))
+        self.assertNotIn("Cookie", sent["headers"]); self.assertNotIn("X-CSRF-Token", sent["headers"])
+        self.assertFalse(sent["follow_redirects"])
+        self.assertEqual(self.client.get("/api/team?role=owner").status_code, 422)
+        self.assertEqual(self.client.post("/api/team/members", headers=self.csrf(), json={"username": "new-user", "display_name": "New"}).status_code, 403)
+        self.login("owner", OWNER_PASSWORD)
+        self.assertEqual(self.client.get("/api/team").status_code, 200)
+        self.assertEqual(verify_actor(self.forwarded[-1][2]["headers"][ACTOR_HEADER])["sub"], OWNER_ID)
+        self.assertEqual(self.client.post("/api/team/members", headers=self.csrf(), json={"username": "mayur", "display_name": "Collision"}).status_code, 409)
+
+    def test_revocation_blocks_existing_employee_sessions_and_cookie_replay(self):
+        self.login(); old = self.cookies()
+        self.store.disable_member(self.owner, self.member["id"])
+        self.assertEqual(self.client.get("/api/team").status_code, 401)
+        self.restore(old)
+        self.assertEqual(self.client.get("/api/me").status_code, 401)
+        self.assertEqual(self.client.get("/team", follow_redirects=False).status_code, 303)
+        wrong = self.client.post("/login", json={"username": "fixture-employee", "password": self.password})
+        self.assertEqual(wrong.status_code, 401)
+        self.assertNotIn(self.password, wrong.text)
+
+    def test_logout_requires_session_csrf_and_never_revokes_owner_resources(self):
+        self.login(); old = self.cookies()
+        self.login("owner", OWNER_PASSWORD); owner = self.cookies()
+        self.restore((old[0], owner[1]))
+        self.assertEqual(self.client.post("/logout", headers=self.csrf()).status_code, 403)
+        self.restore(old)
+        with patch.object(ax.openstl, "reap", new_callable=AsyncMock) as reap:
+            self.assertEqual(self.client.post("/logout", headers=self.csrf()).status_code, 200)
+            reap.assert_not_awaited()
+        self.restore(old)
+        self.assertEqual(self.client.get("/api/team").status_code, 401)
+        self.restore(owner)
+        self.assertEqual(self.client.get("/api/me").json()["role"], "owner")
+
+    def test_core_redirects_and_unapproved_response_types_are_not_forwarded(self):
+        self.login()
+        for result in (httpx.Response(302, json={"credential": "private-fixture"}, headers={"Location": "https://evil.example"}),
+                       httpx.Response(200, text="private-fixture", headers={"Content-Type": "text/html"}),
+                       httpx.Response(500, json={"secret": "private-fixture"})):
+            self.upstream = result
+            response = self.client.get("/api/team")
+            self.assertEqual(response.status_code, 503)
+            self.assertNotIn("private-fixture", response.text); self.assertNotIn("location", response.headers)
+        self.upstream = httpx.Response(200, content=b"synthetic-jpeg", headers={"Content-Type": "image/jpeg",
+            "X-Session-ID": "123e4567-e89b-42d3-a456-426614174000", "X-Frame-Sequence": "10",
+            "X-Frame-Timestamp": "1000.5", "Set-Cookie": "secret=private-fixture", "X-Private": "private-fixture"})
+        self.assertEqual(self.client.get("/api/team").status_code, 503)
+        response = self.client.get("/api/team/rooms/123e4567-e89b-42d3-a456-426614174000/browser/frame")
+        self.assertEqual(response.status_code, 200); self.assertEqual(response.content, b"synthetic-jpeg")
+        self.assertEqual(response.headers["x-frame-sequence"], "10")
+        self.assertNotIn("set-cookie", response.headers); self.assertNotIn("x-private", response.headers)
+        self.assertEqual(response.headers["cache-control"], "no-store")
+
+    def test_employee_directory_fails_closed_without_changing_local_accounts(self):
+        with patch.dict(os.environ, {"AX_TEAM_ENABLED": "0"}):
+            response = self.client.post("/login", json={"username": "fixture-employee", "password": self.password})
+            self.assertEqual(response.status_code, 401); self.assertEqual(self.forwarded, [])
+            self.login("owner", OWNER_PASSWORD)
+        self.upstream = httpx.Response(200, json={"identity": {"id": self.member["id"], "username": "fixture-employee",
+            "display_name": "Fixture", "role": "owner", "credential_revision": 1}})
+        response = self.client.post("/login", json={"username": "fixture-employee", "password": self.password})
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn(self.password, response.text)
+
+
+if __name__ == "__main__": unittest.main()

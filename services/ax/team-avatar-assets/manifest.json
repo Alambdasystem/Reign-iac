@@ -1,0 +1,401 @@
+{
+  "mode": "precomputed_neural_portrait",
+  "source": "bundled fictional sample",
+  "source_sha256": "134bb48955007e572b0f168aa2fa84b719901ec77b46a170da58bb13eec4b12b",
+  "appearance_sha256": "d070afccca7f528ffb0ef5052b21588b42225a996661833f7bdede562d1ab921",
+  "distilled_sha256": "335f98b44e5fab3577b15c3ec53eddd39be228f072d98d7ce11232bcf1c42afd",
+  "runtime": "1.32.0",
+  "atlas": "portrait-atlas.webp",
+  "atlas_sha256": "e78062581a93b6f1b2e1fdb077f56b48c7c5004a39ee576e2c39cb5ae96b3197",
+  "bytes": 319650,
+  "frame_size": 256,
+  "width": 768,
+  "height": 4096,
+  "frames": [
+    {
+      "expression": "neutral",
+      "mouth": 0,
+      "blink": false,
+      "yaw": -3,
+      "column": 0,
+      "row": 0
+    },
+    {
+      "expression": "neutral",
+      "mouth": 0,
+      "blink": false,
+      "yaw": 0,
+      "column": 1,
+      "row": 0
+    },
+    {
+      "expression": "neutral",
+      "mouth": 0,
+      "blink": false,
+      "yaw": 3,
+      "column": 2,
+      "row": 0
+    },
+    {
+      "expression": "neutral",
+      "mouth": 0.45,
+      "blink": false,
+      "yaw": -3,
+      "column": 0,
+      "row": 1
+    },
+    {
+      "expression": "neutral",
+      "mouth": 0.45,
+      "blink": false,
+      "yaw": 0,
+      "column": 1,
+      "row": 1
+    },
+    {
+      "expression": "neutral",
+      "mouth": 0.45,
+      "blink": false,
+      "yaw": 3,
+      "column": 2,
+      "row": 1
+    },
+    {
+      "expression": "neutral",
+      "mouth": 0.9,
+      "blink": false,
+      "yaw": -3,
+      "column": 0,
+      "row": 2
+    },
+    {
+      "expression": "neutral",
+      "mouth": 0.9,
+      "blink": false,
+      "yaw": 0,
+      "column": 1,
+      "row": 2
+    },
+    {
+      "expression": "neutral",
+      "mouth": 0.9,
+      "blink": false,
+      "yaw": 3,
+      "column": 2,
+      "row": 2
+    },
+    {
+      "expression": "neutral",
+      "mouth": 0,
+      "blink": true,
+      "yaw": -3,
+      "column": 0,
+      "row": 3
+    },
+    {
+      "expression": "neutral",
+      "mouth": 0,
+      "blink": true,
+      "yaw": 0,
+      "column": 1,
+      "row": 3
+    },
+    {
+      "expression": "neutral",
+      "mouth": 0,
+      "blink": true,
+      "yaw": 3,
+      "column": 2,
+      "row": 3
+    },
+    {
+      "expression": "warm",
+      "mouth": 0,
+      "blink": false,
+      "yaw": -3,
+      "column": 0,
+      "row": 4
+    },
+    {
+      "expression": "warm",
+      "mouth": 0,
+      "blink": false,
+      "yaw": 0,
+      "column": 1,
+      "row": 4
+    },
+    {
+      "expression": "warm",
+      "mouth": 0,
+      "blink": false,
+      "yaw": 3,
+      "column": 2,
+      "row": 4
+    },
+    {
+      "expression": "warm",
+      "mouth": 0.45,
+      "blink": false,
+      "yaw": -3,
+      "column": 0,
+      "row": 5
+    },
+    {
+      "expression": "warm",
+      "mouth": 0.45,
+      "blink": false,
+      "yaw": 0,
+      "column": 1,
+      "row": 5
+    },
+    {
+      "expression": "warm",
+      "mouth": 0.45,
+      "blink": false,
+      "yaw": 3,
+      "column": 2,
+      "row": 5
+    },
+    {
+      "expression": "warm",
+      "mouth": 0.9,
+      "blink": false,
+      "yaw": -3,
+      "column": 0,
+      "row": 6
+    },
+    {
+      "expression": "warm",
+      "mouth": 0.9,
+      "blink": false,
+      "yaw": 0,
+      "column": 1,
+      "row": 6
+    },
+    {
+      "expression": "warm",
+      "mouth": 0.9,
+      "blink": false,
+      "yaw": 3,
+      "column": 2,
+      "row": 6
+    },
+    {
+      "expression": "warm",
+      "mouth": 0,
+      "blink": true,
+      "yaw": -3,
+      "column": 0,
+      "row": 7
+    },
+    {
+      "expression": "warm",
+      "mouth": 0,
+      "blink": true,
+      "yaw": 0,
+      "column": 1,
+      "row": 7
+    },
+    {
+      "expression": "warm",
+      "mouth": 0,
+      "blink": true,
+      "yaw": 3,
+      "column": 2,
+      "row": 7
+    },
+    {
+      "expression": "thoughtful",
+      "mouth": 0,
+      "blink": false,
+      "yaw": -3,
+      "column": 0,
+      "row": 8
+    },
+    {
+      "expression": "thoughtful",
+      "mouth": 0,
+      "blink": false,
+      "yaw": 0,
+      "column": 1,
+      "row": 8
+    },
+    {
+      "expression": "thoughtful",
+      "mouth": 0,
+      "blink": false,
+      "yaw": 3,
+      "column": 2,
+      "row": 8
+    },
+    {
+      "expression": "thoughtful",
+      "mouth": 0.45,
+      "blink": false,
+      "yaw": -3,
+      "column": 0,
+      "row": 9
+    },
+    {
+      "expression": "thoughtful",
+      "mouth": 0.45,
+      "blink": false,
+      "yaw": 0,
+      "column": 1,
+      "row": 9
+    },
+    {
+      "expression": "thoughtful",
+      "mouth": 0.45,
+      "blink": false,
+      "yaw": 3,
+      "column": 2,
+      "row": 9
+    },
+    {
+      "expression": "thoughtful",
+      "mouth": 0.9,
+      "blink": false,
+      "yaw": -3,
+      "column": 0,
+      "row": 10
+    },
+    {
+      "expression": "thoughtful",
+      "mouth": 0.9,
+      "blink": false,
+      "yaw": 0,
+      "column": 1,
+      "row": 10
+    },
+    {
+      "expression": "thoughtful",
+      "mouth": 0.9,
+      "blink": false,
+      "yaw": 3,
+      "column": 2,
+      "row": 10
+    },
+    {
+      "expression": "thoughtful",
+      "mouth": 0,
+      "blink": true,
+      "yaw": -3,
+      "column": 0,
+      "row": 11
+    },
+    {
+      "expression": "thoughtful",
+      "mouth": 0,
+      "blink": true,
+      "yaw": 0,
+      "column": 1,
+      "row": 11
+    },
+    {
+      "expression": "thoughtful",
+      "mouth": 0,
+      "blink": true,
+      "yaw": 3,
+      "column": 2,
+      "row": 11
+    },
+    {
+      "expression": "concerned",
+      "mouth": 0,
+      "blink": false,
+      "yaw": -3,
+      "column": 0,
+      "row": 12
+    },
+    {
+      "expression": "concerned",
+      "mouth": 0,
+      "blink": false,
+      "yaw": 0,
+      "column": 1,
+      "row": 12
+    },
+    {
+      "expression": "concerned",
+      "mouth": 0,
+      "blink": false,
+      "yaw": 3,
+      "column": 2,
+      "row": 12
+    },
+    {
+      "expression": "concerned",
+      "mouth": 0.45,
+      "blink": false,
+      "yaw": -3,
+      "column": 0,
+      "row": 13
+    },
+    {
+      "expression": "concerned",
+      "mouth": 0.45,
+      "blink": false,
+      "yaw": 0,
+      "column": 1,
+      "row": 13
+    },
+    {
+      "expression": "concerned",
+      "mouth": 0.45,
+      "blink": false,
+      "yaw": 3,
+      "column": 2,
+      "row": 13
+    },
+    {
+      "expression": "concerned",
+      "mouth": 0.9,
+      "blink": false,
+      "yaw": -3,
+      "column": 0,
+      "row": 14
+    },
+    {
+      "expression": "concerned",
+      "mouth": 0.9,
+      "blink": false,
+      "yaw": 0,
+      "column": 1,
+      "row": 14
+    },
+    {
+      "expression": "concerned",
+      "mouth": 0.9,
+      "blink": false,
+      "yaw": 3,
+      "column": 2,
+      "row": 14
+    },
+    {
+      "expression": "concerned",
+      "mouth": 0,
+      "blink": true,
+      "yaw": -3,
+      "column": 0,
+      "row": 15
+    },
+    {
+      "expression": "concerned",
+      "mouth": 0,
+      "blink": true,
+      "yaw": 0,
+      "column": 1,
+      "row": 15
+    },
+    {
+      "expression": "concerned",
+      "mouth": 0,
+      "blink": true,
+      "yaw": 3,
+      "column": 2,
+      "row": 15
+    }
+  ],
+  "lip_sync": "audio_energy_envelope; not phoneme prediction"
+}
