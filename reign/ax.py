@@ -199,6 +199,33 @@ async def genesis_console(request: Request):
                                        "X-Content-Type-Options": "nosniff"})
 
 
+@app.get("/avatar-lab")
+async def avatar_lab(request: Request):
+    """Isolated experimental avatar UX, available only after AX sign-in.
+
+    The lab has no Core/MCP/Temporal actions and does not load credentials.
+    Existing REIGN routes and the production console are unchanged.
+    """
+    try:
+        user(request)
+    except HTTPException as error:
+        if error.status_code == 401:
+            return RedirectResponse(url="/", status_code=303,
+                                    headers={"Cache-Control": "no-store"})
+        raise
+    return FileResponse(ASSETS / "avatar-lab.html", headers={
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+        "Content-Security-Policy": (
+            "default-src 'none'; script-src 'unsafe-inline' https://esm.sh; "
+            "style-src 'unsafe-inline'; connect-src https://esm.sh; "
+            "img-src 'self' data:; font-src 'none'; "
+            "media-src 'none'; object-src 'none'; frame-ancestors 'none'; "
+            "base-uri 'none'; form-action 'none'"
+        ),
+    })
+
+
 @app.get("/guardrails")
 async def guardrails_console(request: Request):
     try:
