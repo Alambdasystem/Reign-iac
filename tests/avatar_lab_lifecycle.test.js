@@ -38,8 +38,9 @@ class Element {
     return this.children.get(name);
   }
 }
-function harness({holdRenders = false} = {}) {
+function harness({holdRenders = false, logoutFailures = 0, role = 'owner', sessionStatus = 200} = {}) {
   const nodes = new Map(), images = [], engines = [], encoded = [], rendered = [], drawn = [], revoked = [], windowEvents = new Map();
+  const calls = [], navigations = [], announcements = [];
   let urlId = 0, reloads = 0, activeEncodes = 0, maximumEncodes = 0;
   const node = id => { if (!nodes.has(id)) nodes.set(id, new Element(id)); return nodes.get(id); };
   node('sourceCanvas').getContext = () => ({drawImage(image) { node('sourceCanvas').portrait = image.src; }});
@@ -64,19 +65,32 @@ function harness({holdRenders = false} = {}) {
         if (!holdRenders) { rendered.push({frame}); return Promise.resolve(frame); }
         const pending = deferred(); rendered.push({frame, ...pending}); return pending.promise;
       },
-      async dispose() { engine.disposed = true; },
+      async dispose(options) { engine.disposed = true; engine.disposeOptions = options; },
     };
     engines.push(engine); return engine;
   }
   const context = vm.createContext({
-    document: {getElementById: node, querySelectorAll: () => []}, Image: FakeImage,
-    window: {addEventListener: (event, handler) => windowEvents.set(event, handler), location: {reload: () => reloads++}},
+    document: {getElementById: node, querySelectorAll: () => [], cookie: 'ax_csrf=synthetic-csrf'}, Image: FakeImage,
+    window: {addEventListener: (event, handler) => windowEvents.set(event, handler),
+      location: {reload: () => reloads++, replace: target => navigations.push(target)}},
+    localStorage: {setItem: (key, value) => announcements.push({key, value})},
+    AbortController,
+    fetch: async (url, options) => {
+      calls.push({url, options});
+      if (url === '/api/me') return {ok: sessionStatus === 200, status: sessionStatus,
+        async json() { return {authenticated: true, role, username: role === 'avatar' ? 'mayur' : 'admin', display_name: role === 'avatar' ? 'Mayur' : 'Owner'}; }};
+      if (url === '/logout') {
+        if (logoutFailures-- > 0) throw new Error('Synthetic disconnected network');
+        return {ok: true, status: 200};
+      }
+      throw new Error('Unexpected request: ' + url);
+    },
     URL: {createObjectURL: () => `blob:portrait-${++urlId}`, revokeObjectURL: url => revoked.push(url)},
     createPortraitEngine, performance: {now: () => 100}, setTimeout: () => 1, clearTimeout() {}, console,
   });
   vm.runInContext(source, context, {filename: 'services/ax/avatar-lab.js'});
   return {
-    node, images, engines, encoded, rendered, drawn, revoked, windowEvents,
+    node, images, engines, encoded, rendered, drawn, revoked, windowEvents, calls, navigations, announcements,
     get maximumEncodes() { return maximumEncodes; }, get reloads() { return reloads; },
     decode(url) { const item = images.findLast(value => value.image.src === url); assert.ok(item, url); item.resolve(); },
     upload() { return node('portraitFile').listeners.get('change')({target: {files: [{type: 'image/png', size: 10}]}}); },
@@ -149,4 +163,85 @@ test('provider changes update the label and a cached page restores through a fre
   const status = h.node('statusText').textContent;
   h.engines[0].options.onStatus({provider: 'webgpu', message: 'obsolete engine status'});
   assert.equal(h.node('statusText').textContent, status);
+});
+
+test('an avatar account sees its name and logout without owner navigation or automatic model loading', async () => {
+  const h = harness({role: 'avatar'});
+  await eventually(() => h.node('accountName').textContent === 'Mayur');
+  assert.equal(h.node('workspaceLink').hidden, true);
+  assert.equal(h.node('labBrand').href, '/avatar-lab');
+  assert.equal(h.engines.length, 0);
+  assert.deepEqual(h.calls.map(call => call.url), ['/api/me']);
+});
+
+test('logout immediately unloads an active model and photo before sending the cookie logout', async () => {
+  const h = harness({role: 'avatar'});
+  const upload = h.upload(); h.decode('blob:portrait-1'); await upload;
+  const start = h.click('startButton'); await eventually(() => h.encoded.length === 1);
+  await h.click('logoutButton');
+  assert.equal(h.engines[0].disposed, true);
+  assert.equal(h.engines[0].disposeOptions.immediate, true);
+  assert.deepEqual(h.revoked, ['blob:portrait-1']);
+  assert.equal(h.node('sourceCanvas').width, 0);
+  assert.equal(h.node('outputCanvas').width, 0);
+  assert.equal(h.node('previewSource').src, undefined);
+  assert.equal(h.node('portraitFile').disabled, true);
+  assert.equal(h.node('startButton').disabled, true);
+  const request = h.calls.find(call => call.url === '/logout');
+  assert.equal(request.options.method, 'POST');
+  assert.equal(request.options.credentials, 'same-origin');
+  assert.equal(request.options.headers['X-CSRF-Token'], 'synthetic-csrf');
+  assert.deepEqual(h.navigations, ['/?next=%2Favatar-lab']);
+  assert.equal(h.announcements.length, 1);
+  h.encoded[0].resolve(); await start;
+  assert.deepEqual(h.drawn, [], 'a completed stale encode must never repaint after logout');
+  await h.click('startButton');
+  assert.equal(h.engines.length, 1, 'logout must not recreate the model');
+});
+
+test('failed logout keeps resources unloaded and exposes a real retry', async () => {
+  const h = harness({logoutFailures: 1});
+  await eventually(() => h.node('accountName').textContent === 'Owner');
+  await h.click('logoutButton');
+  assert.deepEqual(h.navigations, []);
+  assert.deepEqual(h.announcements, []);
+  assert.equal(h.node('logoutButton').disabled, false);
+  assert.equal(h.node('logoutButton').textContent, 'Retry log out');
+  assert.match(h.node('logoutMessage').textContent, /Couldn’t confirm log out/);
+  assert.equal(h.node('startButton').disabled, true);
+  await h.click('logoutButton');
+  assert.deepEqual(h.navigations, ['/?next=%2Favatar-lab']);
+  assert.equal(h.announcements.length, 1);
+});
+
+test('cross-tab logout stops the model with no owner actions or second logout request', async () => {
+  const h = harness();
+  h.decode(SAMPLE); await eventually(() => h.node('sourceCanvas').portrait === SAMPLE);
+  const start = h.click('startButton'); await eventually(() => h.encoded.length === 1);
+  h.encoded[0].resolve(); await start;
+  h.windowEvents.get('storage')({key: 'reign:ax:signed-out', newValue: 'synthetic-event'});
+  assert.equal(h.engines[0].disposed, true);
+  assert.deepEqual(h.calls.map(call => call.url), ['/api/me']);
+  assert.deepEqual(h.navigations, ['/?next=%2Favatar-lab']);
+});
+
+test('an expired session releases the page and logout remains safe to request', async () => {
+  const h = harness({sessionStatus: 401});
+  await eventually(() => h.navigations.length === 1);
+  assert.equal(h.node('startButton').disabled, true);
+  assert.equal(h.engines.length, 0);
+  await h.click('logoutButton');
+  assert.equal(h.calls.filter(call => call.url === '/logout').length, 1);
+  assert.equal(h.node('logoutButton').disabled, false);
+});
+
+test('logout revokes a photo that is still decoding without accepting it later', async () => {
+  const h = harness();
+  const upload = h.upload();
+  await h.click('logoutButton');
+  assert.deepEqual(h.revoked, ['blob:portrait-1']);
+  h.decode('blob:portrait-1'); await upload;
+  assert.deepEqual(h.revoked, ['blob:portrait-1']);
+  assert.equal(h.node('previewSource').src, undefined);
+  assert.equal(h.engines.length, 0);
 });

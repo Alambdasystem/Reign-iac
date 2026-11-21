@@ -169,3 +169,26 @@ test('an encoding failure preserves the previous portrait and frees failed input
   await h.send('dispose');
   assert.ok(h.tensors.every(tensor => tensor.disposed));
 });
+
+test('immediate disposal terminates a stalled worker and rejects its pending work', async () => {
+  const workers = [];
+  class Worker {
+    constructor() { this.messages = []; this.terminated = 0; workers.push(this); }
+    postMessage(message) { this.messages.push(message); }
+    terminate() { this.terminated++; }
+  }
+  const context = vm.createContext({Worker, URL, setTimeout, clearTimeout});
+  const runnable = source.replace(/^export /gm, '')
+    .replace('import.meta.url', '"https://example.test/assets/portrait-engine.js"');
+  vm.runInContext(runnable + '\nglobalThis.engine = createPortraitEngine();', context);
+  const init = context.engine.init();
+  const rejected = assert.rejects(init, /disposed/);
+  await context.engine.dispose({immediate: true});
+  await rejected;
+  assert.equal(workers.length, 1);
+  assert.equal(workers[0].terminated, 1);
+  assert.deepEqual(workers[0].messages.map(message => message.operation), ['init']);
+  await assert.rejects(context.engine.init(), /disposed/);
+  await context.engine.dispose({immediate: true});
+  assert.equal(workers[0].terminated, 1, 'repeated logout cleanup is idempotent');
+});

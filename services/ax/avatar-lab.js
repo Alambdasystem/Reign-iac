@@ -10,6 +10,10 @@ let sourceImage, engine, motionTimer, renderTimer, objectUrl;
 let ready = false, loading = false, rendering = false, pendingRender = false, motion = false, closed = false;
 let engineInitialized = false, encoding = false, pendingEncode = false, encodePromise, renderPromise;
 let sourceRevision = 0, sourceLoadRevision = 0, engineGeneration = 0, frames = 0;
+let sessionVerified = false, checkingSession, loggingOut = false;
+const SIGNOUT_KEY = 'reign:ax:signed-out';
+const LOGIN_PATH = '/?next=%2Favatar-lab';
+const pendingPhotoUrls = new Set();
 
 function status(message, state = '') {
   $('statusText').textContent = message;
@@ -26,7 +30,7 @@ function enableControls(enabled) {
   $('motionControls').disabled = !enabled;
   $('motionButton').disabled = !enabled;
   $('resetButton').disabled = !enabled;
-  const sourceBusy = loading || encoding;
+  const sourceBusy = closed || loading || encoding;
   for (const name of ['portraitFile', 'sampleButton', 'cropZoom', 'cropX', 'cropY']) $(name).disabled = sourceBusy;
   $('applyCrop').disabled = !sourceImage || sourceBusy;
 }
@@ -52,6 +56,7 @@ function drawCrop() {
 }
 async function loadSource(url, label, ownsUrl = false) {
   const loadRevision = ++sourceLoadRevision;
+  if (ownsUrl) pendingPhotoUrls.add(url);
   let accepted = false;
   stopMotion();
   try {
@@ -80,7 +85,7 @@ async function loadSource(url, label, ownsUrl = false) {
     if (loadRevision !== sourceLoadRevision || closed) return false;
     throw error;
   } finally {
-    if (ownsUrl && !accepted) URL.revokeObjectURL(url);
+    if (ownsUrl && pendingPhotoUrls.delete(url) && !accepted) URL.revokeObjectURL(url);
   }
 }
 function encodeSource() {
@@ -167,7 +172,7 @@ async function requestRender() {
   return renderPromise;
 }
 async function start() {
-  if (loading || encoding || closed) return;
+  if (loading || encoding || closed || !sessionVerified) return;
   const generation = ++engineGeneration, previousEngine = engine;
   engine = undefined; engineInitialized = false; sourceRevision++;
   pendingEncode = false; encodePromise = undefined; pendingRender = false; renderPromise = undefined; rendering = false;
@@ -240,14 +245,97 @@ $('sampleButton').addEventListener('click', async () => {
     if (await loadSource('/avatar-assets/sample-portrait.png', 'Sample portrait · AI generated')) $('portraitFile').value = '';
   } catch (error) { status(error.message || 'The sample portrait couldn’t be loaded.', 'error'); }
 });
-window.addEventListener('pagehide', () => {
-  closed = true; sourceLoadRevision++; sourceRevision++; engineGeneration++;
-  stopMotion(); clearTimeout(renderTimer); engine?.dispose().catch(() => {});
+function releasePortrait() {
+  if (closed) return;
+  closed = true; sessionVerified = false;
+  sourceLoadRevision++; sourceRevision++; engineGeneration++;
+  ready = false; engineInitialized = false; pendingEncode = false; pendingRender = false;
+  stopMotion(); clearTimeout(renderTimer);
+  const activeEngine = engine;
+  engine = undefined; encodePromise = undefined; renderPromise = undefined;
+  activeEngine?.dispose({immediate: true}).catch(() => {});
   if (objectUrl) URL.revokeObjectURL(objectUrl);
+  for (const url of pendingPhotoUrls) URL.revokeObjectURL(url);
+  pendingPhotoUrls.clear();
+  objectUrl = undefined;
+  if (sourceImage) sourceImage.src = '';
+  sourceImage = undefined;
+  $('portraitFile').value = '';
+  $('previewSource').removeAttribute('src'); $('previewSource').hidden = true;
+  // Drop the backing buffers as well as the decoded photo and worker tensors.
+  sourceCanvas.width = sourceCanvas.height = outputCanvas.width = outputCanvas.height = 0;
+  outputCanvas.hidden = true;
+  enableControls(false); $('startButton').disabled = true;
+  $('loadProgress').hidden = true; $('renderingLabel').hidden = true;
+  $('portraitStage').setAttribute('aria-busy', 'false');
+}
+function showAuthMessage(message) {
+  $('logoutMessage').textContent = message;
+  $('logoutMessage').hidden = !message;
+}
+function announceSignout() {
+  // This notification contains no account data or credentials.
+  try { localStorage.setItem(SIGNOUT_KEY, `${Date.now()}:${Math.random()}`); } catch { /* Storage may be unavailable. */ }
+}
+async function logout() {
+  if (loggingOut) return;
+  loggingOut = true; $('logoutButton').disabled = true;
+  releasePortrait();
+  showAuthMessage('Logging out… Preview unloaded.');
+  status('Preview unloaded. Logging out…');
+  const abort = new AbortController(), timeout = setTimeout(() => abort.abort(), 15000);
+  try {
+    const token = document.cookie.split(';').map(part => part.trim()).find(part => part.startsWith('ax_csrf='))?.slice(8) || '';
+    const response = await fetch('/logout', {method: 'POST', credentials: 'same-origin', cache: 'no-store',
+      headers: {'X-CSRF-Token': token}, signal: abort.signal});
+    if (!response.ok) throw new Error('Logout was not confirmed.');
+    announceSignout();
+    window.location.replace(LOGIN_PATH);
+  } catch {
+    showAuthMessage('Couldn’t confirm log out. The preview is unloaded. Check your connection and try Log out again.');
+    status('Preview unloaded. Log out still needs confirmation.', 'error');
+    $('logoutButton').textContent = 'Retry log out';
+  } finally {
+    clearTimeout(timeout); loggingOut = false; $('logoutButton').disabled = false;
+  }
+}
+function checkSession() {
+  if (closed || checkingSession) return checkingSession;
+  const abort = new AbortController(), timeout = setTimeout(() => abort.abort(), 15000);
+  checkingSession = (async () => {
+    try {
+      const response = await fetch('/api/me', {credentials: 'same-origin', cache: 'no-store', signal: abort.signal});
+      if (closed) return;
+      if (response.status === 401) { releasePortrait(); window.location.replace(LOGIN_PATH); return; }
+      if (!response.ok) throw new Error('Account check failed.');
+      const profile = await response.json();
+      if (closed) return;
+      if (!profile.authenticated || !['owner', 'avatar'].includes(profile.role)) throw new Error('Account check failed.');
+      sessionVerified = true;
+      $('accountName').textContent = profile.display_name || profile.username;
+      $('accountName').hidden = false;
+      $('workspaceLink').hidden = profile.role !== 'owner';
+      $('labBrand').href = profile.role === 'owner' ? '/' : '/avatar-lab';
+      $('labBrand').setAttribute('aria-label', profile.role === 'owner' ? 'Back to REIGN workspace' : 'REIGN Avatar Lab');
+      if (!loading && !engineInitialized) $('startButton').disabled = false;
+      showAuthMessage('');
+    } catch {
+      if (!closed) showAuthMessage('Couldn’t check your sign-in. Check your connection and return to this tab to retry, or use Log out.');
+    } finally { clearTimeout(timeout); checkingSession = undefined; }
+  })();
+  return checkingSession;
+}
+$('logoutButton').addEventListener('click', logout);
+window.addEventListener('storage', (event) => {
+  if (event.key !== SIGNOUT_KEY || !event.newValue) return;
+  releasePortrait(); window.location.replace(LOGIN_PATH);
 });
+window.addEventListener('focus', checkSession);
+window.addEventListener('pagehide', releasePortrait);
 window.addEventListener('pageshow', (event) => {
   if (event.persisted && closed) window.location.reload();
 });
+checkSession();
 loadSource('/avatar-assets/sample-portrait.png', 'Sample portrait · AI generated').catch(() => {
   status('The sample portrait couldn’t load. Choose a photo to continue.', 'error');
 });

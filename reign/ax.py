@@ -13,8 +13,8 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
-from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
-from pydantic import BaseModel
+from itsdangerous import URLSafeTimedSerializer, BadData
+from reign import ax_auth
 from reign.openstl import OpenSTLBridge
 from reign.config import checked_url
 from reign.session_errors import BROWSER_OCCUPIED_CODE, BrowserOccupied, browser_occupied_response
@@ -31,6 +31,8 @@ ACCOUNT_ERRORS = {
     "grant_invalid": (403, "This saved login request expired or could not be verified. Start a new request."),
 }
 ACCOUNT_BODY_LIMIT = 8192
+LOGIN_BODY_TIMEOUT = 10
+LOGOUT_CLEANUP_TIMEOUT = 2
 
 
 class AccountError(Exception):
@@ -128,28 +130,47 @@ def configured(name):
 def signer():
     return URLSafeTimedSerializer(configured("AX_SESSION_KEY"), salt="reign-ax")
 
-def user(request: Request):
+def principal(request: Request):
     cookie = request.cookies.get("ax_session", "")
+    if not cookie or len(cookie) > 2048:
+        raise HTTPException(401, "Login required", headers={"Cache-Control": "no-store"})
     try:
-        identity = signer().loads(cookie, max_age=3600)
-    except (BadSignature, SignatureExpired):
-        raise HTTPException(401, "Login required")
-    if identity != "admin":
-        raise HTTPException(401, "Login required")
-    return identity
+        payload = signer().loads(cookie, max_age=ax_auth.SESSION_SECONDS)
+        return request.app.state.auth.resolve(payload)
+    except (BadData, ax_auth.InvalidSession):
+        raise HTTPException(401, "Login required", headers={"Cache-Control": "no-store"}) from None
+    except ax_auth.AuthConfigurationError:
+        raise HTTPException(503, "Authentication unavailable", headers={"Cache-Control": "no-store"}) from None
 
-def csrf(request: Request):
-    user(request)
+
+def user(request: Request):
+    session = principal(request)
+    if session.identity.role != "owner":
+        raise HTTPException(403, "Owner access required", headers={"Cache-Control": "no-store"})
+    return "admin"
+
+
+def same_origin(request: Request):
     origin = request.headers.get("origin")
     expected = os.environ.get("AX_PUBLIC_ORIGIN", "").rstrip("/")
     if not expected or origin != expected:
-        raise HTTPException(403, "Invalid origin")
+        raise HTTPException(403, "Invalid origin", headers={"Cache-Control": "no-store"})
+
+
+def session_csrf(request: Request, session):
+    same_origin(request)
     token = request.headers.get("x-csrf-token", "")
-    if not token or not secrets.compare_digest(token, request.cookies.get("ax_csrf", "")):
-        raise HTTPException(403, "Invalid CSRF token")
+    if not ax_auth.valid_csrf(session, token, request.cookies.get("ax_csrf", "")):
+        raise HTTPException(403, "Invalid CSRF token", headers={"Cache-Control": "no-store"})
+
+
+def csrf(request: Request):
+    user(request)
+    session_csrf(request, principal(request))
 
 @asynccontextmanager
 async def lifespan(app):
+    app.state.auth = ax_auth.AuthState()
     # Browser startup/Temporal dispatch can take longer than a normal API call.
     app.state.http = httpx.AsyncClient(timeout=120, trust_env=False)
     sweeper = asyncio.create_task(openstl.sweeper())
@@ -204,11 +225,15 @@ class AXStaticFiles(StaticFiles):
 
 app.mount("/assets", AXStaticFiles(directory=ASSETS), name="assets")
 
-class Login(BaseModel):
-    password: str
-
 @app.get("/")
-async def console():
+async def console(request: Request):
+    try:
+        if principal(request).identity.role == "avatar":
+            return RedirectResponse("/avatar-lab", status_code=303,
+                                    headers={"Cache-Control": "no-store"})
+    except HTTPException as error:
+        if error.status_code != 401:
+            raise
     path = Path(__file__).resolve().parent.parent / "ax_static" / "index.html"
     if not path.is_file():
         path = Path(__file__).resolve().parent.parent / "services" / "ax" / "index.html"
@@ -238,7 +263,7 @@ async def avatar_lab(request: Request):
     Existing REIGN routes and the production console are unchanged.
     """
     try:
-        user(request)
+        principal(request)
     except HTTPException as error:
         if error.status_code == 401:
             return RedirectResponse(url="/?next=%2Favatar-lab", status_code=303,
@@ -325,10 +350,7 @@ async def health():
 
 @app.get("/api/me")
 async def me(request: Request):
-    user(request)
-    return JSONResponse({"authenticated": True, "capabilities": {
-        "managed_browser": True, "external_computer": False,
-        "voice": True, "ai_chat": True}}, headers={"Cache-Control": "no-store"})
+    return JSONResponse(ax_auth.profile(principal(request)), headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/status")
@@ -338,26 +360,94 @@ async def workspace_status(request: Request):
                         headers={"Cache-Control": "no-store"})
 
 @app.post("/login")
-async def login(data: Login):
-    password = configured("AX_ADMIN_PASSWORD")
-    if not secrets.compare_digest(data.password, password):
-        raise HTTPException(401, "Invalid credentials")
-    response = JSONResponse({"status": "authenticated"})
-    response.set_cookie("ax_session", signer().dumps("admin"), httponly=True, secure=True, samesite="strict", max_age=3600)
-    response.set_cookie("ax_csrf", secrets.token_urlsafe(32), httponly=False, secure=True, samesite="strict", max_age=3600)
-    response.headers["Cache-Control"] = "no-store"
+async def login(request: Request):
+    if request.headers.get("origin") is not None:
+        same_origin(request)
+    state = request.app.state.auth
+    reserved = False
+    try:
+        state.admit_login(request.client.host if request.client else "unknown")
+        # Reserve before reading a possibly slow body. No await separates
+        # admission and reservation, so at most two sign-ins can run a KDF.
+        state.pending_logins += 1
+        reserved = True
+        body = bytearray()
+        async with asyncio.timeout(LOGIN_BODY_TIMEOUT):
+            async for chunk in request.stream():
+                if len(body) + len(chunk) > 4096:
+                    raise ax_auth.InvalidCredentials()
+                body.extend(chunk)
+        try:
+            data = json.loads(body)
+        except (ValueError, UnicodeError):
+            raise ax_auth.InvalidCredentials() from None
+        if (not isinstance(data, dict) or set(data) - {"username", "password"}
+                or "password" not in data):
+            raise ax_auth.InvalidCredentials()
+        work = asyncio.create_task(asyncio.to_thread(
+            ax_auth.authenticate, data.get("username", ""), data["password"]))
+        try:
+            identity = await asyncio.shield(work)
+        except asyncio.CancelledError:
+            # Cancelling an HTTP request cannot stop its native KDF thread.
+            # Hold the slot until that work actually finishes.
+            def release(done):
+                state.pending_logins -= 1
+                if not done.cancelled():
+                    done.exception()
+            work.add_done_callback(release)
+            reserved = False
+            raise
+        # Resolve again after the KDF so a concurrent verifier rotation cannot
+        # create a session using a credential that is no longer configured.
+        current = ax_auth.identity_for(identity.username, identity.role)
+        if not secrets.compare_digest(current.revision, identity.revision):
+            raise ax_auth.InvalidCredentials()
+        payload, token, session = state.create(identity)
+        signed = signer().dumps(payload)
+    except (ax_auth.InvalidCredentials, ax_auth.InvalidSession, TimeoutError):
+        raise HTTPException(401, "Invalid credentials", headers={"Cache-Control": "no-store"}) from None
+    except ax_auth.AuthConfigurationError:
+        raise HTTPException(503, "Authentication unavailable", headers={"Cache-Control": "no-store"}) from None
+    except ax_auth.LoginThrottled:
+        raise HTTPException(429, "Too many sign-in attempts. Try again in a minute.",
+                            headers={"Cache-Control": "no-store", "Retry-After": "60"}) from None
+    finally:
+        if reserved:
+            state.pending_logins -= 1
+    response = JSONResponse({"status": "authenticated", **ax_auth.profile(session)},
+                            headers={"Cache-Control": "no-store"})
+    response.set_cookie("ax_session", signed, httponly=True, secure=True, samesite="strict", max_age=ax_auth.SESSION_SECONDS)
+    response.set_cookie("ax_csrf", token, httponly=False, secure=True, samesite="strict", max_age=ax_auth.SESSION_SECONDS)
     return response
 
 @app.post("/logout")
 async def logout(request: Request):
-    csrf(request)
-    openstl.pending.clear()
-    for grant in list(openstl.grants.values()):
-        grant.revoked = True
-    await openstl.reap()
-    response = JSONResponse({"status": "logged_out"})
-    response.delete_cookie("ax_session")
-    response.delete_cookie("ax_csrf")
+    same_origin(request)
+    try:
+        session = principal(request)
+    except HTTPException as error:
+        if error.status_code != 401:
+            raise
+        session = None
+    if session is not None:
+        session_csrf(request, session)
+        request.app.state.auth.revoke(session)
+        if session.identity.role == "owner":
+            openstl.pending.clear()
+            for grant in list(openstl.grants.values()):
+                grant.revoked = True
+            try:
+                await asyncio.wait_for(openstl.reap(), timeout=LOGOUT_CLEANUP_TIMEOUT)
+            except Exception:
+                # Revocation is already effective. Cleanup is best effort and
+                # the existing sweeper retries it; logout must clear cookies
+                # even while Core is unavailable or cleanup raises.
+                pass
+    response = JSONResponse({"status": "logged_out", "authenticated": False},
+                            headers={"Cache-Control": "no-store"})
+    response.delete_cookie("ax_session", secure=True, httponly=True, samesite="strict")
+    response.delete_cookie("ax_csrf", secure=True, samesite="strict")
     return response
 
 def session_id(value: str) -> str:
@@ -864,3 +954,22 @@ async def connect_openstl():
         "Cache-Control": "no-store", "X-Frame-Options": "DENY",
         "Referrer-Policy": "no-referrer",
         "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'"})
+
+
+@app.middleware("http")
+async def avatar_scope(request: Request, call_next):
+    """New/unknown API routes cannot accidentally give avatar accounts owner access."""
+    if request.cookies.get("ax_session"):
+        try:
+            session = principal(request)
+        except HTTPException:
+            # Individual authenticated routes reject invalid sessions. Independent
+            # machine credentials and public login/static routes keep their policy.
+            session = None
+        if session is not None and session.identity.role == "avatar":
+            path = request.url.path
+            if ((path == "/api" or path.startswith("/api/")) and path != "/api/me"
+                    or path in {"/genesis", "/guardrails", "/nodes", "/connect/openstl"}):
+                return JSONResponse({"detail": "Owner access required"}, status_code=403,
+                                    headers={"Cache-Control": "no-store"})
+    return await call_next(request)
