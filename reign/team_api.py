@@ -11,10 +11,10 @@ from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from reign.team_identity import ACTOR_HEADER, OWNER_ID, TeamIdentityError, verify_actor
-from reign.team_store import TeamError, TeamStore, boolean, identifier, text
+from reign.team_store import MAX_ROOM_PARTICIPANTS, TeamError, TeamStore, boolean, identifier, text
 
 MAX_PRESENCE = 256
-MAX_ROOM_PRESENCE = 16
+MAX_ROOM_PRESENCE = MAX_ROOM_PARTICIPANTS
 MAX_USER_CONNECTIONS = 4
 MAX_CALL_CONNECTIONS = 4
 PRESENCE_TTL = 30
@@ -117,6 +117,33 @@ class TeamRuntime:
         self._prune()
         return [{key: value for key, value in row.items() if key != "room_id"}
                 for row in self.presence.values() if row["room_id"] == room_id]
+
+    async def assistant_participants(self, actor, room_id):
+        """A bounded membership-checked snapshot, never a camera observation."""
+        self._prune()
+        user_ids = sorted({row["user_id"] for row in self.presence.values()
+                           if row["room_id"] == room_id and row["user_id"] not in self.revoked_members})[:MAX_ROOM_PARTICIPANTS]
+        members = await asyncio.to_thread(self.store.room_participants, actor, room_id, user_ids)
+        # A leave, expiry, media toggle or revocation may have happened while
+        # storage ran. Use the live rows again, not copies made before the await.
+        self._prune()
+        if self.closed: raise TeamError("team_unavailable")
+        if actor["id"] in self.revoked_members: raise TeamError("team_identity_required")
+        participants = {}
+        for row in self.presence.values():
+            user_id = row["user_id"]
+            if row["room_id"] != room_id or user_id not in members or user_id in self.revoked_members:
+                continue
+            participant = participants.setdefault(user_id, {
+                "user_id": user_id, "display_name": members[user_id],
+                "in_call": False, "microphone": False, "camera": False, "screen": False})
+            # Viewer and call connections share an identity; muted calls still
+            # count as joined, and media flags describe only current call rows.
+            if row["in_call"]:
+                participant["in_call"] = True
+                for flag in ("microphone", "camera", "screen"):
+                    participant[flag] = participant[flag] or row[flag]
+        return [participants[user_id] for user_id in sorted(participants)]
 
     async def heartbeat(self, actor, room_id, data):
         await self.authorize_room(actor, room_id)
@@ -301,6 +328,7 @@ class TeamRuntime:
         try:
             context = await asyncio.to_thread(self.store.room_context, actor, room_id, run_id)
             async with asyncio.timeout(ASSISTANT_TIMEOUT):
+                context["current_participants"] = await self.assistant_participants(actor, room_id)
                 result = await self.assistant(context, actor, data["text"], data["attachment_ids"], data["speak"])
             await asyncio.to_thread(self.store.finish_run, actor, room_id, run_id, self.assistant_result(result))
         except asyncio.CancelledError:
