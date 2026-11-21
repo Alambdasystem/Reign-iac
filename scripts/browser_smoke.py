@@ -373,9 +373,31 @@ async def main():
         await expect(page.locator("#voiceStatus")).to_contain_text("not configured")
         await expect(page.locator("#voiceStart")).to_be_disabled()
         await expect(page.locator("#mute")).to_be_disabled()
-        for width, height in [(390, 844), (430, 932), (1280, 900)]:
+        logout_hit_targets = []
+        for width, height in [(360, 800), (390, 844), (430, 932), (1280, 900)]:
             await page.set_viewport_size({"width": width, "height": height})
+            await page.evaluate("window.scrollTo(0, 0)")
             assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "Horizontal overflow"
+            logout = page.locator("#logout")
+            await expect(logout).to_be_visible()
+            await expect(logout).to_be_enabled()
+            hit = await logout.evaluate("""button => {
+                const box = button.getBoundingClientRect();
+                const target = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+                return {
+                    in_viewport: box.width > 0 && box.height > 0 && box.left >= 0 && box.top >= 0 &&
+                        box.right <= innerWidth && box.bottom <= innerHeight,
+                    receives_pointer: target === button || button.contains(target),
+                    top_element: target ? target.tagName + (target.id ? '#' + target.id : '') : null
+                };
+            }""")
+            assert hit["in_viewport"] and hit["receives_pointer"], \
+                ("Log out is clipped or covered", width, height, hit)
+            # Playwright also checks stability and hit testing, without issuing
+            # the real logout or changing the owner's authenticated session.
+            await logout.click(trial=True, timeout=5000)
+            logout_hit_targets.append({"width": width, "height": height,
+                                       "center_receives_pointer": True, "trial_click": "passed"})
             await page.screenshot(path=str(EVIDENCE / f"ultraview-{width}.png"))
         cookies = await context.cookies()
         session_cookie = next(c for c in cookies if c["name"] == "ax_session")
@@ -416,6 +438,7 @@ async def main():
             await api("/api/sessions/" + new_sid, "DELETE")
             evidence["restart_expiry"] = "passed"
             evidence["temporal_persistence"] = "passed"
+            evidence["logout_hit_targets_restart"] = logout_hit_targets
             evidence["accounts_restart"] = await accounts_ui_smoke(
                 browser, await context.storage_state(), phase="restart",
                 previous=evidence["accounts_ui"], voice_bootstrap=SIMULATED_VOICE_BOOTSTRAP)
@@ -501,6 +524,7 @@ async def main():
                 "takeover_handback": "passed", "stale_commands": "passed",
                 "cleanup": "passed", "human_acceptance": "not_run",
                 "approved_design": "UltraView AX v1", "responsive_layout": "passed",
+                "logout_hit_targets": logout_hit_targets,
                 "reload_reconnect": "passed", "frame_failure_fail_closed": "passed",
                 "session_recovery": session_recovery,
                 "voice_config_unavailable_ui": "passed", "voice_auth_and_csrf": "passed",
