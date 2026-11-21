@@ -299,7 +299,7 @@ async def portrait_ui_smoke(owner_context, origin, evidence):
         await page.locator("#motionButton").click()
         await expect(page.locator("#motionButton")).to_have_attribute("aria-pressed", "false")
         await page.wait_for_function(
-            "document.querySelector('#frameStat').dataset.settled === 'true'",
+            "() => document.querySelector('#frameStat').dataset.settled === 'true'",
             timeout=180000)
         motion_result = await page.evaluate("""() => {
             const probe = window.__portraitAcceptance, data = document.querySelector('#frameStat').dataset;
