@@ -24,7 +24,7 @@ class Element {
   showModal() { this.open = true; } close() { this.open = false; this.emit('close'); }
   get options() { return this.children; }
 }
-const profile = (role = 'owner') => ({workspace: {id: 'rain', name: 'Rain', durable: true}, me: {id: 'user-1', role, username: 'tester', display_name: 'CI Teammate'}, members: [],
+const profile = (role = 'owner') => ({workspace: {id: 'rain', name: 'Workspace', durable: true}, me: {id: 'user-1', role, username: 'tester', display_name: 'CI Teammate'}, members: [],
   rooms: [{id: 'room-a', title: 'Planning'}, {id: 'room-b', title: 'Research'}], capabilities: {assistant: true, speech: true, calls: true, documents: true, manage_members: role === 'owner', vision: true, transcription: true}});
 const event = (seq, text, extra = {}) => ({id: 'event-' + seq, seq, type: 'message', user_id: 'user-1', display_name: 'CI Teammate', created_at: 1700000000, data: {text}, ...extra});
 const snapshot = id => ({room: {id, title: id === 'room-a' ? 'Planning' : 'Research'}, events: [], documents: [{id: 'document-1', title: 'Shared plan', version: 1}], presence: [], assistant: {status: 'idle'}, last_seq: 0});
@@ -72,6 +72,21 @@ test('restoring a room loads only team data and leaves all media off', async () 
   assert.deepEqual(heartbeat.body, {connection_id: 'test-id-1', microphone: false, camera: false, screen: false, in_call: false});
   assert.equal(heartbeat.init.headers['X-CSRF-Token'], 'synthetic-token');
   assert.ok(h.requests.every(item => item.url.startsWith('/api/team'))); h.app.destroy();
+});
+
+test('the profile and copied employee login agree on the Workspace name', async () => {
+  let copied = '';
+  const h = harness({handle: (request, {response}) => request.url === '/api/team/members'
+    ? response({member: {id: 'new-employee', username: 'ci-tester', display_name: 'Synthetic Employee', role: 'employee', active: true}, temporary_password: 'synthetic-test-only'}) : undefined});
+  h.win.navigator.clipboard.writeText = async value => { copied = value; };
+  await h.app.start();
+  assert.equal(h.node('workspaceName').textContent, 'Workspace');
+  h.input('memberUsername', 'ci-tester'); h.input('memberDisplayName', 'Synthetic Employee'); h.submit('memberCreateForm');
+  await until(() => h.node('credentialDialog').open); h.click('copyCredential');
+  await until(() => Boolean(copied));
+  assert.equal(copied.split('\n')[0], h.node('workspaceName').textContent + ' login');
+  assert.ok(copied.includes('Sign in: https://ax.test/\nUsername: ci-tester\nTemporary password: synthetic-test-only'));
+  h.app.destroy();
 });
 
 test('a late room response cannot restore the room the person already left', async () => {

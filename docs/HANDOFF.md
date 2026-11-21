@@ -1,4 +1,35 @@
-## Current implementation: separate Avatar Lab access (2026-11-21)
+## Current product note: Workspace and REIGN (2026-11-21)
+
+The application is named **Workspace**, including the shared team area at
+`/team`. Its AI participant is
+**REIGN**, pronounced **Rain**. Visible labels, copied employee login details and
+assistant instructions use this distinction. The internal workspace ID `rain`,
+`team:rain:{room_id}` browser scopes, encrypted record associations, member IDs
+and saved room/document titles remain unchanged. No data migration or deletion
+is part of this correction. See [the workspace guide](TEAM_WORKSPACE.md) and
+[implementation contract](TEAM_WORKSPACE_CONTRACT.md) for current behavior.
+
+The shared room supports employee access, saved conversations/documents, current
+presence, explicit calls and bounded image sharing. It keeps the owner's private
+workspace separate. This source note is not a release or deployment receipt;
+historical checkpoints below retain their original evidence and limitations.
+
+REIGN's public prepared portrait now loads automatically in the private voice
+area, team room and Avatar Lab through one shared renderer and versioned atlas.
+Private voice drives the mouth from verified assistant output audio only;
+microphone input does not animate it. Team speech uses the same renderer and
+its own output meter. Interruptions, call end, logout and page exit release
+active playback and reset mouth movement. A missing portrait must not block
+otherwise working audio. Ordinary use does not start the neural worker.
+
+The Lab's optional neural editor remains explicit and frees its worker when
+closed. A custom Lab photo and crop can persist in account-scoped browser
+storage, within fixed image/account limits; it restores as a still image.
+This local experiment neither changes the shared REIGN identity nor syncs
+across devices. Reset removes only the current account's local experiment.
+These implementation notes require their own CI and deployment receipts.
+
+## Previous implementation: separate Avatar Lab access (2026-11-21)
 
 James requested a separate login for Mayur and a logout option. The source adds
 named, Avatar Lab-only accounts and visible **Log out** controls in the lab and

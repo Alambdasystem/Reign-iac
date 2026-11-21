@@ -175,6 +175,11 @@ class RoomParticipantContextTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Prior-message authors are not evidence", payload["instructions"])
         self.assertIn("flags grant no access to media", payload["instructions"])
         self.assertIn("explicitly shared still image included", payload["instructions"])
+        workspace = self.store.overview(self.owner)["workspace"]
+        self.assertEqual((workspace["id"], workspace["name"]), ("rain", "Workspace"))
+        self.assertIn(f"shared workspace named {workspace['name']}", payload["instructions"])
+        self.assertIn('You are REIGN', payload["instructions"])
+        self.assertIn('Your name is pronounced "Rain"', payload["instructions"])
         events = self.store.events(self.owner, self.room)
         self.assertEqual(events["assistant"]["status"], "completed")
         self.assertEqual(events["events"][-1]["data"]["run_id"], accepted["run_id"])

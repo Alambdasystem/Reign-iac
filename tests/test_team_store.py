@@ -56,6 +56,26 @@ class TeamStoreTests(unittest.TestCase):
         self.assert_code("member_exists", self.store.create_member, self.owner, "fixture-employee", "New occupant")
         self.assertTrue(self.store.events(self.owner, self.room)["room"])
 
+    def test_workspace_display_name_preserves_legacy_bindings_and_saved_titles(self):
+        with patch("reign.team_store.WORKSPACE_NAME", "Rain"):
+            room = self.store.create_room(self.member, "Rain planning notes")["room"]
+            self.assertEqual(self.store.overview(self.member)["workspace"]["name"], "Rain")
+        database = Path(self.temp.name) / DATABASE_NAME
+        with sqlite3.connect(database) as db:
+            original = db.execute("SELECT * FROM rooms WHERE id=?", (room["id"],)).fetchone()
+            self.assertEqual(original[1], "rain")
+            self.assertEqual(db.execute("SELECT DISTINCT workspace FROM memberships").fetchall(), [("rain",)])
+        fresh = TeamStore(self.temp.name, self.key); fresh.initialize()
+        actor = fresh.authenticate("fixture-employee", self.password)
+        overview = fresh.overview(actor)
+        context = fresh.room_context(actor, room["id"])
+        self.assertEqual(overview["workspace"], {"id": "rain", "name": "Workspace", "durable": False})
+        self.assertEqual(context["workspace"], {"id": "rain", "name": "Workspace"})
+        self.assertEqual(context["room"], room)
+        self.assertIn(room, overview["rooms"])
+        with sqlite3.connect(database) as db:
+            self.assertEqual(db.execute("SELECT * FROM rooms WHERE id=?", (room["id"],)).fetchone(), original)
+
     def test_message_retries_have_one_ordered_event_and_conflicting_reuse_is_rejected(self):
         data = self.data()
         first = self.store.append_message(self.member, self.room, data)

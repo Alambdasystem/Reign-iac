@@ -37,8 +37,12 @@
     const snapshot = () => ({...state});
     const verifiedPlayback = () => state.active && narrationAllowed &&
       !!narrationId && outputId === narrationId;
+    const audibleOutput = () => verifiedPlayback() &&
+      !state.speakerBlocked && !audio.paused && !audio.muted &&
+      (!audioContext || audioContext.state === 'running');
     function update(change) {
       state = {...state, ...change, queueLength: pending.length, delegating: !!activeTurn};
+      if (!audibleOutput()) deps.onOutputLevel?.(0);
       deps.onState?.(snapshot());
     }
     const current = value => value === epoch && state.active;
@@ -78,14 +82,18 @@
     function startMeter() {
       clearEvery(meterTimer);
       meterTimer = every(() => {
-        const item = state.phase === 'speaking' ? outputMeter : state.muted ? null : micMeter;
-        let level = 0;
-        if (item) {
+        const measure = item => {
+          if (!item) return 0;
+          let energy = 0;
           item.analyser.getByteTimeDomainData(item.samples);
-          for (const value of item.samples) level += ((value - 128) / 128) ** 2;
-          level = Math.min(1, Math.sqrt(level / item.samples.length) * 3);
-        }
-        deps.onLevel?.(level);
+          for (const value of item.samples) energy += ((value - 128) / 128) ** 2;
+          return Math.min(1, Math.sqrt(energy / item.samples.length) * 3);
+        };
+        const outputLevel = audibleOutput() ? measure(outputMeter) : 0;
+        // onLevel remains the existing mixed activity indicator. Portraits
+        // consume only onOutputLevel, never the user's microphone signal.
+        deps.onLevel?.(state.phase === 'speaking' ? outputLevel : state.muted ? 0 : measure(micMeter));
+        deps.onOutputLevel?.(outputLevel);
       }, 80);
     }
     function monitor(e) {
@@ -141,6 +149,7 @@
       if (providerBusy) { pendingNarration = item; return; }
       pendingNarration = null; narrationAllowed = true; narrationId = null;
       outputActive = false; outputId = null; audio.muted = true;
+      deps.onOutputLevel?.(0);
       send({type: 'response.create', response: {
         output_modalities: ['audio'], tool_choice: 'none',
         metadata: {reign_voice_turn:String(item.turn),reign_voice_phase:'narration'},
@@ -297,6 +306,7 @@
           narrationId = id; deps.onCaption?.({role:'assistant',text:'',final:true});
         } else {
           narrationAllowed=false;narrationId=null;outputActive=false;outputId=null;audio.muted=true;
+          deps.onOutputLevel?.(0);
         }
       }
       if (value.type === 'response.function_call_arguments.done') stageCandidate(responses.get(value.response_id),value);
@@ -453,7 +463,7 @@
       if(peer){peer.ontrack=peer.onconnectionstatechange=null;try{peer.close();}catch(_){}}peer=null;
       audio.muted=true;audio.pause();audio.srcObject=null;
       for(const item of [micMeter,outputMeter]){try{item?.source.disconnect();}catch(_){}}micMeter=outputMeter=null;
-      try{audioContext?.close().catch(()=>{});}catch(_){}audioContext=null;deps.onLevel?.(0);
+      try{audioContext?.close().catch(()=>{});}catch(_){}audioContext=null;deps.onLevel?.(0);deps.onOutputLevel?.(0);
       update({phase:job?'ending':options.failed?'failed':'ended',active:false,muted:false,speakerBlocked:false,audioPlaying:false,
         status:job?'Microphone off. Requesting cancellation of this call’s unfinished task…':reason});
       const finish = async () => {

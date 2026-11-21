@@ -4,29 +4,30 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>Avatar Lab · REIGN</title>
+  <title>REIGN Avatar Lab · Workspace</title>
   <link rel="stylesheet" href="/assets/avatar-lab.css">
   <script type="module" src="/assets/avatar-lab.js"></script>
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" id="labBrand" href="/avatar-lab" aria-label="REIGN Avatar Lab"><span class="brand-mark">R</span> REIGN <span class="divider">/</span> <span class="brand-page">Avatar Lab</span></a>
-    <div class="topbar-right"><span class="account-name" id="accountName" hidden></span><a class="back-link" id="workspaceLink" href="/" hidden>Back to workspace <span aria-hidden="true">↗</span></a><button class="logout-button" id="logoutButton" type="button">Log out</button></div>
+    <a class="brand" id="labBrand" href="/avatar-lab" aria-label="REIGN Avatar Lab"><span class="brand-mark">W</span> Workspace <span class="divider">/</span> <span class="brand-page">REIGN Lab</span></a>
+    <div class="topbar-right"><span class="account-name" id="accountName" hidden></span><a class="back-link" id="workspaceLink" href="/" hidden>Back to Workspace <span aria-hidden="true">↗</span></a><button class="logout-button" id="logoutButton" type="button">Log out</button></div>
   </header>
   <p class="auth-message" id="logoutMessage" role="status" aria-live="polite" hidden></p>
   <main>
     <section class="intro">
-      <div><p class="eyebrow">PORTRAIT EXPERIMENT 01</p><h1>A portrait. <span>In motion.</span></h1><p class="intro-copy">Animate a photograph with a neural renderer. Explore small head turns, expression, and mouth movement.</p></div>
-      <div class="privacy-note"><span class="privacy-dot" aria-hidden="true"></span><div>Runs on your device<small>Your selected photo stays in this tab.</small></div></div>
+      <div><p class="eyebrow">REIGN · AVATAR LAB</p><h1>REIGN is <span>already here.</span></h1><p class="intro-copy">Her portrait is saved with the Workspace and appears automatically. Use this Lab to try a local portrait experiment or explore advanced motion controls.</p></div>
+      <div class="privacy-note"><span class="privacy-dot" aria-hidden="true"></span><div>Local experiments<small>Saved for your account on this browser.</small></div></div>
     </section>
     <section class="lab-grid" aria-label="Portrait animation studio">
       <aside class="source-panel panel">
         <div class="panel-heading"><span class="step">01</span><h2>Source portrait</h2></div>
-        <div class="source-wrap"><canvas id="sourceCanvas" width="256" height="256" aria-label="Cropped source portrait"></canvas><span class="source-caption" id="sourceCaption">Sample portrait · AI generated</span></div>
-        <p class="hint">Use a clear, front-facing photo with one face and a relaxed, closed mouth.</p>
+        <div class="source-wrap"><canvas id="sourceCanvas" width="256" height="256" aria-label="Cropped source portrait"></canvas><span class="source-caption" id="sourceCaption">REIGN · saved with the application</span></div>
+        <p class="hint">For a local experiment, choose one clear, front-facing face. Your choice stays in this Lab and doesn’t change REIGN elsewhere in the Workspace.</p>
         <label class="button secondary upload-button" for="portraitFile"><span aria-hidden="true">＋</span> Choose a photo</label>
-        <input id="portraitFile" class="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp">
-        <button class="text-button" id="sampleButton" type="button">Use sample portrait</button>
+        <input id="portraitFile" class="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" disabled>
+        <button class="text-button" id="sampleButton" type="button" disabled>Reset to REIGN</button>
+        <p class="preference-status" id="portraitPreferenceStatus" data-state="default" role="status" aria-live="polite">REIGN is saved with the application. Reset removes your saved local experiment.</p>
         <details class="crop-details" id="cropDetails">
           <summary>Adjust crop <span aria-hidden="true">＋</span></summary>
           <p class="hint">Center the eyes and mouth. Keep the full forehead and chin in the square.</p>
@@ -37,19 +38,24 @@
         </details>
         <div class="source-footer"><span class="small-dot" aria-hidden="true"></span> Local processing · no photo upload</div>
       </aside>
-      <section class="preview-panel panel" aria-label="Neural portrait preview">
-        <div class="preview-heading"><div class="panel-heading"><span class="step">02</span><h2>Neural preview</h2></div><span id="renderBadge" class="render-badge">READY TO LOAD</span></div>
-        <div class="portrait-stage" id="portraitStage" aria-busy="false">
-          <img id="previewSource" src="/avatar-assets/sample-portrait.png" alt="Sample portrait before neural rendering">
+      <section class="preview-panel panel" aria-label="REIGN portrait preview">
+        <div class="preview-heading"><div class="panel-heading"><span class="step">02</span><h2>Portrait preview</h2></div><span id="renderBadge" class="render-badge ready">REIGN · READY</span></div>
+        <div class="portrait-stage" id="portraitStage" data-source="default" data-preview-mode="prepared" aria-busy="false">
+          <img id="previewSource" src="/avatar-assets/sample-portrait.png" alt="REIGN’s saved portrait">
+          <canvas id="defaultAvatarCanvas" width="256" height="256" aria-label="REIGN’s prepared moving portrait" hidden></canvas>
+          <canvas id="customPreviewCanvas" width="256" height="256" aria-label="Your saved local portrait experiment" hidden></canvas>
           <canvas id="outputCanvas" width="256" height="256" aria-label="Neurally rendered portrait" hidden></canvas>
-          <div class="stage-overlay" id="stageOverlay"><span class="play-symbol" aria-hidden="true">▷</span><h3>Bring the portrait to life</h3><p>Load the model once, then shape the motion.</p><button class="button primary" id="startButton" type="button" disabled>Start neural preview <span aria-hidden="true">→</span></button><small>About 100 MB on first load</small></div>
           <div class="rendering-label" id="renderingLabel" hidden><span class="spinner" aria-hidden="true"></span><span>Rendering neural frame</span></div>
         </div>
-        <div class="preview-toolbar"><button class="button play-button" id="motionButton" type="button" disabled><span aria-hidden="true">▶</span> Play motion</button><button class="text-button" id="resetButton" type="button" disabled>Reset pose</button><span class="frame-stat" id="frameStat">256 × 256 neural output</span></div>
-        <div class="status-area"><div class="status-top"><span class="status-dot" id="statusDot" aria-hidden="true"></span><p id="statusText" role="status" aria-live="polite">Ready when you are. Start with the sample or choose your own photo.</p></div><progress id="loadProgress" max="100" value="0" hidden aria-label="Model download progress"></progress><p id="runtimeNote" class="runtime-note">Chrome or Edge with graphics acceleration is recommended.</p></div>
+        <div class="preview-toolbar"><button class="button play-button" id="motionButton" type="button" disabled><span aria-hidden="true">▶</span> Play motion</button><button class="text-button" id="resetButton" type="button" disabled>Reset pose</button><span class="frame-stat" id="frameStat">Advanced editing is optional</span></div>
+        <div class="status-area"><div class="status-top"><span class="status-dot" id="statusDot" aria-hidden="true"></span><p id="statusText" role="status" aria-live="polite">REIGN is ready. Her portrait loads automatically.</p></div><progress id="loadProgress" max="100" value="0" hidden aria-label="Model download progress"></progress><p id="runtimeNote" class="runtime-note">No neural model is needed for REIGN’s prepared portrait.</p></div>
       </section>
       <aside class="controls-panel panel">
-        <div class="panel-heading"><span class="step">03</span><h2>Shape the motion</h2></div>
+        <div class="panel-heading"><span class="step">03</span><h2>Explore the Lab</h2></div>
+        <p class="control-note">REIGN’s everyday portrait is ready above. The optional editor lets you try new poses and expressions on this device.</p>
+        <details class="advanced-details" id="advancedDetails">
+          <summary>Advanced neural editing <span aria-hidden="true">＋</span></summary>
+          <div class="advanced-start" id="stageOverlay"><h3>Explore a different pose</h3><p>Load the optional neural model to edit this portrait on your device.</p><button class="button primary" id="startButton" type="button" disabled>Start neural editing <span aria-hidden="true">→</span></button><small>About 100 MB on first load. Uses more memory while open.</small></div>
         <fieldset id="motionControls" disabled>
           <legend class="visually-hidden">Head and expression controls</legend>
           <div class="control-section"><h3>HEAD POSE</h3>
@@ -64,10 +70,12 @@
           </div>
           <div class="preset-buttons"><button class="preset-button" data-preset="smile" type="button">Soft smile</button><button class="preset-button" data-preset="turn" type="button">Small turn</button><button class="preset-button" data-preset="mouth" type="button">Mouth open</button><button class="preset-button" data-preset="blink" type="button">Blink</button></div>
         </fieldset>
-        <p class="control-note">Small movements work best. Large angles and exaggerated expressions can distort the portrait.</p>
+          <p class="control-note">Small movements work best. Large angles and exaggerated expressions can distort the portrait.</p>
+          <button class="button secondary" id="closeNeuralButton" type="button">Close editor &amp; free memory</button>
+        </details>
       </aside>
     </section>
-    <footer class="lab-footer"><p><strong>Photograph → learned appearance → flowing motion.</strong> Small pose steps and intermediate frames soften the movement between neural renders.</p><details><summary>Model &amp; prototype details</summary><p>LP-Distilled 0.1 renders 256 × 256 frames from your cropped image, pose, and expression controls. The first load downloads the model and ONNX Runtime from this site. WebGPU is used when supported; the CPU preview can take several seconds per neural frame.</p><p>Between completed neural frames, the player estimates movement and blends intermediate images. This adds no model download and keeps only a few frames in memory. It makes playback smoother without speeding up the neural model, so slow devices show slower movement. Fine details can still distort during turns or expressions.</p><p>This LivePortrait-family prototype explores the portrait-animation research we discussed. It uses a separate model from Apple’s research and does not yet perform speech-synchronized lip animation or full 3D head reconstruction.</p><p><a href="https://huggingface.co/slperez/LP-Distilled0.1-ONNX" target="_blank" rel="noopener noreferrer">Model card ↗</a> <a href="/avatar-assets/THIRD_PARTY_NOTICES.txt" target="_blank" rel="noopener noreferrer">Credits &amp; licenses ↗</a></p></details></footer>
+    <footer class="lab-footer"><p><strong>REIGN is saved. Your experiments can be, too.</strong> Custom photos and crops stay with your account on this browser. They don’t sync across devices or replace REIGN’s shared Workspace identity.</p><details><summary>Model &amp; prototype details</summary><p>The default preview plays a lightweight set of prepared portrait frames. It starts automatically and doesn’t load the neural model. A custom experiment restores as a still image until you choose advanced editing. Reset to REIGN removes that account’s saved experiment from this browser.</p><p>Advanced editing uses LP-Distilled 0.1 to render 256 × 256 frames from your crop, pose, and expression controls. It downloads the model and ONNX Runtime from this site. WebGPU is used when supported; CPU rendering can take several seconds per frame. Closing the editor or leaving the page releases the model.</p><p>Between completed neural frames, the editor estimates movement and blends intermediate images. This smooths playback without speeding up the model. Fine details can still distort during turns or expressions. This Lab uses a separate model from Apple’s research and does not reconstruct a full 3D head.</p><p><a href="https://huggingface.co/slperez/LP-Distilled0.1-ONNX" target="_blank" rel="noopener noreferrer">Model card ↗</a> <a href="/avatar-assets/THIRD_PARTY_NOTICES.txt" target="_blank" rel="noopener noreferrer">Credits &amp; licenses ↗</a></p></details></footer>
   </main>
 </body>
 </html>

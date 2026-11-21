@@ -38,18 +38,38 @@ class Element {
     return this.children.get(name);
   }
 }
-function harness({holdRenders = false, logoutFailures = 0, role = 'owner', sessionStatus = 200} = {}) {
+function harness({holdRenders = false, logoutFailures = 0, role = 'owner', sessionStatus = 200,
+  savedPortraits = new Map(), loadBarrier, storageFails = false, authBarrier, distinctNormalizedUrl = false} = {}) {
   const nodes = new Map(), images = [], engines = [], encoded = [], rendered = [], drawn = [], revoked = [], windowEvents = new Map();
   const calls = [], navigations = [], announcements = [];
   const animationFrames = new Map(), timers = new Map(), presentations = [], compositors = [];
+  const avatars = [], preferenceCalls = [], decodedUrls = new Set();
   let urlId = 0, reloads = 0, activeEncodes = 0, maximumEncodes = 0, clock = 100, nextTimer = 0;
   let activeRenders = 0, maximumRenders = 0;
   const node = id => { if (!nodes.has(id)) nodes.set(id, new Element(id)); return nodes.get(id); };
   node('sourceCanvas').getContext = () => ({drawImage(image, x, y, side) { node('sourceCanvas').portrait = image.src + (side === 512 ? '' : ':crop-' + side); }});
   node('outputCanvas').getContext = () => ({putImageData(data) { drawn.push(data.portrait); }});
+  node('customPreviewCanvas').getContext = () => ({drawImage(canvas) { node('customPreviewCanvas').portrait = canvas.portrait; }});
   class FakeImage {
     constructor() { this.naturalWidth = 512; this.naturalHeight = 512; }
-    decode() { const pending = deferred(); images.push({image: this, ...pending}); return pending.promise; }
+    decode() {
+      if (decodedUrls.has(this.src)) return Promise.resolve();
+      const pending = deferred(); images.push({image: this, ...pending}); return pending.promise;
+    }
+  }
+  function createReignAvatar({canvas}) {
+    const avatar = {destroyed: false, ready: Promise.resolve(true), destroy() { avatar.destroyed = true; canvas.width = canvas.height = 0; }};
+    canvas.width = canvas.height = 256; canvas.dataset.ready = 'true';
+    avatars.push(avatar); return avatar;
+  }
+  function createPortraitPreferences() {
+    let closed = false;
+    return {
+      async load(key) { preferenceCalls.push({action: 'load', key}); if (loadBarrier) await loadBarrier.promise; if (storageFails) throw new Error('storage unavailable'); return savedPortraits.get(key) || null; },
+      async save(key, value) { preferenceCalls.push({action: 'save', key}); if (storageFails || closed) throw new Error('storage unavailable'); savedPortraits.set(key, {...value, crop: {...value.crop}}); },
+      async remove(key) { preferenceCalls.push({action: 'remove', key}); if (storageFails || closed) throw new Error('storage unavailable'); savedPortraits.delete(key); },
+      close() { closed = true; preferenceCalls.push({action: 'close'}); },
+    };
   }
   function createPortraitEngine(options) {
     const engine = {
@@ -109,16 +129,21 @@ function harness({holdRenders = false, logoutFailures = 0, role = 'owner', sessi
     AbortController,
     fetch: async (url, options) => {
       calls.push({url, options});
-      if (url === '/api/me') return {ok: sessionStatus === 200, status: sessionStatus,
+      if (url === '/api/me') { if (authBarrier) await authBarrier.promise; return {ok: sessionStatus === 200, status: sessionStatus,
         async json() { return {authenticated: true, role, username: role === 'avatar' ? 'mayur' : 'admin', display_name: role === 'avatar' ? 'Mayur' : 'Owner'}; }};
+      }
       if (url === '/logout') {
         if (logoutFailures-- > 0) throw new Error('Synthetic disconnected network');
         return {ok: true, status: 200};
       }
       throw new Error('Unexpected request: ' + url);
     },
-    URL: {createObjectURL: () => `blob:portrait-${++urlId}`, revokeObjectURL: url => revoked.push(url)},
-    createPortraitEngine, createMotionCompositor, performance: {now: () => clock},
+    URL: {createObjectURL: value => value.testUrl || `blob:portrait-${++urlId}`, revokeObjectURL: url => revoked.push(url)},
+    createPortraitEngine, createMotionCompositor, createReignAvatar, createPortraitPreferences,
+    portraitAccountKey: profile => profile.role === 'owner' ? 'owner' : profile.role + ':' + profile.username,
+    portraitCrop: crop => crop || {zoom: 1, x: 0, y: 0},
+    preparePortrait: async image => ({blob: {type: 'image/webp', size: 128, testUrl: distinctNormalizedUrl ? undefined : image.src}, width: 512, height: 512}),
+    performance: {now: () => clock},
     setTimeout: (callback, delay) => { const id = ++nextTimer; timers.set(id, {callback, delay}); return id; },
     clearTimeout: id => timers.delete(id),
     requestAnimationFrame: callback => { const id = ++nextTimer; animationFrames.set(id, callback); return id; },
@@ -127,17 +152,18 @@ function harness({holdRenders = false, logoutFailures = 0, role = 'owner', sessi
   vm.runInContext(source, context, {filename: 'services/ax/avatar-lab.js'});
   return {
     node, images, engines, encoded, rendered, drawn, revoked, windowEvents, calls, navigations, announcements,
-    animationFrames, presentations, compositors, timers,
+    animationFrames, presentations, compositors, timers, avatars, preferenceCalls, savedPortraits,
     get maximumEncodes() { return maximumEncodes; }, get reloads() { return reloads; },
     get maximumRenders() { return maximumRenders; },
     setTime(now) { clock = now; },
+    setRole(nextRole) { role = nextRole; },
     paint(now) { clock = now; const callbacks = [...animationFrames.values()]; animationFrames.clear(); callbacks.forEach(callback => callback(now)); },
     input(id, value) { node(id).value = String(value); return node(id).listeners.get('input')(); },
     runTimer(delay) {
       const entry = [...timers.entries()].find(([, timer]) => timer.delay === delay);
       assert.ok(entry, 'expected timer ' + delay); timers.delete(entry[0]); return entry[1].callback();
     },
-    decode(url) { const item = images.findLast(value => value.image.src === url); assert.ok(item, url); item.resolve(); },
+    decode(url) { const item = images.findLast(value => value.image.src === url); if (!item && decodedUrls.has(url)) return; assert.ok(item, url); decodedUrls.add(url); item.resolve(); },
     upload() { return node('portraitFile').listeners.get('change')({target: {files: [{type: 'image/png', size: 10}]}}); },
     click(id) { return node(id).listeners.get('click')(); },
   };
@@ -426,4 +452,189 @@ test('logout cancels display callbacks and a late model result cannot recreate t
   assert.equal(h.node('outputCanvas').width, 0);
   assert.equal(h.node('frameStat').dataset.frames, '0');
   assert.equal(h.animationFrames.size, 0);
+});
+
+test('prepared REIGN starts immediately without a model and preferences wait for verified sign-in', async () => {
+  const auth = deferred();
+  const h = harness({authBarrier: auth});
+  await eventually(() => h.node('defaultAvatarCanvas').hidden === false);
+  assert.equal(h.avatars.length, 1);
+  assert.equal(h.node('portraitStage').dataset.previewMode, 'prepared');
+  assert.equal(h.engines.length, 0);
+  assert.equal(h.preferenceCalls.length, 0);
+  assert.equal(h.node('portraitFile').disabled, true);
+  h.decode(SAMPLE);
+  auth.resolve();
+  await eventually(() => h.node('portraitPreferenceStatus').dataset.state === 'default');
+  assert.equal(h.preferenceCalls[0].key, 'owner');
+  assert.equal(h.engines.length, 0);
+  assert.equal(h.node('startButton').disabled, false);
+});
+
+test('a saved local photo and crop restore for the same account without initializing the model', async () => {
+  const savedPortraits = new Map();
+  const first = harness({role: 'avatar', savedPortraits});
+  await eventually(() => first.node('accountName').textContent === 'Mayur');
+  const uploaded = first.upload(); first.decode('blob:portrait-1'); await uploaded;
+  first.input('cropZoom', 2); first.input('cropX', .4); first.input('cropY', -.2);
+  await first.click('applyCrop');
+  assert.equal(first.node('portraitPreferenceStatus').dataset.state, 'saved');
+  assert.equal(first.avatars[0].destroyed, true);
+  assert.equal(savedPortraits.size, 1);
+  first.windowEvents.get('pagehide')();
+  assert.equal(savedPortraits.size, 1, 'leaving the page keeps the saved local experiment');
+
+  const second = harness({role: 'avatar', savedPortraits});
+  await eventually(() => second.images.some(item => item.image.src === 'blob:portrait-1'));
+  second.decode('blob:portrait-1');
+  await eventually(() => second.node('portraitPreferenceStatus').dataset.state === 'saved');
+  assert.equal(second.node('portraitStage').dataset.source, 'custom');
+  assert.equal(second.node('portraitStage').dataset.previewMode, 'saved-custom');
+  assert.equal(second.node('cropZoom').value, '2');
+  assert.equal(second.node('cropX').value, '0.4');
+  assert.equal(second.node('cropY').value, '-0.2');
+  assert.equal(second.node('customPreviewCanvas').portrait, 'blob:portrait-1:crop-256');
+  assert.equal(second.engines.length, 0);
+  assert.equal(second.avatars[0].destroyed, true);
+});
+
+test('other accounts never load the previous account photo and reset removes only the current account', async () => {
+  const savedPortraits = new Map([['avatar:mayur', {blob: {testUrl: 'blob:mayur-saved'}, width: 512, height: 512, crop: {zoom: 1, x: 0, y: 0}}]]);
+  const h = harness({savedPortraits});
+  h.decode(SAMPLE);
+  await eventually(() => h.node('portraitPreferenceStatus').dataset.state === 'default');
+  assert.deepEqual(h.preferenceCalls, [{action: 'load', key: 'owner'}]);
+  assert.equal(h.images.some(item => item.image.src === 'blob:mayur-saved'), false);
+  const uploaded = h.upload(); h.decode('blob:portrait-1'); await uploaded;
+  assert.equal(savedPortraits.size, 2);
+  await h.click('sampleButton');
+  assert.equal(savedPortraits.size, 1);
+  assert.equal(savedPortraits.has('avatar:mayur'), true);
+  assert.equal(h.node('portraitStage').dataset.previewMode, 'prepared');
+});
+
+test('late preference restoration cannot replace an explicit upload or restore a logged-out photo', async () => {
+  const barrier = deferred();
+  const savedPortraits = new Map([['owner', {blob: {testUrl: 'blob:old-saved'}, width: 512, height: 512, crop: {zoom: 1, x: 0, y: 0}}]]);
+  const h = harness({savedPortraits, loadBarrier: barrier});
+  await eventually(() => h.preferenceCalls.length === 1);
+  const uploaded = h.upload(); h.decode('blob:portrait-1'); await uploaded;
+  barrier.resolve(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.node('previewSource').src, 'blob:portrait-1');
+  assert.equal(h.images.some(item => item.image.src === 'blob:old-saved'), false);
+  const pending = deferred(), other = harness({savedPortraits, loadBarrier: pending});
+  await eventually(() => other.preferenceCalls.length === 1);
+  await other.click('logoutButton'); pending.resolve();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(other.node('previewSource').src, undefined);
+  assert.equal(other.images.length, 1, 'no saved photo decode begins after logout');
+});
+
+test('unavailable local storage preserves the working prepared preview and reports an unsaved custom experiment', async () => {
+  const h = harness({storageFails: true});
+  h.decode(SAMPLE);
+  await eventually(() => h.node('portraitPreferenceStatus').dataset.state === 'unavailable');
+  assert.equal(h.node('defaultAvatarCanvas').hidden, false);
+  assert.equal(h.engines.length, 0);
+  const uploaded = h.upload(); h.decode('blob:portrait-1'); await uploaded;
+  assert.equal(h.node('portraitStage').dataset.source, 'custom');
+  assert.match(h.node('portraitPreferenceStatus').textContent, /may not return/);
+  assert.equal(h.node('startButton').disabled, false);
+});
+
+test('closing the advanced editor frees its worker and restores the prepared portrait without ending the page', async () => {
+  const h = harness();
+  h.decode(SAMPLE); await eventually(() => h.node('startButton').disabled === false);
+  const start = h.click('startButton'); await eventually(() => h.encoded.length === 1);
+  h.encoded[0].resolve(); await start;
+  assert.equal(h.avatars[0].destroyed, true);
+  h.click('closeNeuralButton');
+  await eventually(() => h.node('defaultAvatarCanvas').hidden === false);
+  assert.equal(h.engines[0].disposeOptions.immediate, true);
+  assert.equal(h.node('portraitStage').dataset.previewMode, 'prepared');
+  assert.equal(h.node('outputCanvas').hidden, true);
+  assert.equal(h.node('startButton').disabled, false);
+  assert.equal(h.node('advancedDetails').open, false);
+  assert.equal(h.navigations.length, 0);
+});
+
+test('a changed authenticated account clears the previous local portrait before reloading', async () => {
+  const h = harness();
+  await eventually(() => h.node('accountName').textContent === 'Owner');
+  const uploaded = h.upload(); h.decode('blob:portrait-1'); await uploaded;
+  h.setRole('avatar'); await h.windowEvents.get('focus')();
+  assert.equal(h.reloads, 1);
+  assert.equal(h.node('customPreviewCanvas').hidden, true);
+  assert.equal(h.node('customPreviewCanvas').width, 0);
+  assert.equal(h.node('previewSource').src, undefined);
+  assert.equal(h.preferenceCalls.some(call => call.key === 'avatar:mayur'), false);
+  assert.equal(h.savedPortraits.has('owner'), true);
+});
+
+test('normalization releases the original image URL and preserves only the bounded saved preview URL', async () => {
+  const h = harness({distinctNormalizedUrl: true});
+  await eventually(() => h.node('accountName').textContent === 'Owner');
+  const uploaded = h.upload(); h.decode('blob:portrait-1');
+  await eventually(() => h.images.some(item => item.image.src === 'blob:portrait-2'));
+  h.decode('blob:portrait-2'); await uploaded;
+  assert.equal(h.node('previewSource').src, 'blob:portrait-2');
+  assert.deepEqual(h.revoked, ['blob:portrait-1']);
+  await h.click('logoutButton');
+  assert.deepEqual(h.revoked, ['blob:portrait-1', 'blob:portrait-2']);
+});
+
+test('a corrupt saved image removes only that preference and restores a usable default source', async () => {
+  const savedPortraits = new Map([['owner', {blob: {testUrl: 'blob:invalid-saved'}, width: 256, height: 256, crop: {zoom: 1, x: 0, y: 0}}]]);
+  const h = harness({savedPortraits});
+  await eventually(() => h.images.some(item => item.image.src === 'blob:invalid-saved'));
+  h.decode('blob:invalid-saved');
+  await eventually(() => h.images.filter(item => item.image.src === SAMPLE).length === 2);
+  h.decode(SAMPLE);
+  await eventually(() => h.node('portraitPreferenceStatus').dataset.state === 'unavailable');
+  assert.equal(savedPortraits.size, 0);
+  assert.equal(h.node('portraitStage').dataset.source, 'default');
+  assert.equal(h.node('sourceCanvas').portrait, SAMPLE);
+  assert.equal(h.node('startButton').disabled, false);
+  assert.equal(h.node('defaultAvatarCanvas').hidden, false);
+  assert.equal(h.engines.length, 0);
+  assert.deepEqual(h.revoked, ['blob:invalid-saved']);
+});
+
+test('closing during source encoding prevents a late neural result from replacing the default', async () => {
+  const h = harness();
+  h.decode(SAMPLE); await eventually(() => h.node('startButton').disabled === false);
+  const start = h.click('startButton'); await eventually(() => h.encoded.length === 1);
+  h.click('closeNeuralButton');
+  h.encoded[0].resolve(); await start;
+  assert.equal(h.engines[0].disposeOptions.immediate, true);
+  assert.equal(h.node('portraitStage').dataset.previewMode, 'prepared');
+  assert.equal(h.node('outputCanvas').hidden, true);
+  assert.equal(h.rendered.length, 0);
+  assert.equal(h.node('startButton').disabled, false);
+});
+
+test('applying a newer crop cancels a saved portrait decode before it can replace the current source', async () => {
+  const loadBarrier = deferred();
+  const saved = {blob: {testUrl: 'blob:pending-saved'}, width: 512, height: 512, crop: {zoom: 1.2, x: .4, y: .2}};
+  const savedPortraits = new Map([['owner', saved]]);
+  const h = harness({savedPortraits, loadBarrier});
+  h.decode(SAMPLE);
+  await eventually(() => h.node('sourceCanvas').portrait === SAMPLE && h.preferenceCalls.length === 1);
+  loadBarrier.resolve();
+  await eventually(() => h.images.some(item => item.image.src === 'blob:pending-saved'));
+  assert.equal(h.node('applyCrop').disabled, false);
+  h.input('cropZoom', 2); h.input('cropX', -.2); h.input('cropY', -.4);
+  await h.click('applyCrop');
+  h.decode('blob:pending-saved');
+  await eventually(() => h.revoked.includes('blob:pending-saved'));
+  assert.equal(h.node('sourceCanvas').portrait, SAMPLE + ':crop-256');
+  assert.equal(h.node('cropZoom').value, '2');
+  assert.equal(h.node('cropX').value, '-0.2');
+  assert.equal(h.node('cropY').value, '-0.4');
+  assert.equal(h.node('portraitStage').dataset.source, 'default');
+  assert.equal(h.node('portraitPreferenceStatus').dataset.state, 'default');
+  assert.equal(h.node('startButton').disabled, false);
+  assert.equal(savedPortraits.get('owner'), saved, 'cancelling restore does not erase the saved experiment');
+  assert.equal(h.preferenceCalls.some(call => call.action === 'remove' || call.action === 'save'), false);
+  assert.equal(h.engines.length, 0);
 });

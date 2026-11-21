@@ -1,5 +1,6 @@
 """UltraView AX: authenticated human console for the private REIGN Core."""
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -7,7 +8,7 @@ import secrets
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -220,6 +221,21 @@ class AXStaticFiles(StaticFiles):
         # and model requests to this origin just like the authenticated page.
         if target.name == "portrait-engine.js":
             response.headers["Content-Security-Policy"] = AVATAR_CSP
+        if target == root / "team-avatar-assets" / "portrait-atlas.webp":
+            # Only the public, content-addressed REIGN artwork is long-lived.
+            # A stale or arbitrary version must never pin different bytes for
+            # a year. Authenticated pages and user photos do not use this route.
+            query = parse_qs(scope.get("query_string", b"").decode("ascii", "replace"),
+                             keep_blank_values=True)
+            digest = hashlib.sha256(target.read_bytes()).hexdigest()
+            immutable = query == {"v": [digest]}
+            response.headers["Cache-Control"] = (
+                "public, max-age=31536000, immutable" if immutable
+                else "public, max-age=0, must-revalidate"
+            )
+            response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+        elif target.suffix in {".js", ".css", ".mjs"}:
+            response.headers["Cache-Control"] = "no-cache"
         response.headers["X-Content-Type-Options"] = "nosniff"
         return response
 

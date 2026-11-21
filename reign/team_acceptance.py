@@ -19,6 +19,7 @@ from PIL import Image, ImageDraw
 
 from reign.team_assistant import TeamAssistant
 from reign.team_media import TeamMedia
+from reign.team_store import WORKSPACE_ID, WORKSPACE_NAME
 
 
 async def run_acceptance():
@@ -35,7 +36,7 @@ async def run_acceptance():
             actor = {"id": "reign-owner", "display_name": "Release test", "role": "owner"}
             attachment = cache.put(room, actor["id"], output.getvalue(), "image",
                                    {"source": "synthetic_fixture", "participant_id": actor["id"]})
-            context = {"workspace": {"id": "rain", "name": "Rain"},
+            context = {"workspace": {"id": WORKSPACE_ID, "name": WORKSPACE_NAME},
                        "room": {"id": room, "title": "Disposable release check"},
                        "messages": [], "documents": [], "run_id": str(uuid.uuid4())}
             async with httpx.AsyncClient(trust_env=False, timeout=45) as http:

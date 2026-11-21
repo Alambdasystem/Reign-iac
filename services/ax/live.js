@@ -5,12 +5,33 @@ let busy=false, syncing=null, restoringWorkspace=false, poll=null, frameURL=null
 let threadId=null, chatState='idle', chatPoll=null, chatSeen=0, chatRun=null, agentReady=false;
 let selectedTab='Chat', pinned=true, lastActivity=Date.now();
 let voiceController=null, voiceCapability=null, voiceUi={active:false,phase:'idle'}, captionRole='', captionText='';
+let reignPortrait=null, reignPortraitReady=false, portraitGeneration=0;
 let chatOwner=null, chatPending=null, chatGeneration=0, chatInfo=null;
 let accountsVisible=false, accountsLoading=false, accountsMutation=false, accountsGeneration=0, accountsLoadId=0;
 let accountsReadAbort=null, accountsFocus=null, accountRemovalId=null, savedAccounts=[];
 let accountsVault={ready:false,durable:false,code:'vault_not_ready'};
 let accountRole=null, loggingOut=false, logoutFailed=false;
 const SIGNOUT_KEY='reign:ax:signed-out';
+function mountReignPortrait(){
+  if(!authenticated||accountRole!=='owner'||loggingOut||reignPortrait||!window.REIGNAvatar)return;
+  const generation=++portraitGeneration;
+  reignPortrait=window.REIGNAvatar.createReignAvatar({canvas:$('reignAvatar'),onStatus(value){
+    if(generation!==portraitGeneration)return;
+    reignPortraitReady=value.state==='ready';
+    $('portraitStatus').textContent=value.state==='ready'?'REIGN · Your AI teammate':value.message;
+    $('portraitStatus').dataset.error=String(value.state==='error');
+    refreshVoiceControls();
+  }});
+  reignPortrait.ready.then(ready=>{
+    if(generation!==portraitGeneration)return;
+    reignPortraitReady=ready;refreshVoiceControls();
+  });
+}
+function releaseReignPortrait(){
+  ++portraitGeneration;reignPortraitReady=false;
+  reignPortrait?.destroy();reignPortrait=null;
+}
+window.addEventListener('reign:avatar-module-ready',mountReignPortrait);
 const ACCOUNT_MESSAGES={
   vault_not_ready:'Secure saved accounts are not ready for this workspace.',
   vault_unavailable:'Secure saved accounts are unavailable. Refresh and try again.',
@@ -226,7 +247,7 @@ function refreshControls(){const blocked=busy||restoringWorkspace||loggingOut||l
 function clearFrame(){for(const id of ['screen','fullScreen'])$(id).removeAttribute('src');$('screen').hidden=true;$('emptyScreen').hidden=false;if(frameURL)URL.revokeObjectURL(frameURL);frameURL=null;frameSequence=0;$('frameStatus').textContent='Waiting for a session'}
 function pausePolling(){if(poll)clearTimeout(poll);poll=null}
 function stop(){pausePolling();sid=null;epoch=null;controller=null;connected=false;remember(null);clearFrame();closeExpanded();refreshControls()}
-function lost(error){connected=false;controller=null;epoch=null;pausePolling();clearFrame();$('frameStatus').textContent='No live frame';refreshControls();say(error.message,'Disconnected');entry('CONNECTION',error.message,true);if(error.status===404){if(sid)expiredSessions.add(sid);stop();say('Session expired. Open Git High to start again.','Ready')}if(error.status===401){closeAccounts();voiceController?.stop({reason:'Your sign-in expired. Sign in before calling again.',failed:true});stop();authenticated=false;$('console').hidden=true;$('loginPanel').hidden=false;$('loginMessage').textContent=error.message;refreshControls()}}
+function lost(error){connected=false;controller=null;epoch=null;pausePolling();clearFrame();$('frameStatus').textContent='No live frame';refreshControls();say(error.message,'Disconnected');entry('CONNECTION',error.message,true);if(error.status===404){if(sid)expiredSessions.add(sid);stop();say('Session expired. Open Git High to start again.','Ready')}if(error.status===401){closeAccounts();releaseReignPortrait();voiceController?.stop({reason:'Your sign-in expired. Sign in before calling again.',failed:true});stop();authenticated=false;$('console').hidden=true;$('loginPanel').hidden=false;$('loginMessage').textContent=error.message;refreshControls()}}
 async function sync(){
   const activeId=sid;if(!activeId)return;
   // Recovery may replace a tab's stale session while its last frame is still
@@ -329,6 +350,7 @@ async function signedIn(profile){
     window.location.replace(destination);return;
   }
   authenticated=true;restoringWorkspace=true;$('loginPanel').hidden=true;$('console').hidden=false;$('loginMessage').textContent='';
+  mountReignPortrait();
   refreshControls();entry('WORKSPACE','Signed in. Reconnecting to your existing workspace…');
   try{
     await recoverBrowserSession();if(!authenticated||loggingOut)return;
@@ -343,6 +365,7 @@ async function signedIn(profile){
 function announceSignout(){try{localStorage.setItem(SIGNOUT_KEY,`${Date.now()}:${Math.random()}`)}catch{}}
 function leaveWorkspace(message){
   authenticated=false;accountRole=null;logoutFailed=false;closeAccounts();
+  releaseReignPortrait();
   // Local teardown must not depend on cancellation or other server cleanup.
   voiceController?.stop({reason:message}).catch(()=>{});
   chatGeneration++;clearTimeout(chatPoll);chatPoll=null;
@@ -351,6 +374,7 @@ function leaveWorkspace(message){
 }
 async function logout(){
   if(loggingOut)return;
+  reignPortrait?.stop();
   loggingOut=true;logoutFailed=false;closeAccounts();pausePolling();clearTimeout(chatPoll);chatPoll=null;
   $('loginForm').querySelector('button').disabled=true;
   $('logout').textContent='Logging out…';refreshControls();
@@ -398,7 +422,8 @@ $('motion').onclick=e=>{run=!run;e.currentTarget.innerHTML=run?'<i aria-hidden="
 document.addEventListener('pointerdown',wake,{passive:true});setInterval(()=>{if(!pinned&&!sid&&Date.now()-lastActivity>5200)$('panel').classList.add('dim')},750);
 document.addEventListener('keydown',e=>{if($('remoteOverlay').hidden)return;if(e.key==='Escape'){closeExpanded();return}if(e.key==='Tab'){const nodes=[...$('remoteOverlay').querySelectorAll('button:not(:disabled),input:not(:disabled)')].filter(x=>!x.hidden);const first=nodes[0],last=nodes.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus()}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus()}}});
 document.addEventListener('visibilitychange',()=>{if(document.hidden){closeAccounts();pausePolling();if(voiceUi.active)voiceController.stop({reason:'Call ended because REIGN moved to the background.'})}else if(sid)sync().then(schedule)});
-window.addEventListener('pagehide',()=>{closeAccounts();if(voiceUi.active)voiceController.stop({reason:'Call ended because the page closed.'})});
+window.addEventListener('pagehide',()=>{closeAccounts();releaseReignPortrait();if(voiceUi.active)voiceController.stop({reason:'Call ended because the page closed.'})});
+window.addEventListener('pageshow',event=>{if(event.persisted)mountReignPortrait()});
 window.addEventListener('storage',event=>{
   if(event.key!==SIGNOUT_KEY||!event.newValue)return;
   leaveWorkspace('You logged out in another tab.');window.location.replace('/');
@@ -595,6 +620,7 @@ function refreshVoiceControls(){
 }
 function renderVoice(value){
   voiceUi=value;
+  if(!authenticated||loggingOut||logoutFailed||!value.active||value.speakerBlocked)reignPortrait?.setSpeaking(false);
   if(accountsVisible&&value.active&&!value.muted&&voiceController?.mute())return;
   $('voiceStatus').textContent=value.status;$('voiceStatus').dataset.error=String(value.phase==='failed');
   refreshVoiceControls();
@@ -623,7 +649,11 @@ voiceController=REIGNVoice.createVoiceController({
     captionText=captionText.slice(-16000);$('voiceCaption').hidden=!captionText;
     $('voiceCaption').textContent=(value.role==='user'?'You: ':'REIGN: ')+captionText;
   },
-  onLevel(level){document.querySelector('.orb').style.setProperty('--voice-level',String(level));if(voiceUi.active)activity=Math.max(voiceUi.phase==='thinking'?.25:.06,level)}
+  onLevel(level){document.querySelector('.orb').style.setProperty('--voice-level',String(level));if(voiceUi.active)activity=Math.max(voiceUi.phase==='thinking'?.25:.06,level)},
+  onOutputLevel(level){
+    const speaking=authenticated&&!loggingOut&&!logoutFailed&&voiceUi.active&&!voiceUi.speakerBlocked&&level>0;
+    reignPortrait?.setSpeaking(speaking);reignPortrait?.setSpeechLevel(speaking?level:0);
+  }
 });
 $('voiceStart').onclick=()=>{captionRole='';captionText='';$('voiceCaption').hidden=true;voiceController.start()};
 $('voiceEnd').onclick=()=>voiceController.stop();$('mute').onclick=()=>voiceController.mute();$('voiceSpeaker').onclick=()=>voiceController.enableSpeaker();

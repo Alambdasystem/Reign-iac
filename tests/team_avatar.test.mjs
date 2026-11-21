@@ -4,11 +4,15 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import vm from 'node:vm';
 
-const code = fs.readFileSync(new URL('../services/ax/team-avatar.js', import.meta.url), 'utf8').replaceAll('export function ', 'function ');
+const portraitCode = fs.readFileSync(new URL('../services/ax/reign-avatar.js', import.meta.url), 'utf8')
+  .replaceAll('export function ', 'function ').replaceAll('export const ', 'const ');
+const code = fs.readFileSync(new URL('../services/ax/team-avatar.js', import.meta.url), 'utf8')
+  .replace(/^import .*;$/gm, '').replace(/^export \{.*;$/gm, '').replaceAll('export function ', 'function ');
 const flush = () => new Promise(resolve => setImmediate(resolve));
 function deferred() { let resolve; const promise = new Promise(r => resolve = r); return {promise, resolve}; }
-function harness({hold = false} = {}) {
+function harness({hold = false, holdPortrait = false, portraitFails = false} = {}) {
   const sources = [], calls = [], statuses = [], frames = new Map(), pending = deferred();
+  const portraitPending = deferred();
   const drawing = [];
   const ctx = {fillRect() {}, drawImage(...args) { drawing.push(args); }};
   const canvas = {width: 0, height: 0, dataset: {}, getContext: () => ctx};
@@ -24,15 +28,19 @@ function harness({hold = false} = {}) {
       sources.push(source); return source;
     }
   }
-  class Image { naturalWidth = 768; naturalHeight = 4096; async decode() {} }
+  class Image { naturalWidth = 768; naturalHeight = 4096;
+    async decode() { if (holdPortrait) await portraitPending.promise; if (portraitFails) throw Error('Unavailable'); }
+  }
   let timer = 0;
   const realm = vm.createContext({Image, Float32Array, Math, performance: {now: () => 1000},
     document: {hidden: false, addEventListener() {}, removeEventListener() {}},
-    window: {AudioContext}, requestAnimationFrame: cb => { frames.set(++timer, cb); return timer; }, cancelAnimationFrame: id => frames.delete(id)});
+    window: {AudioContext}, setTimeout, clearTimeout,
+    requestAnimationFrame: cb => { frames.set(++timer, cb); return timer; }, cancelAnimationFrame: id => frames.delete(id)});
+  vm.runInContext(portraitCode, realm);
   vm.runInContext(code, realm);
   const player = realm.createTeamAvatar({canvas, onStatus: value => statuses.push(value),
     api: async (...args) => { calls.push(args); if (hold) await pending.promise; return {size: 1000, arrayBuffer: async () => new ArrayBuffer(1000)}; }});
-  return {player, canvas, sources, calls, statuses, frames, pending, realm};
+  return {player, canvas, sources, calls, statuses, frames, pending, portraitPending, realm};
 }
 const event = {data: {speech_status: 'ready', segments: [{text: 'Hello team.', expression: 'warm', audio_id: '123e4567-e89b-42d3-a456-426614174000'}]}};
 
@@ -80,4 +88,27 @@ test('unavailable speech leaves the saved text usable without synthetic talking'
   await h.player.play('room', {data: {text: 'Saved reply', speech_status: 'unavailable', segments: [{text: 'Saved reply', expression: 'neutral'}]}});
   assert.equal(h.calls.length, 0); assert.equal(h.sources.length, 0);
   assert.equal(h.statuses.at(-1).state, 'error'); h.player.destroy();
+});
+
+test('a reply remains audible while the portrait loads and the portrait joins the current output', async () => {
+  const h = harness({holdPortrait: true}); await h.player.unlock();
+  const play = h.player.play('room', event); await flush();
+  assert.equal(h.calls.length, 1); assert.equal(h.sources.length, 1);
+  assert.equal(h.canvas.dataset.ready, 'false'); assert.equal(h.canvas.dataset.mouth, '0.000');
+  h.portraitPending.resolve(); await flush();
+  assert.equal(h.canvas.dataset.ready, 'true');
+  assert.equal(h.sources.length, 1); assert.equal(h.sources[0].started, true);
+  assert.equal(h.statuses.at(-1).state, 'speaking', 'late image readiness must not replace active speech status');
+  h.player.stop(); await play; h.player.destroy();
+});
+
+test('portrait loading failure does not disable valid speech or invent mouth pixels', async () => {
+  const h = harness({portraitFails: true}); await h.player.unlock();
+  const play = h.player.play('room', event); await flush();
+  assert.equal(h.sources.length, 1); assert.equal(h.calls.length, 1);
+  assert.equal(h.sources[0].started, true);
+  assert.equal(h.canvas.dataset.state, 'error');
+  assert.equal(h.canvas.dataset.ready, 'false'); assert.equal(h.canvas.dataset.mouth, '0.000');
+  assert.ok(h.statuses.some(value => /face could not load/.test(value.message)));
+  h.player.stop(); await play; assert.equal(h.canvas.dataset.speaking, 'false'); h.player.destroy();
 });
