@@ -26,6 +26,7 @@ WORKSPACE_ID = "rain"
 MOUNT = "/var/data/reign-vault"
 DATABASE_NAME = "reign-team.sqlite3"
 MAX_MEMBERS = 32
+MAX_ROOM_PARTICIPANTS = 16
 MAX_ROOMS = 100
 MAX_EVENTS = 20000
 MAX_DOCUMENTS = 100
@@ -335,6 +336,28 @@ class TeamStore:
                 if me["role"] == "owner" or member["active"]: members.append(member)
             rooms = [self._room(db, key, row[0]) for row in db.execute("SELECT id FROM rooms WHERE workspace=? ORDER BY updated DESC,id LIMIT ?", (WORKSPACE_ID, MAX_ROOMS)).fetchall()]
             return {"workspace": {"id": WORKSPACE_ID, "name": "Rain", "durable": self.durable}, "me": me, "members": members, "rooms": rooms}
+
+    def room_participants(self, actor, room_id, user_ids):
+        """Resolve only nominated live-room users against current membership."""
+        if type(user_ids) is not list or len(user_ids) > MAX_ROOM_PARTICIPANTS:
+            raise TeamError("invalid_team_request")
+        for user_id in user_ids:
+            if user_id != OWNER_ID: identifier(user_id)
+        with self._connection() as (db, key):
+            self._principal(db, key, actor); self._room(db, key, room_id)
+            participants = {}
+            for user_id in dict.fromkeys(user_ids):
+                if user_id == OWNER_ID:
+                    participants[user_id] = owner_identity()["display_name"]
+                    continue
+                row = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+                if row is None: continue
+                try: member, _ = self._member(db, key, row)
+                except TeamError as error:
+                    if error.code == "team_identity_required": continue
+                    raise
+                if member["active"]: participants[user_id] = member["display_name"]
+            return participants
 
     def create_room(self, actor, title):
         title = text(title, 120).strip()

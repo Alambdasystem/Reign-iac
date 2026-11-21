@@ -19,6 +19,12 @@ microphone, then transcribes and submits that turn when the caller stops.
 **Dictate** only puts the transcript in the composer for review. Cancelling,
 changing rooms, or signing out discards an unfinished recording.
 
+Each assistant turn includes a current, membership-checked presence snapshot for
+that room. Multiple tabs belonging to one person count as one participant. REIGN
+can distinguish people viewing the room from those in its call; a microphone,
+camera, or screen flag describes a sharing control, not observed media. Old chat
+authors are not treated as evidence that those people are still present.
+
 **Join call** joins a small peer-to-peer call. Microphone, camera and screen
 sharing are separate controls. Participants can see shared video; sending an
 image to REIGN requires a separate local preview and confirmation. Only that
