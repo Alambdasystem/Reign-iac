@@ -64,7 +64,7 @@ services:
   region: oregon
   numInstances: 1
   image:
-    url: ghcr.io/alambdasystem/reign-core@sha256:e5702d69aec69fa418e592829f3a5a5b60bb089089c50022599277c2ede71c56
+    url: ghcr.io/alambdasystem/reign-core@sha256:34ec7a44cd4558c2a5a119ff5b27577b1acb6e5f0a5228ee1fc5a74a940121b7
   envVars:
   - key: PORT
     value: '10000'
@@ -119,17 +119,17 @@ services:
   # Core disk-backed node inventory only; no new workers or live dispatch.
   - key: REIGN_NODES_MODE
     value: inventory
+  # Shared rooms, employee access and documents use the existing private disk.
+  - key: REIGN_TEAM_MODE
+    value: disk
   - key: CREDENTIAL_CHANNEL_KEY
     generateValue: true
   # Core derives both private endpoints from the referenced host variables.
   dockerCommand: ''
-  # Block promotion unless real provider speech reaches the LangGraph status
-  # tool and returns non-silent audio. Synthetic input; no device-audio claim.
-  # Render pre-deploy has no persistent disk; run the real voice/graph probe
-  # with ephemeral *test* memory and Genesis draft registration disabled in
-  # this mountless pre-deploy container. Production startup still requires
-  # the private disk for both transcript history and Genesis drafts.
-  preDeployCommand: env REIGN_HISTORY_MODE=disabled GENESIS_DRAFT_MODE=disabled REIGN_NODES_MODE=disabled python -m reign.voice_acceptance
+  # Predeploy has no mounted disk. Require private voice/graph acceptance,
+  # the live scoped-worker protocol, and synthetic team vision/document/speech.
+  # Only this verification process disables disk features; runtime stays durable.
+  preDeployCommand: env REIGN_HISTORY_MODE=disabled GENESIS_DRAFT_MODE=disabled REIGN_NODES_MODE=disabled REIGN_TEAM_MODE=disabled python -m reign.release_acceptance
   disk:
     name: reign-account-vault
     mountPath: /var/data/reign-vault
@@ -141,7 +141,7 @@ services:
   region: oregon
   numInstances: 1
   image:
-    url: ghcr.io/alambdasystem/reign-ax@sha256:01fe5ce06eb5a13f6e54e23fd67835520f9ec5ec7491ea10e1ee0460d91ce7e7
+    url: ghcr.io/alambdasystem/reign-ax@sha256:ab1ea129dbfacebb58902cb17ee166af2826a911ce89ce138763e1b5f34b0244
   envVars:
   - key: PORT
     value: '10000'
@@ -167,6 +167,8 @@ services:
       type: web
       envVarKey: RENDER_EXTERNAL_URL
   - key: AX_ALLOW_INTERNAL_HTTP
+    value: '1'
+  - key: AX_TEAM_ENABLED
     value: '1'
   # Render passes the remainder after /bin/sh -c as one shell program. Do not
   # quote that entire program as in a local terminal command.
