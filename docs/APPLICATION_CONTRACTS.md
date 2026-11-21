@@ -308,3 +308,13 @@ not tenant isolation for multiple REIGN accounts.
 The floating game workspace is private and is not sent to meeting participants.
 Minimize preserves its connection and task; disconnect stops it. Top-level mobile
 sign-in can interrupt a game call, so authenticate before joining a meeting.
+
+## Rain shared team workspace
+
+See [TEAM_WORKSPACE.md](TEAM_WORKSPACE.md) for `/team`, employee authorization,
+saved rooms and documents, bounded calls and explicit image sharing, the
+server-generated speech/portrait player, and the separately scoped shared
+browser. This feature uses the existing private Core disk and requires a staged
+Computer-before-Core/AX promotion. Its feature flags and provider gates are
+documented there. CI, actual provider acceptance, live deployment checks, and
+physical-device acceptance remain separate claims.

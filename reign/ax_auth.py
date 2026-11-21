@@ -124,6 +124,24 @@ class Identity:
     display_name: str
     role: str
     revision: str
+    user_id: str = ""
+
+
+def employee_candidate(username, password):
+    """Route only valid, non-local names to the private employee directory."""
+    _password_bytes(password)
+    if not isinstance(username, str) or len(username) > 64:
+        raise InvalidCredentials()
+    name = username.strip().lower()
+    if name in ("", "owner", "admin"):
+        return False
+    if not USERNAME.fullmatch(name):
+        raise InvalidCredentials()
+    return name not in _accounts()
+
+
+def reserved_username(username):
+    return username in {"", "owner", "admin"} or username in _accounts()
 
 
 def identity_for(username, role):
@@ -223,6 +241,13 @@ class AuthState:
         if (session is None or payload["username"] != session.identity.username
                 or payload["role"] != session.identity.role):
             raise InvalidSession()
+        # Employee membership is authoritative in Core. AX checks it on page and
+        # profile reads; Core rechecks every signed team request, including after
+        # long polls. The local registry still binds role, nonce and expiry.
+        if session.identity.role == "employee":
+            if not session.identity.user_id:
+                raise InvalidSession()
+            return session
         current = identity_for(session.identity.username, session.identity.role)
         if not hmac.compare_digest(current.revision, session.identity.revision):
             self.sessions.pop(session.nonce, None)
@@ -238,7 +263,7 @@ def profile(session):
     owner = identity.role == "owner"
     return {"authenticated": True, "username": identity.username,
             "display_name": identity.display_name, "role": identity.role,
-            "landing_path": "/" if owner else "/avatar-lab",
+            "landing_path": "/" if owner else "/team" if identity.role == "employee" else "/avatar-lab",
             "capabilities": {"avatar_lab": True, "managed_browser": owner,
                              "external_computer": False, "voice": owner, "ai_chat": owner}}
 

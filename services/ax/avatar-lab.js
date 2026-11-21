@@ -413,12 +413,13 @@ function checkSession() {
       if (!response.ok) throw new Error('Account check failed.');
       const profile = await response.json();
       if (closed) return;
-      if (!profile.authenticated || !['owner', 'avatar'].includes(profile.role)) throw new Error('Account check failed.');
+      if (!profile.authenticated || !['owner', 'avatar', 'employee'].includes(profile.role)) throw new Error('Account check failed.');
       sessionVerified = true;
       $('accountName').textContent = profile.display_name || profile.username;
       $('accountName').hidden = false;
-      $('workspaceLink').hidden = profile.role !== 'owner';
-      $('labBrand').href = profile.role === 'owner' ? '/' : '/avatar-lab';
+      $('workspaceLink').hidden = profile.role === 'avatar';
+      $('workspaceLink').href = profile.role === 'employee' ? '/team' : '/';
+      $('labBrand').href = profile.role === 'owner' ? '/' : profile.role === 'employee' ? '/team' : '/avatar-lab';
       $('labBrand').setAttribute('aria-label', profile.role === 'owner' ? 'Back to REIGN workspace' : 'REIGN Avatar Lab');
       if (!loading && !engineInitialized) $('startButton').disabled = false;
       showAuthMessage('');

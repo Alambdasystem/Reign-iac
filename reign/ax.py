@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from itsdangerous import URLSafeTimedSerializer, BadData
 from reign import ax_auth
+from reign import team_ax
 from reign.openstl import OpenSTLBridge
 from reign.config import checked_url
 from reign.session_errors import BROWSER_OCCUPIED_CODE, BrowserOccupied, browser_occupied_response
@@ -211,7 +212,7 @@ class AXStaticFiles(StaticFiles):
             target = (root / path).resolve()
         except (OSError, RuntimeError, ValueError):
             raise HTTPException(404, "Not found") from None
-        if (target == root / "avatar-lab.html"
+        if (target in {root / "avatar-lab.html", root / "team.html"}
                 or target.is_relative_to(root / "avatar-assets")):
             raise HTTPException(404, "Not found")
         response = await super().get_response(path, scope)
@@ -228,8 +229,9 @@ app.mount("/assets", AXStaticFiles(directory=ASSETS), name="assets")
 @app.get("/")
 async def console(request: Request):
     try:
-        if principal(request).identity.role == "avatar":
-            return RedirectResponse("/avatar-lab", status_code=303,
+        role = principal(request).identity.role
+        if role in {"avatar", "employee"}:
+            return RedirectResponse("/team" if role == "employee" else "/avatar-lab", status_code=303,
                                     headers={"Cache-Control": "no-store"})
     except HTTPException as error:
         if error.status_code != 401:
@@ -263,7 +265,7 @@ async def avatar_lab(request: Request):
     Existing REIGN routes and the production console are unchanged.
     """
     try:
-        principal(request)
+        await team.current(request)
     except HTTPException as error:
         if error.status_code == 401:
             return RedirectResponse(url="/?next=%2Favatar-lab", status_code=303,
@@ -350,7 +352,7 @@ async def health():
 
 @app.get("/api/me")
 async def me(request: Request):
-    return JSONResponse(ax_auth.profile(principal(request)), headers={"Cache-Control": "no-store"})
+    return JSONResponse(ax_auth.profile(await team.current(request)), headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/status")
@@ -384,8 +386,10 @@ async def login(request: Request):
         if (not isinstance(data, dict) or set(data) - {"username", "password"}
                 or "password" not in data):
             raise ax_auth.InvalidCredentials()
-        work = asyncio.create_task(asyncio.to_thread(
-            ax_auth.authenticate, data.get("username", ""), data["password"]))
+        remote = team_ax.enabled() and ax_auth.employee_candidate(data.get("username", ""), data["password"])
+        work = asyncio.create_task(
+            team.authenticate(data.get("username", ""), data["password"]) if remote else
+            asyncio.to_thread(ax_auth.authenticate, data.get("username", ""), data["password"]))
         try:
             identity = await asyncio.shield(work)
         except asyncio.CancelledError:
@@ -400,8 +404,10 @@ async def login(request: Request):
             raise
         # Resolve again after the KDF so a concurrent verifier rotation cannot
         # create a session using a credential that is no longer configured.
-        current = ax_auth.identity_for(identity.username, identity.role)
-        if not secrets.compare_digest(current.revision, identity.revision):
+        current = (await team.directory("/internal/team/identity", {
+            "id": identity.user_id, "credential_revision": int(identity.revision)})
+            if identity.role == "employee" else ax_auth.identity_for(identity.username, identity.role))
+        if current != identity:
             raise ax_auth.InvalidCredentials()
         payload, token, session = state.create(identity)
         signed = signer().dumps(payload)
@@ -944,6 +950,9 @@ async def chat_delete(tid: str, request: Request):
     return (await core("DELETE", f"/api/chat/{session_id(tid)}")).json()
 
 
+team = team_ax.TeamBridge(app, core_origin, configured, principal, session_csrf, ASSETS)
+team.install()
+
 openstl = OpenSTLBridge(core, user, csrf)
 openstl.install(app)
 
@@ -966,9 +975,11 @@ async def avatar_scope(request: Request, call_next):
             # Individual authenticated routes reject invalid sessions. Independent
             # machine credentials and public login/static routes keep their policy.
             session = None
-        if session is not None and session.identity.role == "avatar":
+        if session is not None and session.identity.role != "owner":
             path = request.url.path
-            if ((path == "/api" or path.startswith("/api/")) and path != "/api/me"
+            team_allowed = (session.identity.role == "employee"
+                            and (path == "/api/team" or path.startswith("/api/team/")))
+            if ((path == "/api" or path.startswith("/api/")) and path != "/api/me" and not team_allowed
                     or path in {"/genesis", "/guardrails", "/nodes", "/connect/openstl"}):
                 return JSONResponse({"detail": "Owner access required"}, status_code=403,
                                     headers={"Cache-Control": "no-store"})

@@ -46,15 +46,49 @@ async def lifespan(app: FastAPI):
     if os.environ.get("REIGN_NODES_MODE", "disabled") == "inventory":
         from reign.distributed_nodes import NodeRegistry
         nodes = NodeRegistry.from_env()
+    team = None
+    team_media = None
+    team_browser = None
+    if os.environ.get("REIGN_TEAM_MODE", "disabled") == "disk":
+        from reign.team_api import TeamRuntime
+        from reign.team_store import TeamStore
+        from reign.team_media import TeamMedia
+        from reign.team_assistant import TeamAssistant
+        from reign.team_browser import TeamBrowser
+        from reign.voice import configuration
+        team = TeamRuntime(TeamStore.from_env())
+        await team.start()
+        team_media = TeamMedia()
+        team_browser = TeamBrowser(team)
+        team.attachment_validator = team_media.validate_attachments
+        try:
+            configuration()
+        except VoiceError:
+            pass
+        else:
+            team.assistant = TeamAssistant(app.state.http, team_media, browser=team_browser)
+            team.features.update(speech=True, vision=True, transcription=True, camera_to_ai=True,
+                                 screen_to_ai=True, voice_output=True)
     try:
         async with WorkspaceMCP().connect() as connection:
             app.state.agent = AgentRuntime(adapter=MCPTools(connection), archive=archive)
             app.state.genesis = genesis
             app.state.nodes = nodes
             app.state.voice = VoiceBroker(app.state.http)
+            app.state.team = team
+            app.state.team_media = team_media
+            app.state.team_browser = team_browser
+            if team_browser is not None:
+                await team_browser.start()
             try:
                 yield
             finally:
+                if team is not None:
+                    await team.shutdown()
+                if team_browser is not None:
+                    await team_browser.shutdown()
+                if team_media is not None:
+                    team_media.close()
                 await app.state.agent.shutdown()
     finally:
         await app.state.http.aclose()
@@ -64,6 +98,12 @@ app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None
 app.add_exception_handler(VoiceError, voice_error_response)
 app.add_exception_handler(BrowserOccupied, browser_occupied_response)
 app.add_exception_handler(BrowserActionError, browser_action_error_response)
+from reign.team_api import install as install_team_routes
+install_team_routes(app, authorize)
+from reign.team_media import install as install_team_media_routes
+install_team_media_routes(app)
+from reign.team_browser import install as install_team_browser_routes
+install_team_browser_routes(app)
 
 
 class OpenRequest(BaseModel):
@@ -119,21 +159,23 @@ class InputRequest(BaseModel):
     dy: int = Field(default=0, ge=-1000, le=1000)
 
 
-def worker_headers():
+def worker_headers(scope="owner"):
     token = os.environ.get("COMPUTER_TOKEN", "")
     if len(token) < 32:
         raise HTTPException(503, "Computer token not configured")
-    return {"Authorization": "Bearer " + token}
+    return {"Authorization": "Bearer " + token, "X-Reign-Browser-Scope": scope}
 
 
-async def worker(method: str, path: str, payload=None):
+async def worker(method: str, path: str, payload=None, *, scope="owner", team_protocol=False):
     try:
         response = await app.state.http.request(
             method, computer_url().rstrip("/") + path,
-            headers=worker_headers(), json=payload,
+            headers=worker_headers(scope), json=payload,
         )
     except httpx.RequestError:
         raise HTTPException(503, "Computer worker unreachable")
+    if team_protocol and response.headers.get("X-Reign-Team-Browser-Protocol") != "1":
+        raise HTTPException(503, "The managed browser worker does not support the required team isolation protocol.")
     if response.status_code >= 400:
         try:
             code = response.json().get("code")

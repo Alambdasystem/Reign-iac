@@ -316,16 +316,16 @@ function avatarReturnPath(search){
   // Return a fixed local route, never a URL supplied by the caller. Reject
   // duplicate values and anything other than the exact allowlisted path.
   const targets=new URLSearchParams(search).getAll('next');
-  return targets.length===1&&targets[0]==='/avatar-lab'?'/avatar-lab':null;
+  return targets.length===1&&['/avatar-lab','/team'].includes(targets[0])?targets[0]:null;
 }
 async function signedIn(profile){
   if(loggingOut)return;
-  if(!profile?.authenticated||!['owner','avatar'].includes(profile.role))throw Error('Your account could not be verified. Reload and sign in again.');
+  if(!profile?.authenticated||!['owner','avatar','employee'].includes(profile.role))throw Error('Your account could not be verified. Reload and sign in again.');
   accountRole=profile.role;logoutFailed=false;
   // Restricted accounts must leave before any Core, browser, chat or voice read.
-  const destination=accountRole==='avatar'?'/avatar-lab':avatarReturnPath(window.location?.search||'');
+  const destination=accountRole==='avatar'?'/avatar-lab':accountRole==='employee'?'/team':avatarReturnPath(window.location?.search||'');
   if(destination){
-    authenticated=true;$('loginMessage').textContent='Opening Avatar Lab…';
+    authenticated=true;$('loginMessage').textContent=destination==='/team'?'Opening your team workspace…':'Opening Avatar Lab…';
     window.location.replace(destination);return;
   }
   authenticated=true;restoringWorkspace=true;$('loginPanel').hidden=true;$('console').hidden=false;$('loginMessage').textContent='';

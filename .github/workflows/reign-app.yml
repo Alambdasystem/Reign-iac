@@ -28,6 +28,8 @@ jobs:
           node --test tests/voice_controller.test.js tests/live_chat_recovery.test.js
       - name: Portrait model controls, motion interpolation and worker lifecycle
         run: node --test tests/portrait_engine.test.mjs tests/portrait_motion.test.mjs
+      - name: Shared workspace and media lifecycle
+        run: node --test tests/team_*.test.mjs
   postgres-integration:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
