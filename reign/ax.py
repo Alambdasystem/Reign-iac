@@ -171,7 +171,38 @@ app.add_exception_handler(AccountError, account_error_response)
 ASSETS = Path(__file__).resolve().parent.parent / "ax_static"
 if not ASSETS.is_dir():
     ASSETS = Path(__file__).resolve().parent.parent / "services" / "ax"
-app.mount("/assets", StaticFiles(directory=ASSETS), name="assets")
+AVATAR_ASSETS = ASSETS / "avatar-assets"
+AVATAR_CSP = (
+    "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; "
+    "style-src 'self'; connect-src 'self'; worker-src 'self'; "
+    "img-src 'self' data: blob:; font-src 'self'; media-src 'self' blob:; "
+    "object-src 'none'; frame-ancestors 'none'; base-uri 'none'; "
+    "form-action 'none'"
+)
+
+
+class AXStaticFiles(StaticFiles):
+    """Keep the authenticated lab document outside the public static surface."""
+
+    async def get_response(self, path, scope):
+        try:
+            root = Path(self.directory).resolve()
+            target = (root / path).resolve()
+        except (OSError, RuntimeError, ValueError):
+            raise HTTPException(404, "Not found") from None
+        if (target == root / "avatar-lab.html"
+                or target.is_relative_to(root / "avatar-assets")):
+            raise HTTPException(404, "Not found")
+        response = await super().get_response(path, scope)
+        # A module worker has its own response policy. Constrain its imports
+        # and model requests to this origin just like the authenticated page.
+        if target.name == "portrait-engine.js":
+            response.headers["Content-Security-Policy"] = AVATAR_CSP
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+
+
+app.mount("/assets", AXStaticFiles(directory=ASSETS), name="assets")
 
 class Login(BaseModel):
     password: str
@@ -210,19 +241,47 @@ async def avatar_lab(request: Request):
         user(request)
     except HTTPException as error:
         if error.status_code == 401:
-            return RedirectResponse(url="/", status_code=303,
+            return RedirectResponse(url="/?next=%2Favatar-lab", status_code=303,
                                     headers={"Cache-Control": "no-store"})
         raise
     return FileResponse(ASSETS / "avatar-lab.html", headers={
         "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
         "Referrer-Policy": "no-referrer",
-        "Content-Security-Policy": (
-            "default-src 'none'; script-src 'unsafe-inline' https://esm.sh; "
-            "style-src 'unsafe-inline'; connect-src https://esm.sh; "
-            "img-src 'self' data:; font-src 'none'; "
-            "media-src 'none'; object-src 'none'; frame-ancestors 'none'; "
-            "base-uri 'none'; form-action 'none'"
-        ),
+        "Content-Security-Policy": AVATAR_CSP,
+    })
+
+
+@app.get("/avatar-assets/{asset_path:path}")
+async def avatar_asset(asset_path: str):
+    """Serve only bundled public model/runtime/reference assets, never uploads."""
+    known = {
+        "models/distilled.onnx", "models/appearance.onnx",
+        "sample-portrait.png", "sample-portrait.jpg", "THIRD_PARTY_NOTICES.txt",
+    }
+    runtime_file = re.fullmatch(r"ort/ort[a-zA-Z0-9_.-]{0,100}\.(?:mjs|js|wasm)",
+                                asset_path)
+    if asset_path not in known and runtime_file is None:
+        raise HTTPException(404, "Not found")
+    try:
+        root = AVATAR_ASSETS.resolve()
+        candidate = root / asset_path
+        if candidate.is_symlink() or candidate.parent.is_symlink():
+            raise ValueError()
+        path = candidate.resolve(strict=True)
+        if not path.is_relative_to(root) or not path.is_file():
+            raise ValueError()
+    except (OSError, RuntimeError, ValueError):
+        raise HTTPException(404, "Not found") from None
+    media_types = {
+        ".onnx": "application/octet-stream", ".wasm": "application/wasm",
+        ".mjs": "text/javascript", ".js": "text/javascript",
+        ".png": "image/png", ".jpg": "image/jpeg", ".txt": "text/plain",
+    }
+    return FileResponse(path, media_type=media_types[path.suffix], headers={
+        "Cache-Control": "public, max-age=3600",
+        "X-Content-Type-Options": "nosniff",
+        "Cross-Origin-Resource-Policy": "same-origin",
+        "Content-Security-Policy": AVATAR_CSP,
     })
 
 

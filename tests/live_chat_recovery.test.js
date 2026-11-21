@@ -40,8 +40,8 @@ async function eventually(check) {
   assert.ok(check(), 'AX controller did not reach the expected state');
 }
 
-function harness({threadStatus = 404, oldBrowser = false} = {}) {
-  const nodes = new Map(), calls = [], timers = new Map();
+function harness({threadStatus = 404, oldBrowser = false, search = '', initiallyAuthenticated = true} = {}) {
+  const nodes = new Map(), calls = [], timers = new Map(), navigations = [];
   const node = id => { if (!nodes.has(id)) nodes.set(id, new Element()); return nodes.get(id); };
   const storage = new Map([['reign-session', SESSION], ['reign-thread', THREAD]]);
   let timer = 0, frame = 0;
@@ -72,7 +72,8 @@ function harness({threadStatus = 404, oldBrowser = false} = {}) {
   const fetch = async (url, options) => {
     const request = {path: url, method: options.method, body: options.body ? JSON.parse(options.body) : undefined};
     calls.push(request);
-    if (url === '/api/me') return json({capabilities: {ai_chat: true}});
+    if (url === '/api/me') return initiallyAuthenticated ? json({capabilities: {ai_chat: true}}) : json({}, 401);
+    if (url === '/login' && options.method === 'POST') return json({status: 'authenticated'});
     if (url === '/api/agent') return json({configured: true});
     if (url === '/api/voice') return json({configured: false});
     if (url === '/api/status') return json({status: 'ready'});
@@ -92,7 +93,8 @@ function harness({threadStatus = 404, oldBrowser = false} = {}) {
     static revokeObjectURL() {}
   }
   const context = vm.createContext({
-    document, window: {addEventListener() {}}, fetch, Response, AbortController, URL: TestURL,
+    document, window: {addEventListener() {}, location: {search, replace: target => navigations.push(target)}},
+    fetch, Response, AbortController, URL: TestURL, URLSearchParams,
     sessionStorage: {getItem: key => storage.get(key) ?? null,
       setItem: (key, value) => storage.set(key, String(value)), removeItem: key => storage.delete(key)},
     setTimeout: (callback, delay) => { timers.set(++timer, {callback, delay}); return timer; },
@@ -101,7 +103,7 @@ function harness({threadStatus = 404, oldBrowser = false} = {}) {
     REIGNVoice: {createVoiceController: () => ({stop: async () => {}, mute() {}, start() {}, enableSpeaker() {}})}
   });
   vm.runInContext(source, context, {filename: 'services/ax/live.js'});
-  return {node, calls, storage, session, timers,
+  return {node, calls, storage, session, timers, navigations,
     ready: () => eventually(() => calls.some(call => call.path === '/api/status') && !node('logout').disabled)};
 }
 
@@ -178,4 +180,39 @@ test('current-run trace inspector shows allowlisted metadata but no untrusted to
   assert.match(text, /core \/ agent\.tool · workspace_status · ok · 12 ms/);
   assert.doesNotMatch(text, /my-fixture-secret|private-password|password=/);
   assert.match(text, /Trace events: 2/);
+});
+
+test('a restored session follows the Avatar Lab return path without touching a workspace', async () => {
+  const h = harness({search: '?next=%2Favatar-lab'});
+  await eventually(() => h.navigations.length === 1);
+  assert.deepEqual(h.navigations, ['/avatar-lab']);
+  assert.deepEqual(h.calls.map(call => call.path), ['/api/me']);
+  assert.equal(h.storage.get('reign-session'), SESSION);
+  assert.equal(h.storage.get('reign-thread'), THREAD);
+});
+
+test('sign-in follows the same return path only after successful authentication', async () => {
+  const h = harness({search: '?next=%2Favatar-lab', initiallyAuthenticated: false});
+  await eventually(() => h.node('connection').textContent === 'SIGN IN');
+  assert.deepEqual(h.navigations, []);
+  h.node('password').value = 'disposable-test-password';
+  await h.node('loginForm').onsubmit({preventDefault() {}, currentTarget: h.node('loginForm')});
+  assert.deepEqual(h.navigations, ['/avatar-lab']);
+  assert.deepEqual(h.calls.map(call => call.path), ['/api/me', '/login']);
+  assert.equal(h.node('password').value, '');
+});
+
+test('untrusted or duplicate return paths never become redirects', async () => {
+  for (const search of [
+    '?next=https%3A%2F%2Fevil.example%2F', '?next=%2F%2Fevil.example',
+    '?next=javascript%3Aalert(1)', '?next=%252Favatar-lab',
+    '?next=%2Favatar-lab%2F', '?next=%2Favatar-lab%3Fnext%3Dhttps%3A%2F%2Fevil.example',
+    '?next=%2Favatar-lab%23fragment', '?next=%2Favatar-lab%00',
+    '?next=%2Favatar-lab&next=%2Favatar-lab', '?next=%2Favatar-lab&next=https%3A%2F%2Fevil.example',
+  ]) {
+    const h = harness({search});
+    await h.ready();
+    assert.deepEqual(h.navigations, [], search);
+    assertBrowserPreserved(h);
+  }
 });

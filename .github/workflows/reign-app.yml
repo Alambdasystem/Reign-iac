@@ -26,6 +26,8 @@ jobs:
         run: |
           node --check services/ax/voice.js
           node --test tests/voice_controller.test.js tests/live_chat_recovery.test.js
+      - name: Portrait model controls and worker lifecycle
+        run: node --test tests/portrait_engine.test.mjs
   postgres-integration:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
