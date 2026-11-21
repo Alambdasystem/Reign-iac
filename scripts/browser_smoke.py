@@ -15,6 +15,7 @@ from playwright.async_api import async_playwright, expect
 from temporalio.client import Client
 from temporalio.api.enums.v1 import EventType
 from accounts_ui_smoke import accounts_ui_smoke
+from portrait_ui_smoke import portrait_ui_smoke
 
 TARGET = "https://alambda-forge.onrender.com/"
 AX = "https://ax:10000"
@@ -360,6 +361,8 @@ async def main():
         await page.locator("#password").fill(os.environ["AX_ADMIN_PASSWORD"])
         await page.locator("#loginForm button").click()
         await expect(page.locator("#open")).to_be_visible()
+        if os.environ.get("SMOKE_PHASE") == "initial":
+            await portrait_ui_smoke(context, AX, EVIDENCE)
         me = await request.get(AX + "/api/me")
         assert me.status == 200
         assert (await me.json())["capabilities"]["voice"] is True

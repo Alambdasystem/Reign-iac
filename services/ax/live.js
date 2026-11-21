@@ -310,7 +310,18 @@ function showDetails(){
 function selectTab(tab){if(!['Chat','Work'].includes(tab))return;selectedTab=tab;document.querySelectorAll('[data-tab]').forEach(button=>{button.classList.toggle('on',button.dataset.tab===tab);button.setAttribute('aria-pressed',String(button.dataset.tab===tab))});$('panelName').textContent=tab==='Chat'?'LIVING CANVAS':'WORKSPACE';showDetails();wake()}
 function openExpanded(){if(!sid||!connected)return;lastFocus=document.activeElement;$('remoteOverlay').hidden=false;document.body.style.overflow='hidden';$('closeRemote').focus()}
 function closeExpanded(){if($('remoteOverlay').hidden)return;$('remoteOverlay').hidden=true;document.body.style.overflow='';lastFocus?.focus();lastFocus=null}
+function avatarReturnPath(search){
+  // Return a fixed local route, never a URL supplied by the caller. Reject
+  // duplicate values and anything other than the exact allowlisted path.
+  const targets=new URLSearchParams(search).getAll('next');
+  return targets.length===1&&targets[0]==='/avatar-lab'?'/avatar-lab':null;
+}
 async function signedIn(){
+  const destination=avatarReturnPath(window.location?.search||'');
+  if(destination){
+    authenticated=true;$('loginMessage').textContent='Opening Avatar Lab…';
+    window.location.replace(destination);return;
+  }
   authenticated=true;restoringWorkspace=true;$('loginPanel').hidden=true;$('console').hidden=false;$('loginMessage').textContent='';
   refreshControls();entry('WORKSPACE','Signed in. Reconnecting to your existing workspace…');
   try{

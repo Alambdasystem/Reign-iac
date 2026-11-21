@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "assets": [
+    {
+      "path": "models/distilled.onnx",
+      "url": "https://huggingface.co/slperez/LP-Distilled0.1-ONNX/resolve/cd9c2c31302107cf490be36320f9e16b2b722e9f/LP-Distilled0.1.onnx",
+      "size": 74573121,
+      "sha256": "335f98b44e5fab3577b15c3ec53eddd39be228f072d98d7ce11232bcf1c42afd"
+    },
+    {
+      "path": "models/appearance.onnx",
+      "url": "https://huggingface.co/warmshao/FasterLivePortrait/resolve/eb937f4bec7186598df2d1f68e1ddbb488ae1de5/liveportrait_onnx/appearance_feature_extractor.onnx",
+      "size": 3355896,
+      "sha256": "d070afccca7f528ffb0ef5052b21588b42225a996661833f7bdede562d1ab921"
+    },
+    {
+      "path": "ort/ort.webgpu.min.mjs",
+      "url": "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.webgpu.min.mjs",
+      "size": 333468,
+      "sha256": "e1a0817ac08d5a6ade7f229754c2aecd444bff0bd22c259ca148a04b9f9e9f65"
+    },
+    {
+      "path": "ort/ort-wasm-simd-threaded.jsep.mjs",
+      "url": "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort-wasm-simd-threaded.jsep.mjs",
+      "size": 46839,
+      "sha256": "2fb14505d39926e4c544de8c57fe59a2f2bc74caba6f71890be9afecc5046758"
+    },
+    {
+      "path": "ort/ort-wasm-simd-threaded.jsep.wasm",
+      "url": "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort-wasm-simd-threaded.jsep.wasm",
+      "size": 21663894,
+      "sha256": "185b0861a6cd6cbdfb057289338090436483cc59e10a7bc83bd167b15531a51b"
+    }
+  ]
+}
