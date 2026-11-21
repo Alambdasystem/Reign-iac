@@ -24,7 +24,8 @@ from reign.browser_actions import (ACTION_TIMEOUT_MS, ActionRequest, Observation
 from reign.browser_proxy import BrowserProxy, BrowserProxyError
 from reign.session_errors import BROWSER_OCCUPIED_MESSAGE
 from reign.tool_errors import BrowserActionError, browser_action_error_response
-from reign.workflows import OpenBrowser, NavigateBrowser, BrowserAction, FillAccount
+from reign.workflows import (OpenBrowser, NavigateBrowser, BrowserAction, FillAccount,
+                             TeamOpenBrowser, TeamNavigateBrowser, TeamBrowserAction)
 
 
 def checked_scope(scope):
@@ -528,12 +529,43 @@ async def fill_account(data: dict) -> dict:
         raise action_application_error(error) from None
 
 
+def require_team_activity(data):
+    try:
+        if not isinstance(data, dict) or data.get("scope") == "owner":
+            raise ValueError()
+        checked_scope(data.get("scope"))
+    except (ValueError, HTTPException):
+        raise ApplicationError("Team browser scope required", type="BrowserActionRejected", non_retryable=True) from None
+
+
+@activity.defn
+async def team_open_browser(data: dict) -> dict:
+    require_team_activity(data)
+    return await open_browser(data)
+
+
+@activity.defn
+async def team_navigate_browser(data: dict) -> dict:
+    require_team_activity(data)
+    return await navigate_browser(data)
+
+
+@activity.defn
+async def team_browser_action(data: dict) -> dict:
+    require_team_activity(data)
+    return await browser_action(data)
+
+
 async def run_worker():
     while True:
         try:
             client = await Client.connect(temporal_address(), namespace=NAMESPACE)
-            async with Worker(client, task_queue=QUEUE, workflows=[OpenBrowser, NavigateBrowser, BrowserAction, FillAccount],
-                              activities=[open_browser, navigate_browser, browser_action, fill_account], max_concurrent_activities=1):
+            async with Worker(client, task_queue=QUEUE,
+                              workflows=[OpenBrowser, NavigateBrowser, BrowserAction, FillAccount,
+                                         TeamOpenBrowser, TeamNavigateBrowser, TeamBrowserAction],
+                              activities=[open_browser, navigate_browser, browser_action, fill_account,
+                                          team_open_browser, team_navigate_browser, team_browser_action],
+                              max_concurrent_activities=1):
                 manager.worker_ready = True
                 await asyncio.Event().wait()
         except asyncio.CancelledError:
@@ -560,6 +592,16 @@ app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None
 app.add_exception_handler(BrowserActionError, browser_action_error_response)
 
 
+@app.middleware("http")
+async def team_protocol_acknowledgement(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/team-sessions/"):
+        # Include this on scoped 404s too. Core must distinguish an expired
+        # scoped session from an old worker that does not implement this API.
+        response.headers["X-Reign-Team-Browser-Protocol"] = "1"
+    return response
+
+
 def authorize(request: Request):
     token = request.headers.get("authorization", "").removeprefix("Bearer ")
     if not secrets.compare_digest(token, app.state.token):
@@ -570,7 +612,8 @@ def authorize(request: Request):
 async def health():
     if not manager.worker_ready:
         raise HTTPException(503, "Temporal worker not ready")
-    return {"status": "ready", "worker": "reign-computer", "sessions": len(manager.sessions)}
+    return {"status": "ready", "worker": "reign-computer", "sessions": len(manager.sessions),
+            "team_browser_protocol": 1}
 
 
 @app.get("/sessions/active", dependencies=[Depends(authorize)])
@@ -646,3 +689,21 @@ async def input_event(sid: str, data: Input, request: Request):
 async def close(sid: str, request: Request):
     await manager.close(sid, request_scope(request))
     return {"closed": True}
+
+
+def authorize_team_scope(room_id: str, request: Request):
+    expected = checked_scope("team:rain:" + room_id)
+    if request_scope(request) != expected:
+        raise HTTPException(403, "Team browser scope does not match this room")
+
+
+# A legacy worker has none of these paths, so a team input/control/DELETE cannot
+# silently pass through a version that ignores the scope header.
+for suffix, endpoint, methods in (
+    ("", info, ["GET"]), ("", close, ["DELETE"]),
+    ("/frame", frame, ["GET"]), ("/observe", observe, ["GET"]),
+    ("/validate-action", validate_action, ["POST"]),
+    ("/control", control, ["POST"]), ("/input", input_event, ["POST"]),
+):
+    app.add_api_route("/team-sessions/{room_id}/{sid}" + suffix, endpoint, methods=methods,
+                      dependencies=[Depends(authorize), Depends(authorize_team_scope)])

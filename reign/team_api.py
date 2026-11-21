@@ -414,9 +414,18 @@ def install(app, authorize):
             if after < 0 or not 0 <= wait <= 20: raise ValueError()
         except ValueError: raise TeamError("invalid_team_request") from None
         deadline = time.monotonic() + wait
+        def presence_signature():
+            # Renewing the lease is not a visible state change. Joining,
+            # leaving, and toggling a media source should wake the existing
+            # room wait so viewers do not keep displaying stale mic/camera flags.
+            return tuple(sorted((row["connection_id"], row["user_id"], row["display_name"],
+                row["in_call"], row["microphone"], row["camera"], row["screen"])
+                for row in runtime.presence_rows(room_id)))
+        initial_presence = presence_signature()
         while True:
             result = await asyncio.to_thread(runtime.store.events, actor, room_id, after)
-            if result["events"] or time.monotonic() >= deadline or await request.is_disconnected(): break
+            if (result["events"] or presence_signature() != initial_presence
+                    or time.monotonic() >= deadline or await request.is_disconnected()): break
             await asyncio.sleep(max(0, min(0.25, deadline - time.monotonic())))
         # Reload current membership immediately before returning after a wait.
         await asyncio.to_thread(runtime.store.resolve, actor["id"], actor["credential_revision"])

@@ -166,7 +166,7 @@ def worker_headers(scope="owner"):
     return {"Authorization": "Bearer " + token, "X-Reign-Browser-Scope": scope}
 
 
-async def worker(method: str, path: str, payload=None, *, scope="owner"):
+async def worker(method: str, path: str, payload=None, *, scope="owner", team_protocol=False):
     try:
         response = await app.state.http.request(
             method, computer_url().rstrip("/") + path,
@@ -174,6 +174,8 @@ async def worker(method: str, path: str, payload=None, *, scope="owner"):
         )
     except httpx.RequestError:
         raise HTTPException(503, "Computer worker unreachable")
+    if team_protocol and response.headers.get("X-Reign-Team-Browser-Protocol") != "1":
+        raise HTTPException(503, "The managed browser worker does not support the required team isolation protocol.")
     if response.status_code >= 400:
         try:
             code = response.json().get("code")

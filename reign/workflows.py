@@ -45,3 +45,35 @@ class FillAccount:
             "fill_account", request, start_to_close_timeout=timedelta(seconds=30),
             retry_policy=RetryPolicy(maximum_attempts=1),
         )
+
+
+# Dedicated type names are a protocol boundary. An older worker that ignores a
+# scope field must never execute a team request through its legacy activities.
+@workflow.defn
+class TeamOpenBrowser:
+    @workflow.run
+    async def run(self, request: dict) -> dict:
+        return await workflow.execute_activity(
+            "team_open_browser", request, start_to_close_timeout=timedelta(seconds=90),
+            retry_policy=RetryPolicy(maximum_attempts=1),
+        )
+
+
+@workflow.defn
+class TeamNavigateBrowser:
+    @workflow.run
+    async def run(self, request: dict) -> dict:
+        return await workflow.execute_activity(
+            "team_navigate_browser", request, start_to_close_timeout=timedelta(seconds=60),
+            retry_policy=RetryPolicy(maximum_attempts=1),
+        )
+
+
+@workflow.defn
+class TeamBrowserAction:
+    @workflow.run
+    async def run(self, request: dict) -> dict:
+        return await workflow.execute_activity(
+            "team_browser_action", request, start_to_close_timeout=timedelta(seconds=20),
+            retry_policy=RetryPolicy(maximum_attempts=1),
+        )

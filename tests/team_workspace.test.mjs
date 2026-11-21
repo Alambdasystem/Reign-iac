@@ -171,3 +171,28 @@ test('a departed call connection stops that operation without treating room memb
   await assert.rejects(h.callOptions.api('/api/team/rooms/room-a/signals', 'POST', {}), error => error.status === 403);
   assert.equal(h.node('workspace').hidden, false); assert.equal(h.node('sendMessage').disabled, false); assert.equal(h.redirects.length, 0); h.app.destroy();
 });
+
+test('local mute and leave clear presence flags immediately and stale rows cannot resurrect them', async () => {
+  const h = harness(); await h.app.start();
+  const viewer = {connection_id: 'viewer-local', user_id: 'user-1', display_name: 'CI Teammate', in_call: false};
+  const local = {...viewer, connection_id: 'call-local', in_call: true, microphone: true, camera: true, screen: true};
+  const remote = {connection_id: 'call-remote', user_id: 'user-2', display_name: 'Other teammate', in_call: true, microphone: true, camera: true};
+  h.callOptions.onState({active: true, connectionId: 'call-local', microphone: true, camera: true, screen: true});
+  h.callOptions.onPresence([viewer, local, remote]);
+  const localText = () => h.node('presenceList').children.find(node => node.textContent.startsWith('CI Teammate')).textContent;
+  assert.match(localText(), /mic on, camera, screen/);
+  h.callOptions.onState({microphone: false, camera: false, screen: false}); assert.equal(localText(), 'CI Teammate');
+  h.callOptions.onState({active: false, connectionId: null}); h.callOptions.onPresence([viewer, local, remote]);
+  assert.equal(localText(), 'CI Teammate');
+  assert.match(h.node('presenceList').children.find(node => node.textContent.startsWith('Other teammate')).textContent, /mic on, camera/);
+  h.app.destroy();
+});
+
+test('the confirmed leave response replaces remote flags with the current room presence', async () => {
+  const viewer = {connection_id: 'viewer-local', user_id: 'user-1', display_name: 'CI Teammate', in_call: false};
+  const remoteViewer = {connection_id: 'viewer-remote', user_id: 'user-2', display_name: 'Other teammate', in_call: false};
+  const h = harness({handle: (request, {response}) => request.method === 'DELETE' && request.url.endsWith('/call-local') ? response({presence: [viewer, remoteViewer]}) : undefined}); await h.app.start();
+  h.callOptions.onPresence([viewer, {...remoteViewer, connection_id: 'call-remote', in_call: true, microphone: true, camera: true}]);
+  await h.callOptions.api('/api/team/rooms/room-a/presence/call-local', 'DELETE');
+  assert.deepEqual(h.node('presenceList').children.map(node => node.textContent), ['CI Teammate', 'Other teammate']); h.app.destroy();
+});

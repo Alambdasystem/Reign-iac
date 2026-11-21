@@ -230,7 +230,10 @@ async def main():
                 for current in (page, member_page):
                     await expect(current.locator("#joinCall")).to_be_visible()
                     await current.wait_for_function("() => __teamProbe.tracks.every(t=>t.readyState==='ended')&&__teamProbe.peers.every(p=>p.connectionState==='closed')")
-                passed("T09 camera disable removes stale remote tile; leaving releases every acquired track and peer while preserving room")
+                    await expect(current.locator("#presenceList")).not_to_contain_text("mic on", timeout=10000)
+                    await expect(current.locator("#presenceList")).not_to_contain_text("camera", timeout=10000)
+                    await expect(current.locator("#presenceList")).not_to_contain_text("screen", timeout=10000)
+                passed("T09 camera disable removes stale remote tile; leaving releases tracks/peers and clears both viewers’ media indicators while preserving room")
                 for width in (360, 390, 430, 1280):
                     await page.set_viewport_size({"width": width, "height": 900})
                     assert await page.evaluate("() => document.documentElement.scrollWidth <= innerWidth"), f"overflow at {width}"

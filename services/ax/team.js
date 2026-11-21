@@ -15,6 +15,7 @@ export function createTeamWorkspace(deps = {}) {
   const cancel = id => { if (id !== undefined) clock.clearTimeout(id); };
   const drafts = new Map(), selectedDrafts = new Map(), composers = new Map(), outgoing = new Map();
   const mediaElements = new Map();
+  const retiredCallConnections = new Map();
   const state = {profile: null, capabilities: {}, members: [], rooms: [], roomId: null, room: null,
     events: new Map(), seq: 0, presence: [], documents: [], assistant: {status: 'idle'},
     roomGeneration: 0, editorGeneration: 0, editor: null, connectionId: null,
@@ -85,6 +86,8 @@ export function createTeamWorkspace(deps = {}) {
         if (options.handleAuth !== false && (response.status === 401 || (response.status === 403 && !operationDenied))) void loseAccess(response.status);
         throw error;
       }
+      if (method === 'DELETE' && state.roomId && path.startsWith(roomPath() + '/presence/') &&
+          !state.closed && !state.accessLost && !state.loggingOut && Array.isArray(value.presence)) applyPresence(value.presence);
       return value;
     } catch (error) {
       if (timedOut) throw Object.assign(new Error('The request timed out. Its outcome could not be confirmed.'), {status: 0});
@@ -152,8 +155,19 @@ export function createTeamWorkspace(deps = {}) {
   function applyPresence(value) {
     if (!Array.isArray(value) || state.closed) return;
     state.presence = value;
+    renderPresence();
+    call?.syncPresence?.({roomId: state.roomId, presence: visiblePresence()});
+  }
+  function visiblePresence() {
+    const now = Date.now();
+    for (const [id, expires] of retiredCallConnections) if (expires <= now) retiredCallConnections.delete(id);
+    return state.presence.filter(row => !retiredCallConnections.has(row.connection_id)).map(row =>
+      state.call.active && row.connection_id === state.call.connectionId ? {...row,
+        microphone: !!state.call.microphone, camera: !!state.call.camera, screen: !!state.call.screen} : row);
+  }
+  function renderPresence() {
     const people = new Map();
-    for (const person of value) {
+    for (const person of visiblePresence()) {
       const previous = people.get(person.user_id);
       people.set(person.user_id, {...person, microphone: !!person.microphone || !!previous?.microphone,
         camera: !!person.camera || !!previous?.camera, screen: !!person.screen || !!previous?.screen});
@@ -164,7 +178,6 @@ export function createTeamWorkspace(deps = {}) {
       $('presenceList').append(element('span', 'presence-chip', person.display_name + (media.length ? ' · ' + media.join(', ') : '')));
     }
     if (!people.size) $('presenceList').append(element('p', 'subtle-note', 'No active connections reported.'));
-    call?.syncPresence?.({roomId: state.roomId, presence: value});
   }
   function renderAssistant(value) {
     if (value && typeof value === 'object') state.assistant = value;
@@ -569,7 +582,14 @@ export function createTeamWorkspace(deps = {}) {
     } catch { notice('credentialStatus', 'Clipboard access was blocked. Select and copy the username and password above.', true); }
   }
   function renderCall(value = {}) {
+    const previous = state.call;
     state.call = {...state.call, ...value};
+    if (previous.active && previous.connectionId && !state.call.active) {
+      // Tracks stop before the best-effort DELETE. A delayed heartbeat/poll
+      // response must not turn this retired connection's indicators back on.
+      retiredCallConnections.set(previous.connectionId, Date.now() + 60000);
+    }
+    renderPresence();
     if (state.capture && (!state.call.active || state.capture.connectionId !== state.call.connectionId || !state.call[state.capture.source])) {
       clearCapture(); notice('shareStatus', 'That view is no longer shared. Turn it on and capture a new image before attaching it.', true);
     }

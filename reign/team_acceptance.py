@@ -9,6 +9,7 @@ import io
 import json
 import logging
 import math
+import re
 import sys
 import uuid
 import wave
@@ -46,6 +47,10 @@ async def run_acceptance():
                     or len(result["segments"]) != 1 or len(result["documents"]) != 1
                     or result["speech_status"] != "ready"):
                 raise ValueError("invalid_probe_result")
+            draft = result["documents"][0]["content"]
+            if (not draft.strip() or not re.search(r"\bblue\b", draft, re.IGNORECASE)
+                    or not re.search(r"\bsquare\b", draft, re.IGNORECASE)):
+                raise ValueError("invalid_probe_document")
             item = cache.get(result["segments"][0]["audio_id"], room, "audio")
             with wave.open(io.BytesIO(item["data"]), "rb") as wav:
                 if (wav.getnchannels(), wav.getsampwidth(), wav.getframerate()) != (1, 2, 24000):

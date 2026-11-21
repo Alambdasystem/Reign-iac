@@ -157,6 +157,31 @@ class TeamRuntimeTests(unittest.IsolatedAsyncioTestCase):
     def message(self, **extra):
         return {"client_message_id": str(uuid.uuid4()), "text": "A request", **extra}
 
+    async def test_room_wait_wakes_on_media_change_and_leave_but_not_lease_renewal(self):
+        room_id = self.rooms[0]
+        cid = str(uuid.uuid4())
+        presence = {"connection_id": cid, "in_call": True, "microphone": False, "camera": False, "screen": False}
+        await self.runtime.heartbeat(self.owner, room_id, presence)
+        app = make_app(self.runtime)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            path = f"/api/team/rooms/{room_id}/events?after=0&wait=2"
+            waiting = asyncio.create_task(client.get(path, headers=headers(self.owner)))
+            await asyncio.sleep(.05)
+            self.now += 1  # Change expires_at while keeping all visible flags.
+            await self.runtime.heartbeat(self.owner, room_id, presence)
+            with self.assertRaises(asyncio.TimeoutError):
+                await asyncio.wait_for(asyncio.shield(waiting), .35)
+            await self.runtime.heartbeat(self.owner, room_id, {**presence, "microphone": True, "camera": True})
+            response = await asyncio.wait_for(waiting, .75)
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.json()["presence"][0]["microphone"])
+            self.assertTrue(response.json()["presence"][0]["camera"])
+            waiting = asyncio.create_task(client.get(path, headers=headers(self.owner)))
+            await asyncio.sleep(.05)
+            await self.runtime.leave(self.owner, room_id, cid)
+            response = await asyncio.wait_for(waiting, .75)
+            self.assertEqual(response.json()["presence"], [])
+
     async def test_one_run_per_room_global_limit_and_idempotency_preserve_authorized_context(self):
         gate = asyncio.Event(); seen = []
         async def assistant(context, actor, text, attachments, speak):

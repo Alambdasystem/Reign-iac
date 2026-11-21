@@ -6,14 +6,16 @@ import unittest
 import uuid
 from unittest.mock import AsyncMock, patch
 
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from httpx import ASGITransport, AsyncClient, Response
+from temporalio.exceptions import ApplicationError
 
 from reign.computer import BrowserSessions, Input, app as worker_app
 from reign.session_errors import BrowserOccupied
 from reign.team_api import TeamRuntime
 from reign.team_browser import CoreBrowserTransport, TeamBrowser, scope_for
 from reign.team_store import TeamError, TeamStore, owner_identity
+from reign.workflows import TeamOpenBrowser, TeamNavigateBrowser, TeamBrowserAction
 
 URL = "https://alambda-forge.onrender.com/"
 
@@ -79,6 +81,91 @@ class WorkerScopeTests(unittest.IsolatedAsyncioTestCase):
             await self.manager.open(sid, URL, self.scope)
         self.assertEqual(stopped.exception.status_code, 409)
         self.manager.launch.assert_not_awaited()
+
+    async def test_team_only_http_path_requires_matching_scope_and_acknowledges_missing_sessions(self):
+        token = "synthetic-worker-scope-token-" + "x" * 32
+        with patch("reign.computer.manager", self.manager), patch.object(worker_app.state, "token", token, create=True):
+            async with AsyncClient(transport=ASGITransport(app=worker_app), base_url="http://worker.invalid") as client:
+                path = f"/team-sessions/{self.room}/team-session"
+                headers = {"Authorization": "Bearer " + token}
+                result = await client.get(path, headers=headers)
+                self.assertEqual(result.status_code, 403)
+                headers["X-Reign-Browser-Scope"] = self.scope
+                result = await client.get(path, headers=headers)
+                self.assertEqual(result.status_code, 200)
+                self.assertEqual(result.headers["X-Reign-Team-Browser-Protocol"], "1")
+                result = await client.get(f"/team-sessions/{self.room}/missing", headers=headers)
+                self.assertEqual(result.status_code, 404)
+                self.assertEqual(result.headers["X-Reign-Team-Browser-Protocol"], "1")
+                mismatch = f"/team-sessions/{uuid.uuid4()}/team-session"
+                self.assertEqual((await client.get(mismatch, headers=headers)).status_code, 403)
+
+    async def test_team_http_calls_fail_closed_on_legacy_worker_without_falling_back_to_owner_routes(self):
+        from reign.core import app as core_app
+        legacy = FastAPI(); effects = []
+        async def owner_route(sid: str, request: Request):
+            effects.append((request.method, sid)); return {"id": sid, "title": "Private owner page"}
+        legacy.add_api_route("/sessions/{sid}", owner_route, methods=["GET", "DELETE"])
+        legacy.add_api_route("/sessions/{sid}/{action}", owner_route, methods=["GET", "POST"])
+        transport = CoreBrowserTransport()
+        with patch.dict(os.environ, {"COMPUTER_TOKEN": "synthetic-computer-protocol-test-token-long"}):
+            async with AsyncClient(transport=ASGITransport(app=legacy), base_url="http://worker.invalid") as client:
+                with patch.object(core_app.state, "http", client, create=True):
+                    for operation in (lambda: transport.status("team-session", self.scope),
+                                      lambda: transport.control("team-session", "human", 0, self.scope),
+                                      lambda: transport.input("team-session", {"kind": "click", "epoch": 0}, self.scope),
+                                      lambda: transport.frame("team-session", self.scope),
+                                      lambda: transport.close("team-session", self.scope)):
+                        with self.assertRaises(HTTPException) as unsupported:
+                            await operation()
+                        self.assertEqual(unsupported.exception.status_code, 503)
+                        self.assertIn("isolation protocol", unsupported.exception.detail)
+        self.assertEqual(effects, [], "team calls never use a legacy scope-ignorant route")
+
+    async def test_team_transport_accepts_scoped_new_worker_and_preserves_owner_protocol(self):
+        from reign.core import app as core_app, worker
+        token = "synthetic-worker-scope-token-" + "x" * 32
+        with patch("reign.computer.manager", self.manager), patch.object(worker_app.state, "token", token, create=True), \
+             patch.dict(os.environ, {"COMPUTER_TOKEN": token}):
+            async with AsyncClient(transport=ASGITransport(app=worker_app), base_url="http://worker.invalid") as client:
+                with patch.object(core_app.state, "http", client, create=True):
+                    transport = CoreBrowserTransport()
+                    self.assertEqual((await transport.status("team-session", self.scope))["id"], "team-session")
+                    controlled = await transport.control("team-session", "human", 0, self.scope)
+                    self.assertEqual(controlled["epoch"], 1)
+                    self.assertEqual((await worker("GET", "/sessions/active")).json(), {"session": None})
+                    with self.assertRaises(HTTPException) as missing:
+                        await transport.status("missing", self.scope)
+                    self.assertEqual(missing.exception.status_code, 404, "a confirmed new-worker404 means expired, not protocol failure")
+
+    async def test_team_workflows_dispatch_only_dedicated_one_attempt_activity_types(self):
+        for workflow_class, activity_name in ((TeamOpenBrowser, "team_open_browser"),
+                                               (TeamNavigateBrowser, "team_navigate_browser"),
+                                               (TeamBrowserAction, "team_browser_action")):
+            request = {"id": "team-session", "scope": self.scope}
+            with patch("reign.workflows.workflow.execute_activity", new_callable=AsyncMock) as dispatch:
+                await workflow_class().run(request)
+            self.assertEqual(dispatch.call_args.args, (activity_name, request))
+            self.assertEqual(dispatch.call_args.kwargs["retry_policy"].maximum_attempts, 1)
+
+    async def test_team_activity_types_require_explicit_non_owner_scope(self):
+        from reign.computer import team_open_browser, team_navigate_browser, team_browser_action
+        fake = AsyncMock()
+        with patch("reign.computer.manager", fake):
+            for activity in (team_open_browser, team_navigate_browser, team_browser_action):
+                for scope in (None, "owner", "team:rain:invalid"):
+                    with self.assertRaises(ApplicationError) as invalid:
+                        await activity({"id": "team-session", "url": URL, "epoch": 0, "scope": scope})
+                    self.assertTrue(invalid.exception.non_retryable)
+            fake.open.assert_not_awaited(); fake.navigate.assert_not_awaited(); fake.act.assert_not_awaited()
+            await team_open_browser({"id": "team-session", "url": URL, "scope": self.scope})
+            fake.open.assert_awaited_once_with("team-session", URL, self.scope)
+
+    async def test_team_transport_refuses_a_legacy_workflow_name_before_connecting(self):
+        with patch("temporalio.client.Client.connect", new_callable=AsyncMock) as connect:
+            with self.assertRaises(HTTPException):
+                await CoreBrowserTransport().workflow("OpenBrowser", "team-session", {"url": URL}, self.scope)
+        connect.assert_not_awaited()
 
 
 class Transport:
@@ -297,7 +384,7 @@ class RoomBrowserTests(unittest.IsolatedAsyncioTestCase):
              patch("temporalio.client.Client.connect", new_callable=AsyncMock), \
              patch("reign.team_browser.execute_owned_workflow", waiting):
             with self.assertRaises(HTTPException) as error:
-                await CoreBrowserTransport().workflow("OpenBrowser", str(uuid.uuid4()), {"url": URL}, scope_for(self.room))
+                await CoreBrowserTransport().workflow("TeamOpenBrowser", str(uuid.uuid4()), {"url": URL}, scope_for(self.room))
         self.assertEqual(error.exception.status_code, 503)
         self.assertTrue(cancelled.is_set())
 

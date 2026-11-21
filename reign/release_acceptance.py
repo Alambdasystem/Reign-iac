@@ -1,10 +1,10 @@
-"""Require both existing private-workspace and shared-room provider gates."""
+"""Require voice, live worker isolation, then the shared-room provider gate."""
 import subprocess
 import sys
 
 
 def main():
-    for module in ("reign.voice_acceptance", "reign.team_acceptance"):
+    for module in ("reign.voice_acceptance", "reign.team_browser_acceptance", "reign.team_acceptance"):
         try:
             result = subprocess.run([sys.executable, "-m", module], timeout=210, check=False)
         except subprocess.TimeoutExpired:

@@ -58,7 +58,11 @@ def epoch_value(value):
 class CoreBrowserTransport:
     async def request(self, method, sid, suffix="", payload=None, *, scope):
         from reign.core import worker
-        return await worker(method, f"/sessions/{sid}{suffix}", payload, scope=scope)
+        room_id = scope.removeprefix("team:rain:")
+        if scope != scope_for(room_id):
+            raise HTTPException(503, "The room browser scope could not be confirmed.")
+        return await worker(method, f"/team-sessions/{room_id}/{sid}{suffix}", payload,
+                            scope=scope, team_protocol=True)
 
     async def status(self, sid, scope):
         return (await self.request("GET", sid, scope=scope)).json()
@@ -66,6 +70,8 @@ class CoreBrowserTransport:
     async def workflow(self, name, sid, payload, scope):
         from temporalio.client import Client
         from reign.core import workflow_http_error
+        if name not in {"TeamOpenBrowser", "TeamNavigateBrowser", "TeamBrowserAction"}:
+            raise HTTPException(503, "The room browser workflow protocol is unavailable.")
         try:
             # Activity start-to-close deadlines do not bound queue waiting.
             # Leave enough room inside AX's 75s request budget for the owned
@@ -78,10 +84,10 @@ class CoreBrowserTransport:
             raise workflow_http_error(error, uncertain=True) from None
 
     async def open(self, sid, url, scope):
-        return await self.workflow("OpenBrowser", sid, {"url": checked_url(url)}, scope)
+        return await self.workflow("TeamOpenBrowser", sid, {"url": checked_url(url)}, scope)
 
     async def navigate(self, sid, url, epoch, scope):
-        return await self.workflow("NavigateBrowser", sid, {"url": checked_url(url), "epoch": epoch}, scope)
+        return await self.workflow("TeamNavigateBrowser", sid, {"url": checked_url(url), "epoch": epoch}, scope)
 
     async def observe(self, sid, epoch, scope):
         return (await self.request("GET", sid, f"/observe?epoch={epoch}", scope=scope)).json()
@@ -90,7 +96,7 @@ class CoreBrowserTransport:
         from reign.core import BrowserEffectRequest
         data = BrowserEffectRequest.model_validate(payload).model_dump(exclude_none=True, exclude_unset=True)
         await self.request("POST", sid, "/validate-action", {key: value for key, value in data.items() if key != "text"}, scope=scope)
-        return await self.workflow("BrowserAction", sid, data, scope)
+        return await self.workflow("TeamBrowserAction", sid, data, scope)
 
     async def control(self, sid, mode, epoch, scope):
         return (await self.request("POST", sid, "/control", {"mode": mode, "epoch": epoch}, scope=scope)).json()
