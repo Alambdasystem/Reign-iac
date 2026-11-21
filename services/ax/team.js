@@ -191,7 +191,7 @@ export function createTeamWorkspace(deps = {}) {
     const feed = $('eventFeed'), atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 70;
     feed.replaceChildren();
     const events = [...state.events.values()].sort((a, b) => a.seq - b.seq);
-    if (!events.length) feed.append(element('p', 'empty-note', 'Start this room’s conversation. Everyone in Rain can pick up where you leave off.'));
+    if (!events.length) feed.append(element('p', 'empty-note', 'Start this room’s conversation. Your team can pick up where you leave off.'));
     let messages = 0;
     for (const event of events) {
       const data = event.data || {};
@@ -246,7 +246,7 @@ export function createTeamWorkspace(deps = {}) {
       state.members = Array.isArray(profile.members) ? profile.members : [];
       state.rooms = Array.isArray(profile.rooms) ? profile.rooms : [];
       $('accountName').textContent = profile.me.display_name || profile.me.username;
-      $('workspaceName').textContent = profile.workspace.name || 'Rain';
+      $('workspaceName').textContent = profile.workspace.name || 'Workspace';
       $('storageStatus').textContent = profile.workspace.durable ? 'Conversations and documents are saved.' : 'Storage is unavailable. New work cannot be saved.';
       renderRooms(); renderMembers(); refreshControls();
       let remembered;
@@ -564,7 +564,7 @@ export function createTeamWorkspace(deps = {}) {
     } finally { state.memberBusy = false; $('createMember').disabled = state.memberUncertain; renderMembers(); }
   }
   async function revokeMember(member) {
-    if (!owner() || state.memberBusy || !confirm(`Revoke ${member.display_name}’s access to Rain? Their saved messages and documents will remain.`)) return;
+    if (!owner() || state.memberBusy || !confirm(`Revoke ${member.display_name}’s access to Workspace? Their saved messages and documents will remain.`)) return;
     state.memberBusy = true; renderMembers();
     try {
       const result = await request('/api/team/members/' + escapedId(member.id), 'PATCH', {active: false});
@@ -577,7 +577,7 @@ export function createTeamWorkspace(deps = {}) {
   async function copyCredential() {
     if (!$('credentialPassword').value) return;
     try {
-      await win.navigator.clipboard.writeText(`REIGN Rain workspace\nSign in: ${win.location.origin}/\nUsername: ${$('credentialUsername').value}\nTemporary password: ${$('credentialPassword').value}`);
+      await win.navigator.clipboard.writeText(`Workspace login\nSign in: ${win.location.origin}/\nUsername: ${$('credentialUsername').value}\nTemporary password: ${$('credentialPassword').value}`);
       notice('credentialStatus', 'Copied. Give these details directly to your teammate.');
     } catch { notice('credentialStatus', 'Clipboard access was blocked. Select and copy the username and password above.', true); }
   }

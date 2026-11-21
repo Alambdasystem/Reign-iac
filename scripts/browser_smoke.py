@@ -32,16 +32,20 @@ SIMULATED_VOICE_BOOTSTRAP = r"""
 (() => {
   const fixture = window.__reignVoiceSimulation = {
     denied: false, mediaRequests: 0, tracks: [], sources: [], peers: [],
-    sent: [], outputs: [], narrations: [], sequence: 0
+    sent: [], outputs: [], narrations: [], sequence: 0, holdOutput: false,
+    finishOutput: null
   };
   const media = navigator.mediaDevices || {};
   if (!navigator.mediaDevices) Object.defineProperty(navigator, 'mediaDevices', {value: media});
   Object.defineProperty(media, 'getUserMedia', {value: async () => {
     fixture.mediaRequests++;
     if (fixture.denied) throw new DOMException('Simulated microphone denial', 'NotAllowedError');
-    const context = new AudioContext(), source = context.createConstantSource();
+    const context = new AudioContext(), source = context.createOscillator();
+    const gain = context.createGain();
     const destination = context.createMediaStreamDestination();
-    source.offset.value = 0; source.connect(destination); source.start();
+    source.frequency.value = 880; gain.gain.value = .22;
+    source.connect(gain); gain.connect(destination); source.start();
+    await context.resume();
     fixture.sources.push({context, source});
     fixture.tracks.push(...destination.stream.getTracks());
     return destination.stream;
@@ -71,12 +75,18 @@ SIMULATED_VOICE_BOOTSTRAP = r"""
         fixture.narrations.push(result);
         queueMicrotask(() => {
           const id = 'simulated-narration-' + ++fixture.sequence;
+          fixture.peers.at(-1).outputGain.gain.value = .24;
           this.emit({type:'response.created',response:{id,metadata:value.response.metadata}});
           this.emit({type:'output_audio_buffer.started',response_id:id});
           this.emit({type:'response.output_audio_transcript.delta',response_id:id,delta:result.answer});
           this.emit({type:'response.output_audio_transcript.done',response_id:id,transcript:result.answer});
           this.emit({type:'response.done',response:{id,status:'completed'}});
-          setTimeout(() => this.emit({type:'output_audio_buffer.stopped',response_id:id}), 30);
+          fixture.finishOutput = () => {
+            fixture.peers.at(-1).outputGain.gain.value = 0;
+            this.emit({type:'output_audio_buffer.stopped',response_id:id});
+            fixture.finishOutput = null;
+          };
+          if (!fixture.holdOutput) setTimeout(() => fixture.finishOutput?.(), 30);
         });
       }
     }
@@ -93,15 +103,32 @@ SIMULATED_VOICE_BOOTSTRAP = r"""
     async setLocalDescription(value) { this.localDescription = value; }
     async setRemoteDescription(value) {
       this.remoteDescription = value;
+      const context = fixture.sources.at(-1).context;
+      this.output = context.createOscillator();
+      this.outputGain = context.createGain();
+      this.outputDestination = context.createMediaStreamDestination();
+      this.output.frequency.value = 220; this.outputGain.gain.value = .24;
+      this.output.connect(this.outputGain); this.outputGain.connect(this.outputDestination);
+      this.output.start();
       setTimeout(() => {
         if (this.connectionState === 'closed') return;
         this.connectionState = 'connected'; this.onconnectionstatechange?.();
         this.channel.readyState = 'open'; this.channel.onopen?.();
+        this.ontrack?.({streams:[this.outputDestination.stream],
+          track:this.outputDestination.stream.getAudioTracks()[0]});
         this.channel.emit({type:'session.created',session:{id:'simulated-session'}});
       }, 0);
     }
     async getStats() { return new Map(); }
-    close() { this.connectionState = 'closed'; }
+    close() {
+      this.connectionState = 'closed';
+      try { this.output?.stop(); } catch {}
+      this.outputDestination?.stream.getTracks().forEach(track => track.stop());
+      for (const item of fixture.sources) {
+        try { item.source.stop(); } catch {}
+        void item.context.close().catch(() => {});
+      }
+    }
   }
   Object.defineProperty(window, 'RTCPeerConnection', {value: Peer});
   fixture.speak = text => {
@@ -122,6 +149,7 @@ async def simulated_voice_ui(browser, storage_state, origin=AX):
     async def scenario(denied=False, expire=False):
         context = await browser.new_context(ignore_https_errors=True, storage_state=storage_state)
         await context.add_init_script(SIMULATED_VOICE_BOOTSTRAP +
+                                      "\nwindow.__reignVoiceSimulation.holdOutput = true;" +
                                       ("\nwindow.__reignVoiceSimulation.denied = true;" if denied else ""))
         state = {"posts": [], "released": 0, "offers": 0, "deletes": 0, "expired": False}
         posted = asyncio.Queue()
@@ -178,6 +206,8 @@ async def simulated_voice_ui(browser, storage_state, origin=AX):
         page.on("pageerror", lambda error: errors.append(str(error)))
         try:
             await page.goto(origin)
+            await expect(page.locator("#reignAvatar")).to_have_attribute("data-ready", "true")
+            await expect(page.locator("#reignAvatar")).to_have_attribute("data-speaking", "false")
             await expect(page.locator("#voiceStart")).to_be_enabled()
             await expect(page.locator("#voiceStatus")).to_contain_text("Start voice")
             state["expired"] = expire
@@ -203,8 +233,23 @@ async def simulated_voice_ui(browser, storage_state, origin=AX):
                 }""")
                 assert len(state["posts"]) == 1, "typed input must not overtake a pending voice graph run"
                 assert await page.evaluate("window.__reignVoiceSimulation.narrations.length") == 0
+                await page.wait_for_function("""() => Number(document.querySelector('.orb')
+                    .style.getPropertyValue('--voice-level')) > .05""")
+                assert await page.locator("#reignAvatar").evaluate(
+                    "canvas => Number(canvas.dataset.mouth) === 0"), \
+                    "Microphone audio or a pending graph run animated REIGN's mouth"
                 state["released"] = 1
                 await expect(page.locator("#voiceCaption")).to_contain_text("Synthetic verified greeting.")
+                await page.wait_for_function("""() => {
+                    const canvas = document.querySelector('#reignAvatar');
+                    return canvas.dataset.speaking === 'true' && Number(canvas.dataset.mouth) > .05;
+                }""")
+                await page.screenshot(path=str(EVIDENCE / "workspace-reign-speaking.png"))
+                await page.evaluate("window.__reignVoiceSimulation.finishOutput()")
+                await page.wait_for_function("""() => {
+                    const canvas = document.querySelector('#reignAvatar');
+                    return canvas.dataset.speaking === 'false' && Number(canvas.dataset.mouth) < .001;
+                }""")
                 await expect(page.locator("#sendCommand")).to_be_enabled()
                 await page.locator("#mute").click()
                 await expect(page.locator("#mute")).to_have_attribute("aria-pressed", "true")
@@ -219,11 +264,17 @@ async def simulated_voice_ui(browser, storage_state, origin=AX):
                 assert state["posts"][1]["thread_id"] == thread, "voice turns must share the existing graph thread"
                 state["released"] = 2
                 await expect(page.locator("#voiceCaption")).to_contain_text("Synthetic verified workspace answer.")
+                await page.wait_for_function(
+                    "() => Number(document.querySelector('#reignAvatar').dataset.mouth) > .05")
                 await expect(page.locator("#sendCommand")).to_be_enabled()
                 await page.locator("#voiceEnd").click()
                 await expect(page.locator("#voiceStart")).to_be_enabled()
                 await expect(page.locator("#voiceEnd")).to_be_hidden()
                 await expect(page.locator("#mute")).to_be_hidden()
+                await page.wait_for_function("""() => {
+                    const canvas = document.querySelector('#reignAvatar');
+                    return canvas.dataset.speaking === 'false' && Number(canvas.dataset.mouth) < .001;
+                }""")
                 assert await page.evaluate("""() => {
                     const fixture = window.__reignVoiceSimulation;
                     return fixture.tracks.length > 0 && fixture.tracks.every(track => track.readyState === 'ended') &&
@@ -232,6 +283,7 @@ async def simulated_voice_ui(browser, storage_state, origin=AX):
                 }"""), "End call must release the actual synthetic tracks and transport"
                 assert state["offers"] == 1 and state["deletes"] == 0
                 await page.reload()
+                await expect(page.locator("#reignAvatar")).to_have_attribute("data-ready", "true")
                 await expect(page.locator("#voiceStart")).to_be_enabled()
                 await expect(page.locator("#sendCommand")).to_be_enabled()
                 assert await page.evaluate("window.__reignVoiceSimulation.mediaRequests") == 0
@@ -255,6 +307,9 @@ async def simulated_voice_ui(browser, storage_state, origin=AX):
     await scenario(expire=True)
     return {"status": "passed", "mode": "simulated_provider_graph_and_microphone",
             "checks": ["graph_completion_before_narration", "shared_graph_lock_and_thread",
+                       "automatic_saved_reign_portrait", "mouth_follows_verified_output_stream",
+                       "microphone_does_not_animate_reign", "mouth_stops_after_output_and_call",
+                       "portrait_restored_without_setup_after_reload",
                        "start_mute_end_and_track_cleanup", "configured_reload", "owned_graph_cancellation",
                        "microphone_denial", "expired_session_returns_to_sign_in"],
             "live_provider_or_audible_audio": "not_tested"}

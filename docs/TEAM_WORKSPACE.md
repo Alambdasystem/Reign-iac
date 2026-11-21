@@ -1,11 +1,12 @@
-# Rain shared workspace
+# Workspace
 
-Rain adds one shared team workspace at `/team`. The existing owner sign-in and
-private workspace remain available. Employee accounts land in Rain and cannot
+**Workspace** is the shared team area at `/team`. **REIGN**, pronounced **Rain**,
+is its AI participant. The existing owner sign-in and private workspace remain
+available. Employee accounts land in Workspace and cannot
 use the owner's private account vault, history, agent, or browser endpoints.
 An existing Avatar Lab-only login remains restricted to that role.
 
-## Using Rain
+## Using Workspace
 
 The owner can create an employee login from **Employee access**. Its generated
 password is shown once so the owner can give it directly to the intended person.
@@ -58,6 +59,11 @@ outside this feature.
 Core stores encrypted SQLite room records on the existing private vault disk.
 The team encryption key is derived with a distinct purpose from the existing
 vault key. No shared database permission or additional disk is required.
+The visible name is Workspace; the internal workspace ID remains `rain`, and
+browser scopes retain `team:rain:{room_id}`. This display-name correction does
+not migrate or recreate records, change encryption associations, or rename saved
+rooms and documents. Room titles are supplied by members; no default room is
+created or renamed.
 Rooms, text events, document versions, and employee verifiers survive a process
 restart. Presence, WebRTC signals, uploaded images, and generated audio are
 ephemeral; call recordings and browser profiles are not archived.

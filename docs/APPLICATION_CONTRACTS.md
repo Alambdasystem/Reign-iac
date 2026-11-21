@@ -309,7 +309,25 @@ The floating game workspace is private and is not sent to meeting participants.
 Minimize preserves its connection and task; disconnect stops it. Top-level mobile
 sign-in can interrupt a game call, so authenticate before joining a meeting.
 
-## Rain shared team workspace
+## Workspace shared team area
+
+The product display name is **Workspace**. Its AI participant remains **REIGN**,
+pronounced **Rain**. The internal workspace ID stays `rain`; membership records,
+room IDs, `team:rain:{room_id}` browser scopes and encryption bindings are
+unchanged. This naming correction does not migrate or delete saved work.
+
+Private voice, team speech and the default Avatar Lab preview use one shared
+prepared REIGN portrait. It loads automatically, without model initialization;
+only the exact versioned public atlas receives immutable browser caching.
+Private mouth movement follows verified assistant output audio, never the
+microphone. Team speech uses its own output meter and sentence expressions.
+Audio remains usable if the portrait fails to load. Interruption, call end,
+logout and navigation clear the appropriate playback and renderer state.
+
+The optional Lab editor keeps custom photos and crop settings in bounded,
+account-scoped storage on that browser. A saved custom experiment restores as
+a still image until neural editing starts. It does not replace REIGN's shared
+identity or sync devices, and closing the editor releases the heavy worker.
 
 See [TEAM_WORKSPACE.md](TEAM_WORKSPACE.md) for `/team`, employee authorization,
 saved rooms and documents, bounded calls and explicit image sharing, the

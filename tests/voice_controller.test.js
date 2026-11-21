@@ -116,7 +116,7 @@ function fakeClock() {
 
 function harness(t, options = {}) {
   const clock = fakeClock(), microphone = track(), microphoneStream = stream(microphone);
-  const peers = [], apiCalls = [], turnCalls = [], cancelled = [], states = [], captions = [];
+  const peers = [], apiCalls = [], turnCalls = [], cancelled = [], states = [], captions = [], levels = [], outputLevels = [];
   const audio = new FakeAudio();
   let microphoneRequests = 0;
   class FakePeer extends Events {
@@ -157,17 +157,18 @@ function harness(t, options = {}) {
     },
     onState: state => states.push({...state}),
     onCaption: caption => captions.push({...caption}),
-    onLevel() {},
+    onLevel: value => levels.push(value),
+    onOutputLevel: value => outputLevels.push(value),
     mediaDevices: {getUserMedia: async constraints => {
       microphoneRequests++;
       assert.ok(constraints.audio, 'must request an audio track');
       return options.getUserMedia ? options.getUserMedia(constraints) : microphoneStream;
     }},
-    Peer: FakePeer, audio, AudioContext: null, timers: clock.timers, now: clock.now
+    Peer: FakePeer, audio, AudioContext: options.AudioContext || null, timers: clock.timers, now: clock.now
   });
   const h = {
     controller, microphone, microphoneStream, peers, audio, apiCalls, turnCalls,
-    cancelled, states, captions, clock,
+    cancelled, states, captions, clock, levels, outputLevels,
     get microphoneRequests() { return microphoneRequests; },
     get peer() { return peers.at(-1); },
     get channel() { return peers.at(-1)?.channel; },
@@ -408,6 +409,68 @@ test('only a matching verified narration buffer can unmute incoming audio', asyn
     id: 'next-delegation', metadata: {reign_voice_phase: 'delegation', reign_voice_turn: '0'}
   }});
   assert.equal(h.audio.muted, true, 'a new non-narration response must close the verified playback gate');
+});
+
+class MeterAudioContext {
+  state = 'running'; destination = {};
+  async resume() { this.state = 'running'; }
+  async close() { this.state = 'closed'; }
+  createMediaStreamSource(value) {
+    return {connect(analyser) { analyser.stream = value; }, disconnect() {}};
+  }
+  createAnalyser() {
+    return {fftSize: 256, disconnect() {}, getByteTimeDomainData(values) {
+      const microphone = this.stream?.getAudioTracks()[0]?.id === 'microphone';
+      values.fill(microphone ? 176 : this.stream?.silent ? 128 : 144);
+    }};
+  }
+}
+
+test('portrait output meter never borrows microphone energy and follows verified audible output', async t => {
+  const h = await harness(t, {AudioContext: MeterAudioContext}).connect();
+  const remote = stream(track('reign-output'));
+  h.peer.emit('track', {streams: [remote]}); await settle();
+  h.clock.advance(80);
+  assert.ok(h.levels.at(-1) > 0, 'the existing activity meter may show the microphone');
+  assert.equal(h.outputLevels.at(-1), 0, 'thinking/listening microphone energy must not animate REIGN');
+  h.channel.receive({type: 'output_audio_buffer.started', response_id: 'unverified'});
+  h.clock.advance(80); assert.equal(h.outputLevels.at(-1), 0);
+
+  h.functionCall('portrait-output');
+  await eventually(() => outputs(h.channel, 'portrait-output').length === 1, 'graph output must be verified');
+  const narration = h.channel.sent.findLast(event => event.type === 'response.create');
+  h.channel.receive({type: 'response.created', response: {id: 'portrait-narration', metadata: narration.response.metadata}});
+  h.channel.receive({type: 'output_audio_buffer.started', response_id: 'portrait-narration'});
+  await settle(); h.clock.advance(80);
+  assert.equal(h.outputLevels.at(-1), .375, 'only the remote output analyser should be sampled');
+  assert.equal(h.levels.at(-1), .375);
+  h.controller.mute(); h.clock.advance(80);
+  assert.equal(h.outputLevels.at(-1), .375, 'muting the local microphone must not stop REIGN speaking');
+
+  remote.silent = true; h.clock.advance(80);
+  assert.equal(h.outputLevels.at(-1), 0, 'a speaking provider state cannot invent mouth movement during silence');
+  remote.silent = false; h.clock.advance(80); assert.ok(h.outputLevels.at(-1) > 0);
+  h.channel.receive({type: 'output_audio_buffer.stopped', response_id: 'portrait-narration'});
+  h.clock.advance(80);
+  assert.ok(h.outputLevels.at(-1) > 0, 'verified browser-buffered audio tail keeps its portrait movement');
+  h.channel.receive({type: 'input_audio_buffer.speech_started'});
+  assert.equal(h.outputLevels.at(-1), 0, 'barge-in must clear portrait output synchronously');
+  h.clock.advance(80); assert.equal(h.outputLevels.at(-1), 0);
+  await h.controller.stop(); assert.equal(h.outputLevels.at(-1), 0);
+});
+
+test('blocked speaker playback never produces portrait output energy', async t => {
+  const h = await harness(t, {AudioContext: MeterAudioContext}).connect();
+  h.peer.emit('track', {streams: [stream(track('reign-output'))]}); await settle();
+  h.functionCall('blocked-portrait');
+  await eventually(() => outputs(h.channel, 'blocked-portrait').length === 1, 'graph output must be verified');
+  const narration = h.channel.sent.findLast(event => event.type === 'response.create');
+  h.channel.receive({type: 'response.created', response: {id: 'blocked-narration', metadata: narration.response.metadata}});
+  h.audio.blockNextPlay = true;
+  h.channel.receive({type: 'output_audio_buffer.started', response_id: 'blocked-narration'});
+  await settle(); h.clock.advance(80);
+  assert.equal(h.controller.snapshot().speakerBlocked, true); assert.equal(h.outputLevels.at(-1), 0);
+  await h.controller.enableSpeaker(); h.clock.advance(80); assert.ok(h.outputLevels.at(-1) > 0);
 });
 
 test('stopping an active turn cancels its ownership and drops late results', async t => {

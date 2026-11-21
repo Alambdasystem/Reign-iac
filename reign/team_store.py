@@ -23,6 +23,8 @@ from reign.ax_auth import hash_password, _password_bytes, _verifier, InvalidCred
 from reign.team_identity import OWNER_ID
 
 WORKSPACE_ID = "rain"
+# Display copy is independent of the durable membership, room and crypto bindings.
+WORKSPACE_NAME = "Workspace"
 MOUNT = "/var/data/reign-vault"
 DATABASE_NAME = "reign-team.sqlite3"
 MAX_MEMBERS = 32
@@ -335,7 +337,7 @@ class TeamStore:
                 member, _ = self._member(db, key, row)
                 if me["role"] == "owner" or member["active"]: members.append(member)
             rooms = [self._room(db, key, row[0]) for row in db.execute("SELECT id FROM rooms WHERE workspace=? ORDER BY updated DESC,id LIMIT ?", (WORKSPACE_ID, MAX_ROOMS)).fetchall()]
-            return {"workspace": {"id": WORKSPACE_ID, "name": "Rain", "durable": self.durable}, "me": me, "members": members, "rooms": rooms}
+            return {"workspace": {"id": WORKSPACE_ID, "name": WORKSPACE_NAME, "durable": self.durable}, "me": me, "members": members, "rooms": rooms}
 
     def room_participants(self, actor, room_id, user_ids):
         """Resolve only nominated live-room users against current membership."""
@@ -507,7 +509,7 @@ class TeamStore:
                 event = self._read_event(key, row)
                 messages.append({"role": "assistant" if event["type"] == "assistant_message" else "user", "text": event["data"]["text"],
                                  "user_id": event["user_id"], "display_name": event["display_name"], "created_at": event["created_at"]})
-            return {"workspace": {"id": WORKSPACE_ID, "name": "Rain"}, "room": room, "messages": messages,
+            return {"workspace": {"id": WORKSPACE_ID, "name": WORKSPACE_NAME}, "room": room, "messages": messages,
                     "documents": self._documents(db, key, room_id), "run_id": run_id}
 
     def _document(self, db, key, room_id, document_id):

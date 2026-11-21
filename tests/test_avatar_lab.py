@@ -1,4 +1,5 @@
 """Portrait Lab routing/security contracts; these fixtures do not test inference."""
+import hashlib
 import os
 import subprocess
 import tempfile
@@ -142,6 +143,37 @@ class AvatarLabTests(unittest.TestCase):
                     self.assertEqual(client.get("/avatar-assets/sample-portrait.jpg").status_code,
                                      404)
 
+    def test_only_exact_public_portrait_version_gets_immutable_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            atlas = root / "team-avatar-assets" / "portrait-atlas.webp"
+            atlas.parent.mkdir()
+            atlas.write_bytes(b"public-prepared-portrait-fixture")
+            (root / "reign-avatar.js").write_text("export const fixture = true;")
+            digest = hashlib.sha256(atlas.read_bytes()).hexdigest()
+            static_app = FastAPI()
+            static_app.mount("/assets", AXStaticFiles(directory=root))
+            with TestClient(static_app) as client:
+                route = "/assets/team-avatar-assets/portrait-atlas.webp"
+                cached = client.get(route + "?v=" + digest)
+                self.assertEqual(cached.status_code, 200)
+                self.assertEqual(cached.headers["cache-control"],
+                                 "public, max-age=31536000, immutable")
+                self.assertEqual(cached.headers["cross-origin-resource-policy"], "same-origin")
+                reused = client.get(route + "?v=" + digest,
+                                    headers={"If-None-Match": cached.headers["etag"]})
+                self.assertEqual(reused.status_code, 304)
+                self.assertIn("immutable", reused.headers["cache-control"])
+                for query in ("", "?v=wrong", "?v=" + digest + "&v=" + digest,
+                              "?v=" + digest + "&other=1"):
+                    self.assertEqual(client.get(route + query).headers["cache-control"],
+                                     "public, max-age=0, must-revalidate")
+                # Old script URLs cannot indefinitely retain changed artwork.
+                atlas.write_bytes(b"changed-public-portrait-fixture")
+                self.assertNotIn("immutable", client.get(route + "?v=" + digest).headers["cache-control"])
+                self.assertEqual(client.get("/assets/reign-avatar.js").headers["cache-control"],
+                                 "no-cache")
+
     def test_asset_route_rejects_traversal_unknown_files_and_symlinks(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "public"
@@ -183,7 +215,8 @@ class AvatarLabTests(unittest.TestCase):
         self.assertIn('href="/avatar-lab"', index)
 
     def test_avatar_modules_and_login_controller_parse_in_node(self):
-        for filename in ("avatar-lab.js", "portrait-engine.js", "live.js"):
+        for filename in ("avatar-lab.js", "portrait-engine.js", "portrait-preference.js",
+                         "reign-avatar.js", "live.js"):
             source = (AX_SOURCE / filename).read_text(encoding="utf-8")
             result = subprocess.run(["node", "--check", "--input-type=module"],
                                     input=source, text=True, capture_output=True,
@@ -192,8 +225,9 @@ class AvatarLabTests(unittest.TestCase):
                              filename + ": " + result.stderr[:500])
 
     def test_portrait_ui_lifecycle_regressions(self):
-        test_file = Path(__file__).with_name("avatar_lab_lifecycle.test.js")
-        result = subprocess.run(["node", "--test", str(test_file)], text=True,
+        test_files = [Path(__file__).with_name(filename) for filename in (
+            "avatar_lab_lifecycle.test.js", "portrait_preference.test.mjs")]
+        result = subprocess.run(["node", "--test", *map(str, test_files)], text=True,
                                 capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, (result.stdout + result.stderr)[-6000:])
 

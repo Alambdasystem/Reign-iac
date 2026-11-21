@@ -10,7 +10,10 @@ chat, saved accounts and browser sessions remain private.
 
 ## Scope and ownership
 
-The first workspace is `rain`, with display name `Rain`. Core owns durable users,
+The first workspace has the stable internal ID `rain` and display name
+`Workspace`. REIGN, pronounced "Rain", is the AI participant. Display copy must
+not change the `rain` record bindings, `team:rain:{room_id}` browser scopes,
+encrypted associations or existing saved titles. Core owns durable users,
 membership, rooms, message events and document versions in an encrypted SQLite
 database on the existing private vault disk. Stable user IDs are distinct from
 usernames and individual browser connection IDs. Owner and employee access use

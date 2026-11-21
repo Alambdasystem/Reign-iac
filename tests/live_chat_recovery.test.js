@@ -42,8 +42,11 @@ async function eventually(check) {
 }
 
 function harness({threadStatus = 404, oldBrowser = false, search = '', initiallyAuthenticated = true,
-  role = 'owner', cleanupStatus = 200, logoutFailures = 0, voiceFailure = false, holdVoiceCleanup = false} = {}) {
+  role = 'owner', cleanupStatus = 200, logoutFailures = 0, voiceFailure = false, holdVoiceCleanup = false,
+  portraitMode = 'ready', voiceConfigured = false} = {}) {
   const nodes = new Map(), calls = [], timers = new Map(), navigations = [], windowEvents = new Map(), announcements = [];
+  const portraits = [];
+  let voiceOptions, voiceStarts = 0;
   const node = id => { if (!nodes.has(id)) nodes.set(id, new Element()); return nodes.get(id); };
   const storage = new Map([['reign-session', SESSION], ['reign-thread', THREAD]]);
   let timer = 0, frame = 0;
@@ -85,7 +88,7 @@ function harness({threadStatus = 404, oldBrowser = false, search = '', initially
     }
     if (options.method === 'DELETE') return json({}, cleanupStatus);
     if (url === '/api/agent') return json({configured: true});
-    if (url === '/api/voice') return json({configured: false});
+    if (url === '/api/voice') return json({configured: voiceConfigured});
     if (url === '/api/status') return json({status: 'ready'});
     if (url === '/api/sessions/' + SESSION) return json(session);
     if (url === '/api/sessions/' + OLD_SESSION) return json({}, 404);
@@ -104,6 +107,18 @@ function harness({threadStatus = 404, oldBrowser = false, search = '', initially
   }
   const context = vm.createContext({
     document, window: {addEventListener: (event, handler) => windowEvents.set(event, handler),
+      REIGNAvatar: portraitMode === 'missing' ? undefined : {createReignAvatar(options) {
+        const value = {visibleWhenMounted: !node('console').hidden, speaking: false, level: 0, destroyed: false,
+          setSpeaking(active) { this.speaking = active; if (!active) this.level = 0; },
+          setSpeechLevel(level) { this.level = level; }, stop() { this.speaking = false; this.level = 0; },
+          destroy() { this.stop(); this.destroyed = true; }};
+        value.ready = Promise.resolve().then(() => {
+          if (!value.destroyed) options.onStatus({state: portraitMode === 'error' ? 'error' : 'ready',
+            message: portraitMode === 'error' ? 'REIGN’s face could not load.' : 'REIGN is ready.'});
+          return portraitMode !== 'error';
+        });
+        portraits.push(value); return value;
+      }},
       location: {search, replace: target => navigations.push(target)}},
     fetch, Response, AbortController, URL: TestURL, URLSearchParams,
     sessionStorage: {getItem: key => storage.get(key) ?? null,
@@ -112,13 +127,14 @@ function harness({threadStatus = 404, oldBrowser = false, search = '', initially
     setTimeout: (callback, delay) => { timers.set(++timer, {callback, delay}); return timer; },
     clearTimeout: id => timers.delete(id), setInterval() {},
     run: false, voiceState: 'idle', activity: 0, animate() {},
-    REIGNVoice: {createVoiceController: () => ({stop: async () => {
+    REIGNVoice: {createVoiceController: options => { voiceOptions = options; return {stop: async () => {
       if (voiceFailure) throw Error('Synthetic voice cleanup failure');
       if (holdVoiceCleanup) await new Promise(() => {});
-    }, mute() {}, start() {}, enableSpeaker() {}})}
+    }, mute() {}, start() { voiceStarts++; }, enableSpeaker() {}}; }}
   });
   vm.runInContext(source, context, {filename: 'services/ax/live.js'});
-  return {node, calls, storage, session, timers, navigations, windowEvents, announcements,
+  return {node, calls, storage, session, timers, navigations, windowEvents, announcements, portraits,
+    get voiceOptions() { return voiceOptions; }, get voiceStarts() { return voiceStarts; },
     ready: () => eventually(() => calls.some(call => call.path === '/api/status') && !node('cancelAgent').disabled)};
 }
 
@@ -131,6 +147,46 @@ function assertBrowserPreserved(h) {
   assert.match(h.node('screen').src, /^blob:synthetic-frame-/);
   assert.equal(h.storage.get('reign-session'), SESSION);
 }
+
+test('private REIGN portrait mounts after authenticated UI and only output audio drives it', async () => {
+  const h = harness({voiceConfigured: true}); await h.ready();
+  assert.equal(h.portraits.length, 1); const portrait = h.portraits[0];
+  assert.equal(portrait.visibleWhenMounted, true);
+  h.voiceOptions.onState({active: true, phase: 'listening', muted: false, speakerBlocked: false, status: 'Listening'});
+  h.voiceOptions.onLevel(.8);
+  assert.equal(portrait.speaking, false); assert.equal(portrait.level, 0);
+  h.voiceOptions.onState({active: true, phase: 'speaking', muted: false, speakerBlocked: false, status: 'Speaking'});
+  assert.equal(portrait.level, 0, 'provider phase alone must not simulate speech');
+  h.voiceOptions.onOutputLevel(.4);
+  assert.equal(portrait.speaking, true); assert.equal(portrait.level, .4);
+  h.voiceOptions.onOutputLevel(0);
+  assert.equal(portrait.speaking, false); assert.equal(portrait.level, 0);
+  h.voiceOptions.onOutputLevel(.4);
+  h.voiceOptions.onState({active: false, phase: 'ended', speakerBlocked: false, status: 'Ended'});
+  assert.equal(portrait.speaking, false); assert.equal(portrait.level, 0);
+  h.windowEvents.get('pagehide')(); assert.equal(portrait.destroyed, true);
+  h.voiceOptions.onOutputLevel(.8); assert.equal(portrait.level, 0, 'late output cannot animate a retired portrait');
+});
+
+test('portrait failure or unavailable module does not disable an otherwise available voice call', async () => {
+  for (const portraitMode of ['error', 'missing']) {
+    const h = harness({portraitMode, voiceConfigured: true}); await h.ready();
+    assert.equal(h.node('voiceStart').disabled, false);
+    h.node('voiceStart').onclick(); assert.equal(h.voiceStarts, 1);
+    if (portraitMode === 'error') assert.match(h.node('portraitStatus').textContent, /face could not load/);
+  }
+});
+
+test('restricted and signed-out users never mount the private portrait controller', async () => {
+  const signedOut = harness({initiallyAuthenticated: false});
+  await eventually(() => signedOut.calls.some(call => call.path === '/api/me'));
+  signedOut.windowEvents.get('reign:avatar-module-ready')();
+  assert.equal(signedOut.portraits.length, 0);
+  const restricted = harness({role: 'avatar'});
+  await eventually(() => restricted.navigations.length === 1);
+  restricted.windowEvents.get('reign:avatar-module-ready')();
+  assert.equal(restricted.portraits.length, 0);
+});
 
 test('reload clears only an expired chat reference and the next prompt uses the recovered browser', async () => {
   const h = harness();

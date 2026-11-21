@@ -146,10 +146,83 @@ async def portrait_ui_smoke(owner_context, origin, evidence):
         response = await page.reload()
         assert response.status == 200
         assert "wasm-unsafe-eval" in response.headers["content-security-policy"]
+        await expect(page.locator("#defaultAvatarCanvas")).to_have_attribute("data-ready", "true")
+        await expect(page.locator("#portraitStage")).to_have_attribute("data-preview-mode", "prepared")
+        assert await page.evaluate("__portraitAcceptance.started") == 0
+        assert not [request for request in requests
+                    if urlsplit(request["url"]).path.startswith(("/avatar-assets/models/", "/avatar-assets/ort/"))], \
+            "Default REIGN preview downloaded or initialized the heavy neural runtime"
+        await page.screenshot(path=str(evidence / "avatar-ready-without-setup.png"), full_page=True)
+
+        # A real local image selection persists across navigation under this
+        # verified account. It is not published or sent to a backend. The
+        # isolated browser's IndexedDB is then checked with a second legitimate
+        # synthetic session to prove it does not select another account's photo.
+        await page.locator("#advancedDetails").evaluate("element => { element.open = true; }")
+        await expect(page.locator("#startButton")).to_be_enabled()
+        source_png = await page.locator("#sourceCanvas").evaluate(
+            "canvas => canvas.toDataURL('image/png').split(',')[1]")
+        await page.locator("#portraitFile").set_input_files({
+            "name": "synthetic-local-portrait.png", "mimeType": "image/png",
+            "buffer": b64decode(source_png, validate=True)})
+        await expect(page.locator("#portraitPreferenceStatus")).to_have_attribute("data-state", "saved")
+        await page.locator("#cropDetails").evaluate("element => { element.open = true; }")
+        await page.locator("#cropZoom").evaluate("""element => {
+            element.value = '1.24'; element.dispatchEvent(new Event('input', {bubbles: true}));
+        }""")
+        await page.locator("#applyCrop").click()
+        await expect(page.locator("#portraitPreferenceStatus")).to_have_attribute("data-state", "saved")
+        sample_photo = """canvas => {
+            const pixels = canvas.getContext('2d').getImageData(0, 0, 256, 256).data;
+            const samples = [];
+            for (let y = 8; y < 256; y += 16) for (let x = 8; x < 256; x += 16) {
+                const offset = (y * 256 + x) * 4;
+                samples.push(pixels[offset], pixels[offset + 1], pixels[offset + 2]);
+            }
+            return samples;
+        }"""
+        before_reload = await page.locator("#customPreviewCanvas").evaluate(sample_photo)
+        await page.reload()
+        await expect(page.locator("#portraitStage")).to_have_attribute("data-preview-mode", "saved-custom")
+        await expect(page.locator("#portraitPreferenceStatus")).to_have_attribute("data-state", "saved")
+        await expect(page.locator("#cropZoom")).to_have_value("1.24")
+        after_reload = await page.locator("#customPreviewCanvas").evaluate(sample_photo)
+        # The bounded saved image is re-encoded, so compare appearance rather
+        # than requiring lossy normalization to preserve every source byte.
+        restored_error = sum(abs(a - b) for a, b in zip(before_reload, after_reload)) / len(before_reload)
+        assert restored_error < 3.5, "Saved custom portrait/crop did not restore its appearance"
+        assert await page.evaluate("__portraitAcceptance.started") == 0
+        tester_cookies = await context.cookies()
+        await context.clear_cookies()
+        await context.add_cookies(await owner_context.cookies())
+        await page.reload()
+        await expect(page.locator("#accountName")).to_contain_text("Owner")
+        await expect(page.locator("#portraitStage")).to_have_attribute("data-source", "default")
+        await expect(page.locator("#defaultAvatarCanvas")).to_have_attribute("data-ready", "true")
+        await context.clear_cookies()
+        await context.add_cookies(tester_cookies)
+        await page.reload()
+        await expect(page.locator("#portraitStage")).to_have_attribute("data-preview-mode", "saved-custom")
+        await page.locator("#advancedDetails").evaluate("element => { element.open = true; }")
+        await page.locator("#sampleButton").click()
+        await expect(page.locator("#portraitPreferenceStatus")).to_have_attribute("data-state", "default")
+        await page.reload()
+        await expect(page.locator("#portraitStage")).to_have_attribute("data-preview-mode", "prepared")
+        await expect(page.locator("#defaultAvatarCanvas")).to_have_attribute("data-ready", "true")
+        assert await page.evaluate("__portraitAcceptance.started") == 0
+        result["saved_portrait"] = {
+            "default_ready_without_setup": True, "no_default_neural_download": True,
+            "custom_photo_and_crop_survive_reload": True, "account_selection_isolated": True,
+            "restored_pixel_mean_error": restored_error,
+            "reset_removes_only_current_local_preference": True,
+            "scope": "account_scoped_browser_storage_not_cross_device"}
+        assert all(request["method"] == "GET" or urlsplit(request["url"]).path == "/login"
+                   for request in requests), "The saved local portrait was transmitted to a server"
         # Record only the inference phase for the no-photo-upload assertion.
         # The separately checked login and logout necessarily make POSTs.
         requests.clear()
         await page.set_viewport_size({"width": 1440, "height": 1000})
+        await page.locator("#advancedDetails").evaluate("element => { element.open = true; }")
         await expect(page.locator("#startButton")).to_be_enabled()
         await page.locator("#startButton").click()
         await expect(page.locator("#outputCanvas")).to_be_visible(timeout=180000)
@@ -394,6 +467,9 @@ async def portrait_ui_smoke(owner_context, origin, evidence):
         result.update(status="passed", requests_same_origin=True, inference_requests="none",
                       runtime_note=runtime_note,
                       checks=["named_tester_login", "tester_has_no_owner_api_access",
+                              "default_reign_ready_without_manual_model_start",
+                              "local_custom_portrait_crop_restore_and_account_isolation",
+                              "reset_to_saved_reign_default",
                               "authenticated_document", "real_model_download_and_inference",
                               "nonblank_neural_pixels", "mouth_pose_smile_change_pixels",
                               "distinct_intermediate_display_pixels", "exact_neural_endpoints",

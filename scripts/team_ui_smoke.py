@@ -94,7 +94,7 @@ async def shared_browser_check(page, room_id):
 
 async def main():
     OUTPUT.mkdir(parents=True, exist_ok=True)
-    cases, errors, employee_requests = [], [], []
+    cases, errors, employee_requests, owner_requests = [], [], [], []
     def passed(name):
         cases.append({"case": name, "status": "PASS", "evidence": "Disposable CI containers / Chromium"})
     async with async_playwright() as p:
@@ -110,6 +110,7 @@ async def main():
             current.set_default_timeout(30000)
             current.on("pageerror", lambda error: errors.append(str(error)))
         member_page.on("request", lambda request: employee_requests.append(urlsplit(request.url).path))
+        page.on("request", lambda request: owner_requests.append(urlsplit(request.url).path))
         member_page.on("dialog", lambda dialog: dialog.accept())
         page.on("dialog", lambda dialog: dialog.accept())
         password = ""
@@ -118,6 +119,14 @@ async def main():
             passed("T01 owner enters protected shared workspace through the fixed return path")
             profile = await api(page, "/api/team")
             assert profile["status"] == 200 and profile["data"]["workspace"]["durable"] is True
+            assert profile["data"]["workspace"]["name"] == "Workspace"
+            assert profile["data"]["workspace"]["id"] == "rain", "Existing saved workspace identity changed"
+            await expect(page.locator("#workspaceName")).to_have_text("Workspace")
+            await expect(page.locator("#reignAvatar")).to_have_attribute("data-ready", "true")
+            await expect(page.locator("#reignAvatar")).to_have_attribute("data-speaking", "false")
+            assert not any(path.startswith(("/avatar-assets/models/", "/avatar-assets/ort/"))
+                           for path in owner_requests), "Workspace loaded the heavy neural model"
+            passed("T16 Workspace name preserves saved identity and REIGN loads automatically without a neural model")
             if PHASE == "restart":
                 saved = json.loads(PERSISTENCE.read_text())
                 await page.locator(f'[data-room-id="{saved["room_id"]}"]').click()
@@ -159,6 +168,7 @@ async def main():
                 password = ""
                 await member_page.locator(f'[data-room-id="{room_id}"]').click()
                 await expect(member_page.locator("#roomTitle")).to_have_text(room_title)
+                await expect(member_page.locator("#reignAvatar")).to_have_attribute("data-ready", "true")
                 await expect(member_page.locator("#privateWorkspace")).to_be_hidden()
                 await expect(member_page.locator("#manageMembersButton")).to_be_hidden()
                 assert await page.evaluate("() => __teamProbe.deviceRequests.length") == 0

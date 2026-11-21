@@ -1,5 +1,7 @@
 import { createPortraitEngine } from '/assets/portrait-engine.js';
 import { createMotionCompositor } from '/assets/portrait-motion.js';
+import { createReignAvatar } from '/assets/reign-avatar.js';
+import { createPortraitPreferences, portraitAccountKey, portraitCrop, preparePortrait } from '/assets/portrait-preference.js';
 
 const $ = (id) => document.getElementById(id);
 const controls = ['yaw', 'pitch', 'roll', 'mouth', 'blink', 'smile'];
@@ -7,7 +9,11 @@ const sourceCanvas = $('sourceCanvas');
 const outputCanvas = $('outputCanvas');
 const sourceContext = sourceCanvas.getContext('2d', { willReadFrequently: true });
 const compositor = createMotionCompositor({canvas: outputCanvas});
+const preferences = createPortraitPreferences();
+const defaultCanvas = $('defaultAvatarCanvas'), customCanvas = $('customPreviewCanvas');
 let sourceImage, engine, renderTimer, objectUrl;
+let sourceKind = 'default', customSource = null, accountKey = null, preferenceEpoch = 0, restoring = false;
+let defaultAvatar = null, defaultAvatarEpoch = 0, defaultAvatarReady = false;
 let ready = false, loading = false, rendering = false, pendingRender = false, motion = false, closed = false;
 let engineInitialized = false, encoding = false, pendingEncode = false, encodePromise, renderPromise;
 let sourceRevision = 0, sourceLoadRevision = 0, engineGeneration = 0, frames = 0;
@@ -24,6 +30,87 @@ function status(message, state = '') {
   $('statusText').textContent = message;
   $('statusDot').className = `status-dot ${state}`;
 }
+function preferenceStatus(message, state = '') {
+  $('portraitPreferenceStatus').textContent = message;
+  $('portraitPreferenceStatus').dataset.state = state;
+}
+function currentCrop() {
+  return portraitCrop({zoom: Number($('cropZoom').value), x: Number($('cropX').value), y: Number($('cropY').value)});
+}
+function discardSource(image) {
+  if (!image) return;
+  if (typeof image.getContext === 'function') image.width = image.height = 0;
+  else image.src = '';
+}
+function destroyDefaultAvatar() {
+  defaultAvatarEpoch++;
+  defaultAvatar?.destroy(); defaultAvatar = null; defaultAvatarReady = false; defaultCanvas.hidden = true;
+}
+function showSavedPreview() {
+  if (closed) return;
+  outputCanvas.hidden = true;
+  $('portraitStage').dataset.source = sourceKind;
+  $('portraitStage').dataset.previewMode = sourceKind === 'default' ? 'prepared' : 'saved-custom';
+  customCanvas.hidden = sourceKind !== 'custom';
+  if (sourceKind === 'custom') {
+    destroyDefaultAvatar(); $('previewSource').hidden = true;
+    customCanvas.width = customCanvas.height = 256;
+    customCanvas.getContext('2d').drawImage(sourceCanvas, 0, 0);
+    $('renderBadge').textContent = 'LOCAL EXPERIMENT';
+    $('runtimeNote').textContent = 'Your saved experiment is ready. Advanced editing loads the neural model only when you ask.';
+  } else {
+    $('previewSource').hidden = false;
+    $('renderBadge').textContent = 'REIGN · READY';
+    $('runtimeNote').textContent = 'REIGN’s prepared portrait loads automatically. No neural model is running.';
+    if (!defaultAvatar) {
+      const epoch = ++defaultAvatarEpoch;
+      defaultAvatar = createReignAvatar({canvas: defaultCanvas});
+      Promise.resolve(defaultAvatar.ready).then(available => {
+        if (closed || epoch !== defaultAvatarEpoch || sourceKind !== 'default' || !outputCanvas.hidden) return;
+        defaultAvatarReady = !!available;
+        defaultCanvas.hidden = !available; $('previewSource').hidden = !!available;
+      });
+    } else { defaultCanvas.hidden = !defaultAvatarReady; $('previewSource').hidden = defaultAvatarReady; }
+  }
+  $('renderBadge').className = 'render-badge ready';
+}
+async function savePreference() {
+  if (closed || !sessionVerified || !accountKey || sourceKind !== 'custom' || !customSource) return;
+  const key = accountKey, epoch = preferenceEpoch, value = {...customSource, crop: currentCrop()};
+  preferenceStatus('Saving this experiment in your browser…', 'saving');
+  try {
+    await preferences.save(key, value);
+    if (!closed && key === accountKey && epoch === preferenceEpoch)
+      preferenceStatus('Saved for this account on this browser. This does not change REIGN in the Workspace.', 'saved');
+  } catch {
+    if (!closed && key === accountKey && epoch === preferenceEpoch)
+      preferenceStatus('This experiment works in this tab, but browser storage is unavailable. It may not return after you leave.', 'unavailable');
+  }
+}
+async function restorePreference(key) {
+  const epoch = preferenceEpoch, revision = sourceLoadRevision;
+  restoring = true; preferenceStatus('Checking your saved local experiment…', 'restoring');
+  try {
+    const saved = await preferences.load(key);
+    if (closed || key !== accountKey || epoch !== preferenceEpoch || revision !== sourceLoadRevision) return;
+    if (!saved) { preferenceStatus('REIGN is saved with the application and is ready on every visit.', 'default'); return; }
+    const url = URL.createObjectURL(saved.blob);
+    if (await loadSource(url, 'Your saved portrait · this browser', true, {kind: 'custom', saved, restoreEpoch: epoch}) &&
+        !closed && key === accountKey && epoch === preferenceEpoch)
+      preferenceStatus('Restored your local experiment. REIGN’s shared Workspace portrait is unchanged.', 'saved');
+  } catch (error) {
+    if (closed || key !== accountKey || epoch !== preferenceEpoch) return;
+    if (error?.code === 'invalid') await preferences.remove(key).catch(() => {});
+    if (closed || key !== accountKey || epoch !== preferenceEpoch) return;
+    // An invalid restore may have superseded the initial sample decode. Keep
+    // the default available to the optional editor as well as its prepared view.
+    if (!sourceImage) await loadSource('/avatar-assets/sample-portrait.png', 'REIGN · saved with the application').catch(() => {});
+    if (closed || key !== accountKey || epoch !== preferenceEpoch) return;
+    preferenceStatus(error?.code === 'invalid'
+      ? 'The saved experiment could not be read. REIGN’s default portrait is ready; choose another photo to save a new experiment.'
+      : 'Local portrait storage is unavailable. REIGN’s default portrait is still ready.', 'unavailable');
+  } finally { if (key === accountKey) { restoring = false; enableControls(ready); } }
+}
 function syncControls() {
   for (const name of controls) {
     const value = Number($(name).value);
@@ -35,9 +122,10 @@ function enableControls(enabled) {
   $('motionControls').disabled = !enabled;
   $('motionButton').disabled = !enabled;
   $('resetButton').disabled = !enabled;
-  const sourceBusy = closed || loading || encoding;
+  const sourceBusy = closed || loading || encoding || !sessionVerified;
   for (const name of ['portraitFile', 'sampleButton', 'cropZoom', 'cropX', 'cropY']) $(name).disabled = sourceBusy;
   $('applyCrop').disabled = !sourceImage || sourceBusy;
+  $('startButton').disabled = sourceBusy || restoring || !sourceImage;
   updatePresentationState();
 }
 function updateRuntime(provider) {
@@ -120,45 +208,76 @@ function nextMotionPose() {
 function drawCrop() {
   if (!sourceImage) return;
   const zoom = Number($('cropZoom').value), x = Number($('cropX').value), y = Number($('cropY').value);
-  const width = sourceImage.naturalWidth, height = sourceImage.naturalHeight;
+  const width = sourceImage.naturalWidth || sourceImage.width, height = sourceImage.naturalHeight || sourceImage.height;
   const side = Math.min(width, height) / zoom;
   sourceContext.drawImage(sourceImage, (width - side) * (x + 1) / 2, (height - side) * (y + 1) / 2, side, side, 0, 0, 256, 256);
   $('cropZoomValue').textContent = `${zoom.toFixed(2)}×`;
   $('cropXValue').textContent = x.toFixed(2);
   $('cropYValue').textContent = y.toFixed(2);
+  if (sourceKind === 'custom' && !customCanvas.hidden) customCanvas.getContext('2d').drawImage(sourceCanvas, 0, 0);
 }
-async function loadSource(url, label, ownsUrl = false) {
+async function loadSource(url, label, ownsUrl = false, {kind = 'default', saved = null, restoreEpoch} = {}) {
   const loadRevision = ++sourceLoadRevision;
+  const current = () => !closed && loadRevision === sourceLoadRevision &&
+    (restoreEpoch === undefined || restoreEpoch === preferenceEpoch);
   if (ownsUrl) pendingPhotoUrls.add(url);
-  let accepted = false;
+  let accepted = false, image, prepared = null, preparedUrl;
   stopMotion();
   try {
-    const image = new Image();
+    image = new Image();
     image.src = url;
     await image.decode();
-    if (loadRevision !== sourceLoadRevision || closed) return false;
+    if (!current()) return false;
     if (image.naturalWidth < 128 || image.naturalHeight < 128) throw new Error('Choose a photo at least 128 × 128 pixels.');
     if (image.naturalWidth * image.naturalHeight > 40_000_000) throw new Error('Choose a photo smaller than 40 megapixels.');
-    sourceImage = image;
+    if (saved) {
+      if (image.naturalWidth !== saved.width || image.naturalHeight !== saved.height || Math.max(image.naturalWidth, image.naturalHeight) > 1024)
+        throw Object.assign(new Error('The saved portrait is invalid.'), {code: 'invalid'});
+      prepared = saved;
+    } else if (kind === 'custom') {
+      prepared = await preparePortrait(image);
+      if (!current()) return false;
+      preparedUrl = URL.createObjectURL(prepared.blob); pendingPhotoUrls.add(preparedUrl);
+      // Preview the exact saved bytes, so a reload reproduces the same crop
+      // rather than switching from an uncompressed canvas to its saved image.
+      discardSource(image); discardSource(prepared.image); delete prepared.image;
+      image = new Image(); image.src = preparedUrl; await image.decode();
+      if (!current()) return false;
+    }
+    const previousImage = sourceImage;
+    sourceImage = prepared?.image || image;
+    if (previousImage !== sourceImage) discardSource(previousImage);
+    if (sourceImage !== image) discardSource(image);
+    sourceKind = kind;
+    customSource = kind === 'custom' ? {blob: prepared.blob, width: prepared.width, height: prepared.height} : null;
     sourceRevision++;
     resetPresentation();
     $('sourceCaption').textContent = label;
-    $('cropZoom').value = '1'; $('cropX').value = '0'; $('cropY').value = '0';
+    const crop = portraitCrop(saved?.crop);
+    $('cropZoom').value = String(crop.zoom); $('cropX').value = String(crop.x); $('cropY').value = String(crop.y);
     drawCrop();
-    $('previewSource').src = url; $('previewSource').hidden = false; outputCanvas.hidden = true;
+    $('previewSource').src = preparedUrl || url;
     // Transfer ownership at acceptance, before any asynchronous inference.
     const previousUrl = objectUrl;
-    objectUrl = ownsUrl ? url : undefined;
+    objectUrl = preparedUrl || (ownsUrl ? url : undefined);
     accepted = true;
-    if (previousUrl && previousUrl !== url) URL.revokeObjectURL(previousUrl);
+    if (objectUrl) pendingPhotoUrls.delete(objectUrl);
+    if (ownsUrl && url !== objectUrl && pendingPhotoUrls.delete(url)) URL.revokeObjectURL(url);
+    if (previousUrl && previousUrl !== objectUrl) URL.revokeObjectURL(previousUrl);
+    showSavedPreview();
     enableControls(false);
     if (engineInitialized) void encodeSource();
-    return true;
+    if (kind === 'custom' && !saved) await savePreference();
+    return current();
   } catch (error) {
-    if (loadRevision !== sourceLoadRevision || closed) return false;
+    if (!current()) return false;
+    if (saved) error.code = 'invalid';
     throw error;
   } finally {
-    if (ownsUrl && pendingPhotoUrls.delete(url) && !accepted) URL.revokeObjectURL(url);
+    if (!accepted) { discardSource(image); if (prepared?.image && prepared.image !== image) discardSource(prepared.image); }
+    for (const pendingUrl of new Set([ownsUrl && url, preparedUrl].filter(Boolean))) {
+      if (pendingPhotoUrls.delete(pendingUrl) && (!accepted || pendingUrl !== objectUrl)) URL.revokeObjectURL(pendingUrl);
+    }
   }
 }
 function encodeSource() {
@@ -252,7 +371,9 @@ async function requestRender() {
           for (const name of controls) $(name).value = String(next.pose[name]);
           syncControls();
         }
+        destroyDefaultAvatar(); customCanvas.hidden = true;
         outputCanvas.hidden = false; $('previewSource').hidden = true; $('stageOverlay').hidden = true;
+        $('portraitStage').dataset.previewMode = 'neural';
         frames++;
         $('renderBadge').textContent = 'NEURAL OUTPUT'; $('renderBadge').className = 'render-badge ready';
         $('frameStat').textContent = `${(frame.ms / 1000).toFixed(2)} s / neural frame`;
@@ -277,8 +398,28 @@ async function requestRender() {
   });
   return renderPromise;
 }
+function stopAdvanced() {
+  if (closed) return;
+  const previousEngine = engine;
+  engineGeneration++; sourceRevision++;
+  engine = undefined; engineInitialized = false;
+  ready = false; loading = false; rendering = false; encoding = false;
+  pendingEncode = false; pendingRender = false; encodePromise = undefined; renderPromise = undefined;
+  stopMotion(); clearTimeout(renderTimer); resetPresentation();
+  previousEngine?.dispose({immediate: true}).catch(() => {});
+  $('stageOverlay').hidden = false;
+  $('stageOverlay').querySelector('h3').textContent = 'Explore a different pose';
+  $('stageOverlay').querySelector('p').textContent = 'Load the optional neural model to edit this portrait on your device.';
+  $('startButton').textContent = 'Start neural editing';
+  $('loadProgress').hidden = true; $('renderingLabel').hidden = true;
+  $('portraitStage').setAttribute('aria-busy', 'false');
+  $('frameStat').textContent = 'Advanced editing is optional';
+  showSavedPreview(); enableControls(false);
+  status(sourceKind === 'default' ? 'REIGN is ready. Her portrait loads automatically.' : 'Your local portrait experiment is ready.');
+}
 async function start() {
   if (loading || encoding || closed || !sessionVerified) return;
+  $('advancedDetails').open = true;
   const generation = ++engineGeneration, previousEngine = engine;
   engine = undefined; engineInitialized = false; sourceRevision++;
   pendingEncode = false; encodePromise = undefined; pendingRender = false; renderPromise = undefined; rendering = false;
@@ -305,6 +446,10 @@ async function start() {
   } catch (error) { fail(error, generation); }
 }
 $('startButton').addEventListener('click', start);
+$('closeNeuralButton').addEventListener('click', () => { stopAdvanced(); $('advancedDetails').open = false; });
+$('advancedDetails').addEventListener('toggle', () => {
+  if (!$('advancedDetails').open && (engine || loading || encoding || ready)) stopAdvanced();
+});
 $('motionButton').addEventListener('click', () => {
   if (motion) { stopMotion(); status('Motion paused. The current transition will settle.'); return; }
   if (!ready || closed) return;
@@ -326,10 +471,20 @@ document.querySelectorAll('[data-preset]').forEach((button) => button.addEventLi
   syncControls(); requestRender();
 }));
 for (const name of ['cropZoom', 'cropX', 'cropY']) $(name).addEventListener('input', () => {
-  stopMotion(); drawCrop(); status('Crop adjusted. Select Apply crop to update the neural portrait.');
+  stopMotion(); drawCrop(); status('Crop adjusted. Select Apply crop to keep this framing.');
 });
 $('applyCrop').addEventListener('click', async () => {
-  if (engineInitialized) await encodeSource(); else status('Crop set. Start neural preview to animate this portrait.');
+  if (closed || !sessionVerified) return;
+  preferenceEpoch++;
+  if (restoring) {
+    restoring = false;
+    if (sourceKind === 'default') preferenceStatus('Using REIGN for this visit. Your saved local experiment is unchanged.', 'default');
+    enableControls(ready);
+  }
+  const saved = savePreference();
+  if (engineInitialized) await encodeSource();
+  else { showSavedPreview(); status(sourceKind === 'custom' ? 'Your local experiment uses this crop. Neural editing is optional.' : 'Crop set for advanced editing. REIGN’s prepared portrait is unchanged.'); }
+  await saved;
 });
 $('portraitFile').addEventListener('change', async (event) => {
   const file = event.target.files?.[0];
@@ -337,23 +492,39 @@ $('portraitFile').addEventListener('change', async (event) => {
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 15 * 1024 * 1024) {
     status('Choose a JPEG, PNG, or WebP image smaller than 15 MB.', 'error'); return;
   }
+  preferenceEpoch++;
   const newUrl = URL.createObjectURL(file);
   try {
-    if (await loadSource(newUrl, 'Your portrait · local to this tab', true)) $('cropDetails').open = true;
+    if (await loadSource(newUrl, 'Your local portrait experiment', true, {kind: 'custom'})) {
+      $('cropDetails').open = true;
+      if (!engineInitialized) status('Your local portrait experiment is ready. Advanced neural editing is optional.');
+    }
   } catch (error) { status(error.message || 'That image couldn’t be read. Try another photo.', 'error'); }
 });
 $('sampleButton').addEventListener('click', async () => {
+  if (closed || !sessionVerified) return;
+  const epoch = ++preferenceEpoch, key = accountKey;
+  sourceLoadRevision++;
+  stopAdvanced();
+  const removal = preferences.remove(key).then(() => true, () => false);
   try {
-    if (await loadSource('/avatar-assets/sample-portrait.png', 'Sample portrait · AI generated')) $('portraitFile').value = '';
+    if (await loadSource('/avatar-assets/sample-portrait.png', 'REIGN · saved with the application')) $('portraitFile').value = '';
+    const removed = await removal;
+    if (!closed && epoch === preferenceEpoch && key === accountKey) {
+      preferenceStatus(removed ? 'Local experiment removed. REIGN is saved with the application and is ready on every visit.'
+        : 'REIGN is ready. Browser storage could not remove the old experiment; it may return on a later visit.', removed ? 'default' : 'unavailable');
+      status('REIGN is ready. Her portrait loads automatically.');
+    }
   } catch (error) { status(error.message || 'The sample portrait couldn’t be loaded.', 'error'); }
 });
 function releasePortrait() {
   if (closed) return;
   closed = true; sessionVerified = false;
-  sourceLoadRevision++; sourceRevision++; engineGeneration++;
+  sourceLoadRevision++; sourceRevision++; engineGeneration++; preferenceEpoch++;
   ready = false; engineInitialized = false; pendingEncode = false; pendingRender = false;
   stopMotion(); clearTimeout(renderTimer);
   resetPresentation(); compositor.dispose();
+  destroyDefaultAvatar(); preferences.close();
   const activeEngine = engine;
   engine = undefined; encodePromise = undefined; renderPromise = undefined;
   activeEngine?.dispose({immediate: true}).catch(() => {});
@@ -361,12 +532,13 @@ function releasePortrait() {
   for (const url of pendingPhotoUrls) URL.revokeObjectURL(url);
   pendingPhotoUrls.clear();
   objectUrl = undefined;
-  if (sourceImage) sourceImage.src = '';
-  sourceImage = undefined;
+  discardSource(sourceImage);
+  sourceImage = undefined; customSource = null; accountKey = null;
   $('portraitFile').value = '';
   $('previewSource').removeAttribute('src'); $('previewSource').hidden = true;
   // Drop the backing buffers as well as the decoded photo and worker tensors.
   sourceCanvas.width = sourceCanvas.height = outputCanvas.width = outputCanvas.height = 0;
+  customCanvas.width = customCanvas.height = 0; customCanvas.hidden = true;
   outputCanvas.hidden = true;
   enableControls(false); $('startButton').disabled = true;
   $('loadProgress').hidden = true; $('renderingLabel').hidden = true;
@@ -414,14 +586,17 @@ function checkSession() {
       const profile = await response.json();
       if (closed) return;
       if (!profile.authenticated || !['owner', 'avatar', 'employee'].includes(profile.role)) throw new Error('Account check failed.');
+      const key = portraitAccountKey(profile);
+      if (accountKey && key !== accountKey) { releasePortrait(); window.location.reload(); return; }
       sessionVerified = true;
       $('accountName').textContent = profile.display_name || profile.username;
       $('accountName').hidden = false;
       $('workspaceLink').hidden = profile.role === 'avatar';
       $('workspaceLink').href = profile.role === 'employee' ? '/team' : '/';
       $('labBrand').href = profile.role === 'owner' ? '/' : profile.role === 'employee' ? '/team' : '/avatar-lab';
-      $('labBrand').setAttribute('aria-label', profile.role === 'owner' ? 'Back to REIGN workspace' : 'REIGN Avatar Lab');
-      if (!loading && !engineInitialized) $('startButton').disabled = false;
+      $('labBrand').setAttribute('aria-label', profile.role === 'avatar' ? 'REIGN Avatar Lab' : 'Back to Workspace');
+      if (!accountKey) { accountKey = key; void restorePreference(key); }
+      enableControls(ready);
       showAuthMessage('');
     } catch {
       if (!closed) showAuthMessage('Couldn’t check your sign-in. Check your connection and return to this tab to retry, or use Log out.');
@@ -440,7 +615,9 @@ window.addEventListener('pageshow', (event) => {
   if (event.persisted && closed) window.location.reload();
 });
 updatePresentationState();
+enableControls(false);
+showSavedPreview();
 checkSession();
-loadSource('/avatar-assets/sample-portrait.png', 'Sample portrait · AI generated').catch(() => {
+loadSource('/avatar-assets/sample-portrait.png', 'REIGN · saved with the application').catch(() => {
   status('The sample portrait couldn’t load. Choose a photo to continue.', 'error');
 });
