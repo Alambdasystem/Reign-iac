@@ -18,7 +18,7 @@ class OllamaProbeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(probe._private_key().splitlines()[0], "-----BEGIN OPENSSH PRIVATE KEY-----")
 
     async def test_absent_userspace_daemon_cannot_touch_ssh_or_ollama(self):
-        with patch.dict(os.environ, {"REIGN_TAILSCALE_ENABLED": "0"}, clear=True), \\
+        with patch.dict(os.environ, {"REIGN_TAILSCALE_ENABLED": "0"}, clear=True), \
              patch.object(probe.subprocess, "Popen") as spawn:
             receipt = await probe.probe()
         self.assertEqual(receipt["error_code"], "tailscale_socket_unavailable")
