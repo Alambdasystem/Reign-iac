@@ -123,6 +123,7 @@ class ProbeHelperTests(unittest.TestCase):
         self.assertEqual(receipt["stages"]["configuration"], "failed")
         self.assertEqual(receipt["physical_device"], "not_run")
         self.assertEqual(receipt["webrtc_browser"], "not_run")
+        self.assertNotIn("latency_ms", receipt)
 
 
 class ProbeEventTests(unittest.IsolatedAsyncioTestCase):
@@ -191,6 +192,8 @@ class ProbeEventTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(receipt["input"], "synthetic_pcm_manual_commit")
         self.assertEqual(receipt["physical_device"], "not_run")
         self.assertEqual(receipt["webrtc_browser"], "not_run")
+        self.assertTrue(all(value >= 0 for value in receipt["latency_ms"].values()))
+        self.assertIn("input_commit_to_first_audio_delta", receipt["latency_ms"])
         self.assertTrue(socket.closed)
         self.assertIsNone(connector.call_args.kwargs["proxy"])
         sent_types = [event["type"] for event in socket.sent]

@@ -56,7 +56,7 @@ function harness({handle, role, leaveThrows = false, cameraCapture} = {}) {
     },
     createTeamCall: config => { options = config; return {join() { media.joins++; return Promise.resolve(); }, leave() { media.leaves++; if (leaveThrows) throw Error('cleanup failed'); return Promise.resolve(); }, syncPresence() {}, dispose() { media.disposed++; }, setMicrophone() {}, setCamera() {}, setScreen() {}, captureFrame: async () => picture()}; },
     createTeamAvatar: config => { config.onStatus({state: 'ready', message: 'Ready'}); return {play(room, value) { avatar.played.push({room, value}); }, unlock: async () => { avatar.unlocked++; return true; }, stop() { avatar.stopped++; }, destroy() { avatar.destroyed++; }}; },
-    createTeamRecorder: config => ({start() { const value = pending(); recordings.push(value); config.onState({state: 'recording', message: 'Recording'}); return value.promise; },
+    createTeamRecorder: config => ({start(options) { const value = {...pending(), options}; recordings.push(value); config.onState({state: 'recording', message: 'Recording'}); return value.promise; },
       cancel() { recordings.at(-1)?.reject(Object.assign(Error('cancelled'), {name: 'AbortError'})); config.onState({state: 'idle'}); },
       stop() { const value = recordings.at(-1); value?.resolve({audio_base64: 'c3ludGhldGlj', mime_type: 'audio/webm'}); config.onState({state: 'idle'}); return value?.promise || Promise.resolve(); }, dispose() {}}),
     createTeamBrowser: () => ({setRoom() {}, dispose() {}}),
@@ -167,14 +167,15 @@ test('disabled remote camera and screen tracks never leave stale visible tiles',
 
 test('Talk to REIGN stops playback and explicitly sends one transcribed question with a spoken reply', async () => {
   const h = harness({handle: (request, {response}) => {
-    if (request.url.endsWith('/transcriptions')) return response({text: 'What should our team do next?'});
+    if (request.url.endsWith('/transcriptions')) return response({text: 'What should our team do next?', transcription_id: '123e4567-e89b-42d3-a456-426614174010'});
     if (request.url.endsWith('/messages')) return response({event: event(1, request.body.text, {data: {...request.body}}), run_id: 'run-1'});
   }}); await h.app.start(); const stopped = h.avatar.stopped;
-  h.click('talkToReign'); assert.ok(h.avatar.stopped > stopped); assert.equal(h.recordings.length, 1); assert.equal(h.node('messageInput').disabled, true);
+  h.click('talkToReign'); assert.ok(h.avatar.stopped > stopped); assert.equal(h.recordings.length, 1); assert.equal(h.recordings[0].options.autoStop, true); assert.equal(h.avatar.unlocked, 1); assert.equal(h.node('messageInput').disabled, true);
   assert.equal(h.requests.filter(item => item.url.endsWith('/messages')).length, 0);
   h.click('stopDictation'); await until(() => h.requests.some(item => item.url.endsWith('/messages')));
   const request = h.requests.find(item => item.url.endsWith('/messages'));
   assert.equal(request.body.text, 'What should our team do next?'); assert.equal(request.body.ask_reign, true); assert.equal(request.body.speak, true);
+  assert.equal(request.body.input_source, 'voice'); assert.equal(request.body.transcription_id, '123e4567-e89b-42d3-a456-426614174010');
   await until(() => h.node('messageInput').value === ''); h.app.destroy();
 });
 
@@ -182,14 +183,43 @@ test('cancelling Talk during transcription cannot submit later or replace an exi
   const held = pending(), h = harness({handle: request => request.url.endsWith('/transcriptions') ? held.promise : undefined}); await h.app.start();
   h.input('messageInput', 'Keep my typed draft'); h.click('talkToReign'); assert.equal(h.recordings.length, 0); assert.equal(h.node('messageInput').value, 'Keep my typed draft');
   h.input('messageInput', ''); h.click('talkToReign'); h.click('stopDictation'); await until(() => h.requests.some(item => item.url.endsWith('/transcriptions')));
-  h.click('cancelDictation'); h.input('messageInput', 'A new typed draft'); held.resolve(h.response({text: 'This cancelled voice turn must not send'}));
+  h.click('cancelDictation'); assert.equal(h.requests.find(item => item.url.endsWith('/transcriptions')).init.signal.aborted, true); h.input('messageInput', 'A new typed draft'); held.resolve(h.response({text: 'This cancelled voice turn must not send'}));
   await new Promise(resolve => setImmediate(resolve)); assert.equal(h.requests.filter(item => item.url.endsWith('/messages')).length, 0); assert.equal(h.node('messageInput').value, 'A new typed draft'); h.app.destroy();
 });
 
 test('Dictate adds a reviewed transcript without sending a room or assistant message', async () => {
   const h = harness({handle: (request, {response}) => request.url.endsWith('/transcriptions') ? response({text: 'A reviewed idea'}) : undefined}); await h.app.start();
-  h.input('messageInput', 'Existing notes'); h.click('dictateMessage'); h.click('stopDictation'); await until(() => h.node('messageInput').value.includes('A reviewed idea'));
+  h.input('messageInput', 'Existing notes'); h.click('dictateMessage'); assert.equal(h.recordings[0].options.autoStop, false); h.click('stopDictation'); await until(() => h.node('messageInput').value.includes('A reviewed idea'));
   assert.equal(h.node('messageInput').value, 'Existing notes\nA reviewed idea'); assert.equal(h.requests.filter(item => item.url.endsWith('/messages')).length, 0); h.app.destroy();
+});
+
+test('a spoken question missing its server receipt stays as a reviewable draft and is never silently typed to REIGN', async () => {
+  const h = harness({handle: (request, {response}) => request.url.endsWith('/transcriptions') ? response({text: 'An unverified voice transcript'}) : undefined});
+  await h.app.start(); h.click('talkToReign'); h.click('stopDictation');
+  await until(() => h.node('dictationStatus').textContent.includes('could not be verified'));
+  assert.equal(h.node('messageInput').value, 'An unverified voice transcript');
+  assert.equal(h.requests.filter(request => request.url.endsWith('/messages')).length, 0); h.app.destroy();
+});
+
+test('an uncertain spoken question reuses its exact message and transcription receipt on explicit retry', async () => {
+  let sends = 0;
+  const h = harness({handle: (request, {response}) => {
+    if (request.url.endsWith('/transcriptions')) return response({text: 'Keep this a spoken turn.', transcription_id: '123e4567-e89b-42d3-a456-426614174011'});
+    if (request.url.endsWith('/messages')) {
+      if (++sends === 1) throw Error('Response lost');
+      return response({event: event(1, request.body.text, {data: request.body}), run_id: 'run-1'});
+    }
+  }});
+  await h.app.start(); h.click('talkToReign'); h.click('stopDictation');
+  await until(() => !h.node('retryMessage').hidden); h.click('retryMessage');
+  await until(() => h.node('messageInput').value === '');
+  const requests = h.requests.filter(request => request.url.endsWith('/messages'));
+  assert.equal(requests.length, 2); assert.deepEqual(requests[0].body, requests[1].body);
+  assert.equal(requests[0].body.input_source, 'voice');
+  assert.equal(h.requests.filter(request => request.url.endsWith('/transcriptions')).length, 1);
+  const row = h.node('eventFeed').children.find(node => node.dataset.eventId === 'event-1');
+  assert.ok(row.children[1].children[0].children.some(node => node.textContent === 'Spoken message'));
+  h.app.destroy();
 });
 
 test('a departed call connection stops that operation without treating room membership as revoked', async () => {
@@ -233,6 +263,7 @@ test('typed Ask requests voice by default and unlocks output synchronously withi
   await until(() => h.requests.some(request => request.url.endsWith('/messages')));
   const request = h.requests.find(request => request.url.endsWith('/messages'));
   assert.equal(request.body.ask_reign, true); assert.equal(request.body.speak, true);
+  assert.equal(request.body.input_source, undefined); assert.equal(request.body.transcription_id, undefined);
   h.app.destroy();
 });
 

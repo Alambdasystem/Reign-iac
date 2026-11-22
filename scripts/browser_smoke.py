@@ -16,7 +16,7 @@ from temporalio.client import Client
 from temporalio.api.enums.v1 import EventType
 from accounts_ui_smoke import accounts_ui_smoke
 from portrait_ui_smoke import portrait_ui_smoke
-from speech_ui_smoke import simulated_team_speech_ui
+from speech_ui_smoke import simulated_team_speech_ui, simulated_team_microphone_ui
 
 TARGET = "https://alambda-forge.onrender.com/"
 AX = "https://ax:10000"
@@ -76,8 +76,12 @@ SIMULATED_VOICE_BOOTSTRAP = r"""
         const marker = 'VERIFIED_SENTENCE_JSON: ';
         const instruction = value.response.instructions || '';
         const text = instruction.includes(marker) ? JSON.parse(instruction.split(marker).at(-1)) : result.answer;
-        fixture.narrations.push({...result, answer: text, metadata: value.response.metadata});
-        queueMicrotask(() => {
+        fixture.narrations.push({...result, answer: text, metadata: value.response.metadata,
+          requestedAt: performance.now()});
+        // A small synthetic transport delay makes an immediately available
+        // expression plan deterministic. A separate held-plan case below
+        // verifies that audio never waits for the plan itself.
+        setTimeout(() => {
           const id = 'simulated-narration-' + ++fixture.sequence;
           fixture.peers.at(-1).outputGain.gain.value = .24;
           this.emit({type:'response.created',response:{id,metadata:value.response.metadata}});
@@ -91,7 +95,7 @@ SIMULATED_VOICE_BOOTSTRAP = r"""
             fixture.finishOutput = null;
           };
           if (!fixture.holdOutput) setTimeout(() => fixture.finishOutput?.(), 30);
-        });
+        }, 100);
       }
     }
     close() { this.readyState = 'closed'; }
@@ -157,11 +161,13 @@ async def simulated_voice_ui(browser, storage_state, origin=AX):
                                       ("\nwindow.__reignVoiceSimulation.denied = true;" if denied else ""))
         state = {"posts": [], "released": 0, "offers": 0, "deletes": 0, "expired": False}
         posted = asyncio.Queue()
+        annotation_requested, annotation_release, annotation_sent = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
         def graph_state():
             turn = len(state["posts"])
             completed = state["released"] >= turn
-            answer = "Synthetic verified greeting. Synthetic verified follow-up." if turn == 1 else "Synthetic verified workspace answer."
+            answer = ("Synthetic verified greeting. Synthetic verified follow-up." if turn == 1 else
+                      "Synthetic verified workspace answer. Synthetic verified spoken follow-up.")
             return {"thread_id": thread, "run_id": f"00000000-0000-4000-8000-{100 + turn:012d}",
                     "status": "completed" if completed else "running", "session_id": None,
                     "events": [{"sequence": 1, "kind": "completed"}] if completed else [],
@@ -190,10 +196,14 @@ async def simulated_voice_ui(browser, storage_state, origin=AX):
                 current = graph_state()
                 assert request.method == "POST" and current["status"] == "completed"
                 assert request.post_data_json == {"run_id": current["run_id"]}
+                if len(state["posts"]) == 2:
+                    annotation_requested.set()
+                    await annotation_release.wait()
                 segments = ([{"text": "Synthetic verified greeting.", "expression": "warm"},
                              {"text": "Synthetic verified follow-up.", "expression": "thoughtful"}]
                             if len(state["posts"]) == 1 else
-                            [{"text": current["answer"], "expression": "concerned"}])
+                            [{"text": "Synthetic verified workspace answer.", "expression": "concerned"},
+                             {"text": "Synthetic verified spoken follow-up.", "expression": "warm"}])
                 result = {"thread_id": thread, "run_id": current["run_id"], "status": "completed",
                           "text": current["answer"], "segments": segments, "speech_status": "ready"}
             elif path == "/api/chat" and request.method == "POST":
@@ -211,6 +221,8 @@ async def simulated_voice_ui(browser, storage_state, origin=AX):
             else:
                 raise AssertionError("Unexpected simulated voice API request: " + request.method + " " + path)
             await route.fulfill(status=200, json=result)
+            if path.endswith('/speech') and annotation_release.is_set():
+                annotation_sent.set()
 
         for pattern in ("/api/voice**", "/api/agent", "/api/chat**"):
             await context.route(origin + pattern, fixture_route)
@@ -292,11 +304,25 @@ async def simulated_voice_ui(browser, storage_state, origin=AX):
                 await expect(page.locator("#sendCommand")).to_be_disabled()
                 assert len(state["posts"]) == 2
                 assert state["posts"][1]["thread_id"] == thread, "voice turns must share the existing graph thread"
+                assert state["posts"][1]["input_source"] == "voice", "spoken turns lost their input modality"
                 state["released"] = 2
+                await asyncio.wait_for(annotation_requested.wait(), 5)
                 await expect(page.locator("#voiceCaption")).to_contain_text("Synthetic verified workspace answer.")
                 await page.wait_for_function(
                     """() => Number(document.querySelector('#reignAvatar').dataset.mouth) > .05 &&
-                        document.querySelector('#reignAvatar').dataset.expression === 'concerned'""")
+                        document.querySelector('#reignAvatar').dataset.expression === 'neutral'""")
+                assert not annotation_release.is_set(), "fixture did not hold the expression response"
+                assert await page.evaluate('window.__reignVoiceSimulation.narrations.length') == 3
+                annotation_release.set()
+                await asyncio.wait_for(annotation_sent.wait(), 5)
+                await page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
+                assert await page.locator('#reignAvatar').get_attribute('data-expression') == 'neutral', \
+                    'A late annotation changed the expression of an already audible sentence'
+                await page.evaluate('window.__reignVoiceSimulation.finishOutput()')
+                await expect(page.locator('#voiceCaption')).to_contain_text('Synthetic verified spoken follow-up.')
+                await page.wait_for_function("""() => Number(document.querySelector('#reignAvatar').dataset.mouth) > .05 &&
+                    document.querySelector('#reignAvatar').dataset.expression === 'warm'""")
+                assert await page.evaluate('window.__reignVoiceSimulation.narrations.length') == 4
                 await expect(page.locator("#sendCommand")).to_be_enabled()
                 await page.locator("#voiceEnd").click()
                 await expect(page.locator("#voiceStart")).to_be_enabled()
@@ -331,6 +357,7 @@ async def simulated_voice_ui(browser, storage_state, origin=AX):
                 assert await page.evaluate("window.__reignVoiceSimulation.narrations.length") == 0
             assert not errors, errors
         finally:
+            annotation_release.set()
             await context.close()
 
     await scenario(False)
@@ -341,6 +368,8 @@ async def simulated_voice_ui(browser, storage_state, origin=AX):
                        "automatic_saved_reign_portrait", "mouth_follows_verified_output_stream",
                        "native_audio_unmuted_playing_and_advancing", "existing_expression_plan_per_spoken_sentence",
                        "next_expression_waits_for_previous_audio_tail",
+                       "spoken_input_provenance_preserved", "speech_starts_before_optional_annotation",
+                       "late_expression_applies_only_to_next_unspoken_sentence",
                        "microphone_does_not_animate_reign", "mouth_stops_after_output_and_call",
                        "portrait_restored_without_setup_after_reload",
                        "start_mute_end_and_track_cleanup", "configured_reload", "owned_graph_cancellation",
@@ -601,6 +630,8 @@ async def main():
             simulated_voice = await simulated_voice_ui(browser, await context.storage_state())
             simulated_team_speech = await simulated_team_speech_ui(
                 browser, await context.storage_state(), AX, EVIDENCE)
+            simulated_team_microphone = await simulated_team_microphone_ui(
+                browser, await context.storage_state(), AX, EVIDENCE)
             accounts_ui = await accounts_ui_smoke(
                 browser, await context.storage_state(), voice_bootstrap=SIMULATED_VOICE_BOOTSTRAP)
             # Leave a session open to check honest expiry after Computer restarts.
@@ -621,6 +652,7 @@ async def main():
                 "live_voice_audio": "not_run_no_provider_key",
                 "simulated_voice_ui": simulated_voice,
                 "simulated_team_speech_ui": simulated_team_speech,
+                "simulated_team_microphone_ui": simulated_team_microphone,
                 "accounts_ui": accounts_ui,
                 "target": TARGET,
             }

@@ -163,6 +163,15 @@ cookie; writes also require same-origin CSRF verification. The OpenAI key never
 reaches AX or the browser. `/api/agent.configured` is the configuration signal;
 `/api/me.capabilities.ai_chat` identifies endpoint support, not provider readiness.
 
+`POST /api/chat` accepts `input_source: "text" | "voice"`, defaulting to text.
+The authenticated voice controller supplies voice for actual microphone turns;
+its generated connection check retains the default. The current graph state
+keeps that source across tool steps and resets it for each new turn. A fixed
+server instruction explains that a spoken request reaches graph reasoning as
+words, so REIGN must not mistake that representation for user typing or invent
+details from a raw waveform she does not receive. The field does not change
+tools, ownership, authorization or confirmation requirements.
+
 Chat uses LangChain ChatOpenAI with the OpenAI Responses API, `store=false`,
 serial tool calls and Workmates' configured model. LangGraph maintains messages,
 conditional model/tool execution, checkpoints, and human-control interrupts.
@@ -326,6 +335,9 @@ owner-only, CSRF-protected graph-run endpoint. Expression text must match the
 server's current verified graph result exactly after whitespace normalization;
 the annotation has no tools and cannot replace graph execution. A stale run is
 rejected, while optional annotation failures retain neutral verified narration.
+Annotation runs alongside private narration and cannot delay its first sentence.
+Late cues apply only to exact unplayed text fully contained in one verified
+annotation span; an already audible sentence keeps its current expression.
 These cues do not supply word/phoneme timestamps or a phoneme-based lip model.
 Audio remains usable if the portrait fails to load. Interruption, call end,
 logout and navigation clear the appropriate playback and renderer state.
@@ -334,6 +346,15 @@ The optional Lab editor keeps custom photos and crop settings in bounded,
 account-scoped storage on that browser. A saved custom experiment restores as
 a still image until neural editing starts. It does not replace REIGN's shared
 identity or sync devices, and closing the editor releases the heavy worker.
+
+Shared Talk turns use a bounded recording with approximately 750 ms silence
+endpointing, manual Finish and a 20-second cap. Actual provider transcription
+issues a short-lived actor/room/exact-text receipt before a new message can carry
+voice origin. Durable receipt lookup precedes ephemeral transcript expiry for
+safe retries. Shared narration releases its first complete verified sentence
+while later clips are generated with reserved memory and bounded deadlines;
+each pending audio read rechecks room authorization after waiting. The browser
+prefetches at most one future clip and follows the same real output clock.
 
 See [TEAM_WORKSPACE.md](TEAM_WORKSPACE.md) for `/team`, employee authorization,
 saved rooms and documents, bounded calls and explicit image sharing, the

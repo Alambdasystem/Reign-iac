@@ -39,7 +39,7 @@ Core-only login and identity operations require service authorization.
 | `POST /api/team/rooms` | `{title}`; return `{room:{id,title,created_at,updated_at}}`. |
 | `GET /api/team/rooms/{room_id}` | `{room,events,documents,presence,last_seq,assistant}` with the most recent bounded event page. |
 | `GET /api/team/rooms/{room_id}/events?after={seq}` | Ordered `{events,last_seq,presence,assistant}`; support bounded `wait` up to 20 seconds. Recheck membership before returning after a wait. |
-| `POST /api/team/rooms/{room_id}/messages` | `{client_message_id,text,ask_reign:false,speak:false,attachment_ids:[]}`; persist before acknowledgement. Idempotency prevents duplicate turns. Return `{event,run_id}`. |
+| `POST /api/team/rooms/{room_id}/messages` | `{client_message_id,text,ask_reign:false,speak:false,attachment_ids:[]}`; optional `input_source:"voice"` requires an exact matching, caller- and room-bound `transcription_id`. Omitted source defaults to text. Persist before acknowledgement; idempotency prevents duplicate turns. Return `{event,run_id}`. |
 | `POST /api/team/rooms/{room_id}/presence` | `{connection_id,in_call:false,microphone:false,camera:false,screen:false}`; heartbeat with a 30-second lease. Response `{presence}`. |
 | `DELETE /api/team/rooms/{room_id}/presence/{connection_id}` | Release this user's connection, media presence and control lease only. |
 | `POST /api/team/rooms/{room_id}/documents` | `{title,content,client_document_id}`; create Markdown document. |
@@ -48,9 +48,12 @@ Core-only login and identity operations require service authorization.
 
 Room events have `{seq,id,type,user_id,display_name,created_at,data}`. Types are
 `message`, `assistant_started`, `assistant_message`, `assistant_error`, and
-`document_saved`. Message data includes `text` and `client_message_id`; assistant
+`document_saved`. Message data includes `text`, `client_message_id`, and the
+verified `input_source` (`text` or `voice`); assistant
 messages can include `segments:[{text,expression,audio_id?}]`, `audio_id`, document
-IDs and `speech_status` (`ready`, `unavailable`, `not_requested`).
+IDs and `speech_status` (`ready`, `streaming`, `unavailable`, `not_requested`).
+`streaming` means the first verified sentence is available while later bounded
+clips may still be generating; it does not mean continuous microphone input.
 Expressions are bounded choices (`neutral`, `warm`, `thoughtful`, `concerned`).
 The assistant context is reconstructed only from that room's authorized history.
 One assistant run is active per room, with a bounded global model-call budget.
@@ -100,10 +103,28 @@ bytes through the existing vision model. The submitter's account identity does
 not establish who is pictured, and presence flags do not establish image content.
 
 `POST /api/team/rooms/{room_id}/transcriptions` accepts a bounded recording made
-by an explicit Dictate or Talk to REIGN action. Dictate puts text into the composer
-for review; Talk to REIGN submits that one requested turn after Stop. There is no
-continuous listening to the group. Camera/screen content and recordings are not
-written to the durable conversation archive.
+by an explicit Dictate or Talk to REIGN action and returns `{text,transcription_id}`.
+The receipt expires after five minutes, is limited to the requesting actor and
+room, and authorizes only the exact returned words as a spoken input. It does
+not authorize a tool or change room permissions. The room prompt and saved event
+retain the voice source, so rendering a transcript does not imply typed input.
+Edited drafts use the ordinary text source. An uncertain send retries the same
+message ID and receipt; no automatic rerecording or resubmission occurs.
+
+Dictate puts text into the composer for review and remains manually completed.
+Talk starts one explicit microphone capture and submits it after roughly 750 ms
+of trailing quiet, once sustained input energy has been detected. A brief input
+click or initial silence cannot arm completion. Hysteresis preserves quieter
+subsequent syllables; shorter pauses stay in the same recording. The detector
+uses a local AudioContext analyser without a speaker connection. Suspension or
+missing samples cannot be treated as silence, and unavailable analysis falls
+back to the visible Finish control and twenty-second limit. Sound-level
+endpointing is not semantic VAD and cannot distinguish every long thinking pause
+from a completed question. The existing byte/time bounds remain in force.
+Cancel, room change, logout and page exit release owned tracks, close the
+analyser and abort transcription; late permission/results cannot submit a turn.
+There is no continuous listening to the group. Camera/screen content and raw
+recordings are not written to the durable conversation archive.
 
 Public STUN helps discover direct network routes. No TURN relay or SFU is
 provisioned. Four human call connections are supported; restricted networks can
@@ -129,9 +150,22 @@ text, deliberately shared image bytes, structured sentence expressions and
 requested Markdown documents. The same configured Realtime provider narrates
 each returned sentence. Narration has no tools, is checked against the requested
 sentence's transcript, and is stored only in a bounded ten-minute audio cache.
-Audio failure preserves the successful text/document result with an explicit
-unavailable status. This is bounded turn-based speech, not streaming duplex
-conversation or phoneme prediction. The browser samples the decoded PCM envelope
+The server reserves worst-case cache space before speech generation, limits
+concurrent speech producers, and exposes the first clip only after its complete
+transcript matches the sentence. Later clips are generated on the same bounded
+provider connection. A protected room audio request can wait up to 42 seconds
+for its reserved clip and rechecks membership before returning the bytes. A
+failed pending clip cannot appear as successful empty audio. Failure before the
+first clip preserves text/documents with `unavailable`; failure later preserves
+earlier verified clips and makes the remaining audio request fail honestly.
+
+The browser prefetches and decodes at most one future clip while the current
+clip plays. A pending clip is shown as buffering, and its expression never
+advances until actual playback starts. Later-clip failure resets the face and
+offers an explicit retry of only unheard segments; it does not rerun room tools
+or automatically replay prior sentences. Cancellation aborts pending audio
+requests and fences late decoding. This is bounded turn-based speech, not
+streaming duplex conversation or phoneme prediction. The browser samples the decoded PCM envelope
 at its audio output position and advances sentence expressions on the same
 clock. Where available, Web Audio output timestamps account for device latency;
 the fallback is bounded by the context's reported time and latency. A suspended

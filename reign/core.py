@@ -62,6 +62,7 @@ async def lifespan(app: FastAPI):
         team_media = TeamMedia()
         team_browser = TeamBrowser(team)
         team.attachment_validator = team_media.validate_attachments
+        team.transcription_validator = team_media.validate_transcription
         try:
             configuration()
         except VoiceError:
@@ -90,7 +91,7 @@ async def lifespan(app: FastAPI):
                 if team_browser is not None:
                     await team_browser.shutdown()
                 if team_media is not None:
-                    team_media.close()
+                    await team_media.aclose()
                 await app.state.agent.shutdown()
     finally:
         await app.state.http.aclose()
@@ -357,6 +358,7 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     thread_id: uuid.UUID | None = None
     session_id: uuid.UUID | None = None
+    input_source: Literal["text", "voice"] = "text"
 
 
 @app.get("/api/agent", dependencies=[Depends(authorize)])
@@ -378,7 +380,8 @@ async def voice_offer(request: Request):
 @app.post("/api/chat", dependencies=[Depends(authorize)])
 async def chat(data: ChatRequest):
     return app.state.agent.submit(data.message, str(data.thread_id) if data.thread_id else None,
-                                  str(data.session_id) if data.session_id else None)
+                                  str(data.session_id) if data.session_id else None,
+                                  input_source=data.input_source)
 
 
 @app.get("/api/chat/{tid}", dependencies=[Depends(authorize)])

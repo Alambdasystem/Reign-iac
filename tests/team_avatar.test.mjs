@@ -10,7 +10,7 @@ const code = fs.readFileSync(new URL('../services/ax/team-avatar.js', import.met
   .replace(/^import .*;$/gm, '').replace(/^export \{.*;$/gm, '').replaceAll('export function ', 'function ');
 const flush = () => new Promise(resolve => setImmediate(resolve));
 function deferred() { let resolve; const promise = new Promise(r => resolve = r); return {promise, resolve}; }
-function harness({hold = false, holdPortrait = false, portraitFails = false, holdDecode = false, resumeFails = 0, outputLatency = 0} = {}) {
+function harness({hold = false, holdPortrait = false, portraitFails = false, holdDecode = false, resumeFails = 0, outputLatency = 0, failCall} = {}) {
   const sources = [], calls = [], statuses = [], frames = new Map(), pending = deferred();
   const portraitPending = deferred(), decodePending = deferred(), contexts = [], timers = new Map();
   let now = 1000;
@@ -52,7 +52,7 @@ function harness({hold = false, holdPortrait = false, portraitFails = false, hol
   vm.runInContext(portraitCode, realm);
   vm.runInContext(code, realm);
   const player = realm.createTeamAvatar({canvas, onStatus: value => statuses.push(value),
-    api: async (...args) => { calls.push(args); if (hold) await pending.promise; return {size: 1000, arrayBuffer: async () => new ArrayBuffer(1000)}; }});
+    api: async (...args) => { calls.push(args); if (failCall?.(calls.length)) throw Error('Clip unavailable'); if (hold) await pending.promise; return {size: 1000, arrayBuffer: async () => new ArrayBuffer(1000)}; }});
   function advance(ms, {audio = true} = {}) {
     now += ms;
     for (const context of contexts) if (audio && context.state === 'running') context.currentTime += ms / 1000;
@@ -203,7 +203,8 @@ test('a second expression starts at its sentence audio cue and both buffers comp
   const h = harness(); await h.player.unlock();
   const second = {text: 'A concerned sentence.', expression: 'concerned', audio_id: '123e4567-e89b-42d3-a456-426614174001'};
   const play = h.player.play('room', {data: {speech_status: 'ready', segments: [event.data.segments[0], second]}});
-  await flush(); h.advance(400);
+  await flush(); assert.equal(h.calls.length, 2, 'the next clip loads before this clip ends');
+  assert.equal(h.sources.length, 1, 'prefetching cannot start the next audio early'); h.advance(400);
   assert.equal(h.canvas.dataset.expression, 'warm');
   h.advance(650); await flush();
   assert.equal(h.sources.length, 2);
@@ -214,6 +215,35 @@ test('a second expression starts at its sentence audio cue and both buffers comp
   assert.equal(h.calls.length, 2); assert.equal(h.sources.length, 2);
   assert.equal(h.canvas.dataset.expression, 'neutral'); assert.equal(h.canvas.dataset.speaking, 'false');
   h.player.destroy();
+});
+
+test('progressive replies hold only one future clip and abort its fetch when the room is left', async () => {
+  const h = harness(); await h.player.unlock();
+  const segments = [event.data.segments[0],
+    {...event.data.segments[0], audio_id: '123e4567-e89b-42d3-a456-426614174001'},
+    {...event.data.segments[0], audio_id: '123e4567-e89b-42d3-a456-426614174002'}];
+  const play = h.player.play('room', {data: {speech_status: 'streaming', segments}}); await flush();
+  assert.equal(h.calls.length, 2); assert.equal(h.sources.length, 1);
+  assert.equal(h.calls[1][3].timeout, 45000, 'a later clip may still be generating');
+  h.advance(400); assert.equal(h.calls.length, 2);
+  h.advance(650); await flush(); assert.equal(h.calls.length, 3); assert.equal(h.sources.length, 2);
+  h.player.stop(); await play; assert.equal(h.calls[2][3].signal.aborted, true);
+  assert.equal(h.sources.length, 2); assert.equal(h.canvas.dataset.speaking, 'false'); h.player.destroy();
+});
+
+test('a later clip failure stops the face and retries only unheard speech without replaying a room action', async () => {
+  const h = harness({failCall: index => index === 2}); await h.player.unlock();
+  const second = {...event.data.segments[0], expression: 'concerned', audio_id: '123e4567-e89b-42d3-a456-426614174001'};
+  const play = h.player.play('room', {data: {speech_status: 'streaming', segments: [event.data.segments[0], second]}});
+  await flush(); h.advance(1050); await play;
+  assert.equal(h.sources.length, 1); assert.equal(h.canvas.dataset.speaking, 'false');
+  assert.equal(h.canvas.dataset.expression, 'neutral'); assert.equal(h.statuses.at(-1).state, 'error');
+  assert.equal(h.statuses.at(-1).retryAvailable, true);
+  await h.player.unlock(); await flush();
+  assert.equal(h.calls.length, 3); assert.equal(h.calls[2][0], h.calls[1][0]); assert.notEqual(h.calls[2][0], h.calls[0][0]);
+  assert.ok(h.calls.every(args => args[1] === 'GET' && args[0].includes('/audio/')));
+  h.advance(400); assert.equal(h.canvas.dataset.expression, 'concerned');
+  h.player.stop(); h.player.destroy();
 });
 
 test('an autoplay denial keeps one pending reply and a later listening gesture can enable it', async () => {

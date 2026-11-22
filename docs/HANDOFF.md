@@ -1,3 +1,40 @@
+## Current implementation: faster microphone turns and progressive speech (2026-11-21)
+
+Talk to REIGN now starts an explicit microphone capture and automatically finishes
+after about 750 ms of quiet following sustained speech. Manual Finish and the
+20-second cap remain. This is bounded recording with endpoint detection, not a
+continuous audio stream to the room assistant. Cancel, room changes and logout
+release owned tracks and abort transcription. Recording stops REIGN's local output
+before opening the microphone to avoid recording her reply.
+
+Shared voice messages carry a five-minute server-issued transcript receipt bound
+to the member, room and exact words. The archive and assistant context preserve
+`input_source: voice`; typed messages retain text origin. Durable duplicate lookup
+comes before receipt expiry checks, so an uncertain submission can confirm its
+original result without running actions again. Private voice similarly sends an
+explicit input source through the owner-authorized graph route, applying it to
+the current turn and preserving all existing action permissions.
+
+Private voice uses a 450 ms provider silence window and 250 ms graph polling.
+Optional expression annotation runs alongside verified narration instead of
+blocking it. Valid late expression spans can label only exact unplayed text;
+an audible sentence never changes its cue midway through playback.
+
+Shared speech publishes its first complete transcript-verified sentence while a
+bounded producer generates later sentences on the same provider connection.
+Pending audio IDs wait behind the existing member-authorized audio route, with
+membership checked again before delivery. Worst-case memory reservations, two
+producer slots and deadlines bound this work; shutdown cancels and drains it.
+The browser prefetches only the next clip, retains the audio output clock for
+mouth and expression cues, and offers retry of unheard clips after a partial
+failure. Microphone transcription retains the aggregate 12/minute and 200/day
+limits; a single member can use that same minute allowance.
+
+New tests cover actual recorder/audio browser primitives with synthetic media,
+deliberately delayed speech and expression providers, exact spoken provenance,
+pending-clip authorization and cancellation. These source notes are not a live
+deployment or physical-device latency receipt; keep those results separate.
+
 ## Prepared follow-up: Render to Tailscale SSH (2026-11-21)
 
 James requested joining his existing Render service to his existing tailnet to

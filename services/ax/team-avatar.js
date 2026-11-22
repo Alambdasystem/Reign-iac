@@ -37,7 +37,8 @@ export function createTeamAvatar({canvas, api, onStatus = () => {}}) {
   let speaking = false, loadingAudio = false;
   const resumeWaiters = new Set();
   function status(state, message) {
-    if (!dead) onStatus({state, message, audioEnabled: !!(unlocked && audioContext?.state === 'running')});
+    if (!dead) onStatus({state, message, audioEnabled: !!(unlocked && audioContext?.state === 'running'),
+      retryAvailable: !!(pending && unlocked && audioContext?.state === 'running')});
   }
   function playbackState() {
     canvas.dataset.audioState = audioContext?.state || 'locked';
@@ -166,19 +167,35 @@ export function createTeamAvatar({canvas, api, onStatus = () => {}}) {
     }
     const current = revision;
     requestAbort = new AbortController(); loadingAudio = true;
-    status('loading', 'Preparing REIGN’s voice…');
+    const abort = requestAbort, context = audioContext;
+    let index = 0;
+    const load = async segment => {
+      if (!/^[a-f0-9-]{36}$/.test(segment?.audio_id || '')) return null;
+      const blob = await api('/api/team/rooms/' + encodeURIComponent(roomId) + '/audio/' + encodeURIComponent(segment.audio_id),
+        'GET', undefined, {responseType: 'blob', signal: abort.signal, timeout: 45000});
+      if (dead || current !== revision) return null;
+      if (blob.size > 1_500_000) throw Error('audio limit');
+      const buffer = await context.decodeAudioData(await blob.arrayBuffer());
+      if (dead || current !== revision) return null;
+      return {buffer, envelope: pcmEnvelope(buffer)};
+    };
+    // One bounded lookahead removes download/decode gaps between sentences.
+    // Capture rejection immediately even if this turn is cancelled before its
+    // pending clip is consumed; no stale fetch may create a playback source.
+    const prepare = segment => load(segment).then(value => ({value}), error => ({error}));
+    let prepared = prepare(segments[0]);
+    status('buffering', 'Preparing REIGN’s voice…');
     try {
-      for (let index = 0; index < segments.length; index++) {
+      for (; index < segments.length; index++) {
         const segment = segments[index];
         if (dead || current !== revision) return;
-        if (!/^[a-f0-9-]{36}$/.test(segment.audio_id || '')) continue;
-        const blob = await api('/api/team/rooms/' + encodeURIComponent(roomId) + '/audio/' + encodeURIComponent(segment.audio_id),
-          'GET', undefined, {responseType: 'blob', signal: requestAbort.signal});
+        if (index > 0) status('buffering', 'Preparing REIGN’s next sentence…');
+        const result = await prepared;
         if (dead || current !== revision) return;
-        if (blob.size > 1_500_000) throw Error('audio limit');
-        const buffer = await audioContext.decodeAudioData(await blob.arrayBuffer());
-        if (dead || current !== revision) return;
-        const envelope = pcmEnvelope(buffer);
+        if (result.error) throw result.error;
+        prepared = index + 1 < segments.length ? prepare(segments[index + 1]) : null;
+        if (!result.value) continue;
+        const {buffer, envelope} = result.value;
         if (!await waitUntilRunning(current)) return;
         source = audioContext.createBufferSource(); source.buffer = buffer;
         source.connect(audioContext.destination);
@@ -202,7 +219,11 @@ export function createTeamAvatar({canvas, api, onStatus = () => {}}) {
       }
       if (current === revision) { portrait.stop(); status('ready', 'REIGN is ready.'); }
     } catch {
-      if (!dead && current === revision) { endAudio(); portrait.stop(); status('error', 'Speech is unavailable or expired. The written reply is saved.'); }
+      if (!dead && current === revision) {
+        endAudio(); portrait.stop();
+        pending = {roomId, event: {data: {...data, segments: segments.slice(index)}}};
+        status('error', 'REIGN’s remaining speech could not load. Tap Retry REIGN audio to try again. The written reply is saved.');
+      }
     } finally {
       if (current === revision) { loadingAudio = false; requestAbort = null; }
     }

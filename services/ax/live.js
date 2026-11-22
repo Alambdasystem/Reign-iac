@@ -506,7 +506,8 @@ async function startChatRun(text,{owner='typed',signal,onStatus,connectionCheck=
     if(job.aborted||job.cancelled)return;
     const result=accountId?
       await api('/api/accounts/'+encodeURIComponent(accountId)+'/use','POST',{thread_id:threadId,session_id:sid}):
-      await api('/api/chat','POST',{message:text,thread_id:threadId,session_id:sid});
+      await api('/api/chat','POST',{message:text,thread_id:threadId,session_id:sid,
+        ...(owner!=='typed'&&!connectionCheck?{input_source:'voice'}:{})});
     job.threadId=result.thread_id;
     if(job.aborted||job.cancelled||generation!==chatGeneration)return;
     threadId=result.thread_id;rememberChat();chatRun=null;
@@ -562,7 +563,7 @@ async function pollChat({restore=false}={}){
     refreshControls();
     if(['completed','failed','cancelled'].includes(chatState)){
       settleChatJob(chatPending,result);detachExpiredConversation();notifyChatWaiters();
-    }else if(chatState==='running')chatPoll=setTimeout(pollChat,750);
+    }else if(chatState==='running')chatPoll=setTimeout(pollChat,chatPending?.owner&&chatPending.owner!=='typed'?250:750);
   }catch(error){
     if(threadId!==activeThread||generation!==chatGeneration)return;
     if(error.status===404){
@@ -610,20 +611,14 @@ async function runVoiceTurn(message,options){
   const result=await startChatRun(message,{...options,owner:options.voiceCallId});
   if(options.signal?.aborted)throw abortError();
   if(!validSessionId(result?.thread_id)||!validSessionId(result?.run_id)||!['completed','failed','paused'].includes(result.status))return result;
-  options.onStatus?.('preparing_speech');
-  try{
-    // Core resolves this exact graph run and labels its verified text. The
-    // browser supplies no answer text and cannot turn annotations into actions.
-    const speech=await api('/api/chat/'+encodeURIComponent(result.thread_id)+'/speech','POST',
-      {run_id:result.run_id},{signal:options.signal});
-    if(options.signal?.aborted)throw abortError();
-    return {...result,speech};
-  }catch(error){
-    if(options.signal?.aborted||error.name==='AbortError')throw abortError();
-    if(error.status===401||error.status===403)throw error;
-    // Optional expression metadata cannot suppress the verified spoken reply.
-    return result;
-  }
+  // Start optional expression work alongside verified narration. Waiting for
+  // this second model used to add its whole deadline to every spoken answer.
+  // Core still resolves the exact run; neither text nor actions come from the
+  // annotation. The voice controller validates and fences the eventual cues.
+  const speechPromise=api('/api/chat/'+encodeURIComponent(result.thread_id)+'/speech','POST',
+    {run_id:result.run_id},{signal:options.signal}).then(speech=>options.signal?.aborted?null:speech,
+      ()=>null);
+  return {...result,speechPromise};
 }
 async function cancelVoiceTurn(owner){if(authenticated&&accountRole==='owner'&&chatPending?.owner===owner)await clearChat(owner)}
 $('cancelAgent').onclick=async()=>{try{if(voiceUi.active)await voiceController.stop({reason:'Call ended. Microphone off.'});await clearChat()}catch(error){entry('AGENT',error.message,true)}};

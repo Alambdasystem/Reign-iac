@@ -508,7 +508,8 @@ class TeamStore:
             for row in rows:
                 event = self._read_event(key, row)
                 messages.append({"role": "assistant" if event["type"] == "assistant_message" else "user", "text": event["data"]["text"],
-                                 "user_id": event["user_id"], "display_name": event["display_name"], "created_at": event["created_at"]})
+                                 "user_id": event["user_id"], "display_name": event["display_name"], "created_at": event["created_at"],
+                                 "input_source": event["data"].get("input_source", "text") if event["type"] == "message" else "assistant"})
             return {"workspace": {"id": WORKSPACE_ID, "name": WORKSPACE_NAME}, "room": room, "messages": messages,
                     "documents": self._documents(db, key, room_id), "run_id": run_id}
 
