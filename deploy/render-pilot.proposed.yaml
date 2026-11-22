@@ -109,7 +109,7 @@ services:
   # Optional outbound tailnet client. Enable only with the tested Core image,
   # verified tailnet policy and a privately configured enrollment key.
   - key: REIGN_TAILSCALE_ENABLED
-    value: '1'
+    value: '0'
   - key: REIGN_TAILSCALE_HOSTNAME
     value: render-reign-core
   - key: REIGN_TAILSCALE_TAGS
@@ -134,8 +134,65 @@ services:
     value: disk
   - key: CREDENTIAL_CHANNEL_KEY
     generateValue: true
-  # Core derives both private endpoints from the referenced host variables.
-  dockerCommand: ''
+  # Temporary metadata-only diagnostic for the rejected Tailscale storage check.
+  # Reuse the tested image and original validators; never start the tailnet client.
+  # Remove this override after diagnosing the fixed metadata and testing the repair.
+  dockerCommand: |-
+    /bin/sh -c exec python -c 'import json
+    import os
+    import stat
+    import sys
+    
+    os.environ.pop("REIGN_TAILSCALE_AUTHKEY", None)
+    os.environ["REIGN_TAILSCALE_ENABLED"] = "0"
+    from reign import tailscale_runtime as ts
+    
+    def emit(event, **fields):
+        print(json.dumps({"event": event, **fields}, sort_keys=True), flush=True)
+    
+    emit("tailscale_storage_identity", euid=os.geteuid(), egid=os.getegid(),
+         groups=sorted(os.getgroups()))
+    original = ts._private_object
+    stage = "state_lock"
+    checks = 0
+    
+    def checked(info, directory=False):
+        global checks
+        checks += 1
+        try:
+            return original(info, directory=directory)
+        except ts.TailscaleError:
+            caller = sys._getframe(1)
+            label = {"_state_lock": "state_lock", "_check_tree": "state_tree",
+                     "_runtime_directory": "runtime_directory"}.get(
+                         caller.f_code.co_name, "other")
+            kind = ("directory" if stat.S_ISDIR(info.st_mode) else
+                    "regular" if stat.S_ISREG(info.st_mode) else
+                    "symlink" if stat.S_ISLNK(info.st_mode) else
+                    "socket" if stat.S_ISSOCK(info.st_mode) else "other")
+            emit("tailscale_storage_rejected", stage=stage, check=checks,
+                 caller=label, line=caller.f_lineno, uid=info.st_uid,
+                 gid=info.st_gid, mode=format(stat.S_IMODE(info.st_mode), "04o"),
+                 kind=kind, nlink=info.st_nlink, directory_expected=bool(directory))
+            raise
+    
+    ts._private_object = checked
+    try:
+        with ts._state_lock():
+            stage = "runtime_directory"
+            ts._runtime_directory()
+        emit("tailscale_storage_result", result="passed", checks=checks)
+    except ts.TailscaleError:
+        emit("tailscale_storage_result", result="rejected", stage=stage, checks=checks)
+    except OSError as error:
+        emit("tailscale_storage_result", result="os_error", stage=stage,
+             checks=checks, errno=error.errno)
+    finally:
+        ts._private_object = original
+    
+    emit("tailscale_storage_handoff", tailscale_enabled=False)
+    os.execvp("uvicorn", ["uvicorn", "reign.core:app", "--host", "0.0.0.0",
+                         "--port", os.environ.get("PORT") or "10000"])'
   # Predeploy has no mounted disk. Require private voice/graph acceptance,
   # the live scoped-worker protocol, and synthetic team vision/document/speech.
   # Only this verification process disables disk features; runtime stays durable.
