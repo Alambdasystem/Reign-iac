@@ -189,6 +189,8 @@ async def camera_check(browser, room_id, room_title, passed, errors, receipt):
         await expect(page.locator("#cameraDialog")).to_be_hidden()
         await page.locator(f'[data-room-id="{room_id}"]').click()
         await expect(page.locator("#roomTitle")).to_have_text(room_title)
+        await expect(page.locator("#roomView")).to_be_visible()
+        await expect(page.locator("#messageInput")).to_be_enabled()
         prior_device_requests = await device_summary()
         passed("T18 room transition closes the preview and stops owned camera tracks without joining a call")
 
