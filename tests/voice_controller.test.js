@@ -532,6 +532,85 @@ test('sentence expressions follow verified playback and queue only after the rea
   assert.equal(narrations(h).length, 2, 'interruption must discard the rest of the speech queue');
 });
 
+test('slow expression annotations cannot delay exact narration or change a sentence after its audible onset', async t => {
+  const complete=annotatedAnswer(), annotation=deferred();
+  const result={...complete,speech:undefined,speechPromise:annotation.promise};
+  const remote=stream(track('reign-output'));
+  const h=await harness(t,{AudioContext:MeterAudioContext,runTurn:async()=>result}).connect();
+  const readyAt=h.clock.now();
+  const first=await beginNarration(h,remote);
+  assert.equal(h.clock.now()-readyAt,0,'optional model work adds no timer wait before narration preparation');
+  assert.ok(first.response.instructions.endsWith(JSON.stringify(complete.speech.segments[0].text)));
+  assert.equal(first.response.metadata.reign_voice_segment_count,'2');
+  h.clock.advance(66);
+  assert.equal(h.outputStates.at(-1).expression,'neutral');
+  assert.ok(h.outputLevels.at(-1)>0,'the verified sentence is already playing while annotation is unresolved');
+  annotation.resolve(complete.speech);await settle();h.clock.advance(66);
+  assert.equal(h.outputStates.at(-1).expression,'neutral','a late cue never changes an already audible sentence');
+  h.channel.receive({type:'response.done',response:{id:'first-spoken-response',status:'completed',output:[]}});
+  h.channel.receive({type:'output_audio_buffer.stopped',response_id:'first-spoken-response'});
+  remote.silent=true;h.clock.advance(250);
+  assert.equal(narrations(h).length,2);
+  const second=narrations(h)[1];
+  h.channel.receive({type:'response.created',response:{id:'second-spoken-response',metadata:second.response.metadata}});
+  h.channel.receive({type:'output_audio_buffer.started',response_id:'second-spoken-response'});
+  remote.silent=false;await settle();h.clock.advance(66);
+  assert.equal(h.outputStates.at(-1).expression,'thoughtful','a matching future sentence still receives its model expression');
+  assert.equal(h.turnCalls.length,1,'annotation scheduling never repeats the graph action');
+});
+
+test('expression metadata arriving before audible onset applies without delaying audio preparation', async t => {
+  const complete=annotatedAnswer(), annotation=deferred();
+  const remote=stream(track('reign-output'));remote.silent=true;
+  const h=await harness(t,{AudioContext:MeterAudioContext,runTurn:async()=>({...complete,speech:undefined,speechPromise:annotation.promise})}).connect();
+  await beginNarration(h,remote);h.clock.advance(66);
+  annotation.resolve(complete.speech);await settle();
+  remote.silent=false;h.clock.advance(66);
+  assert.equal(h.outputStates.at(-1).expression,'warm');
+  assert.equal(h.outputStates.at(-1).expressionSource,'model');
+});
+
+test('a grouped annotation labels only future sentences fully contained in its verified span', async t => {
+  const complete=annotatedAnswer(),annotation=deferred();
+  const remote=stream(track('reign-output'));
+  const h=await harness(t,{AudioContext:MeterAudioContext,runTurn:async()=>({...complete,speech:undefined,speechPromise:annotation.promise})}).connect();
+  await beginNarration(h,remote);h.clock.advance(66);
+  assert.equal(h.outputStates.at(-1).expression,'neutral');
+  annotation.resolve({...complete.speech,segments:[{text:complete.answer,expression:'concerned'}]});
+  await settle();h.clock.advance(66);
+  assert.equal(h.outputStates.at(-1).expression,'neutral','the first sentence keeps its already audible neutral cue');
+  h.channel.receive({type:'response.done',response:{id:'first-spoken-response',status:'completed',output:[]}});
+  h.channel.receive({type:'output_audio_buffer.stopped',response_id:'first-spoken-response'});
+  remote.silent=true;h.clock.advance(250);
+  assert.equal(narrations(h).length,2);
+  const next=narrations(h)[1];
+  h.channel.receive({type:'response.created',response:{id:'second-spoken-response',metadata:next.response.metadata}});
+  h.channel.receive({type:'output_audio_buffer.started',response_id:'second-spoken-response'});
+  remote.silent=false;await settle();h.clock.advance(66);
+  assert.equal(h.outputStates.at(-1).expression,'concerned','the second sentence is fully inside the verified grouped tone span');
+  assert.equal(h.outputStates.at(-1).expressionSource,'model');
+  assert.equal(h.turnCalls.length,1);
+});
+
+test('interruption fences late expression plans and sentences crossing tone spans retain neutral cues', async t => {
+  for(const interrupted of [false,true]){
+    const complete=annotatedAnswer(),annotation=deferred();
+    const remote=stream(track('reign-output'));remote.silent=true;
+    const h=await harness(t,{AudioContext:MeterAudioContext,runTurn:async()=>({...complete,speech:undefined,speechPromise:annotation.promise})}).connect();
+    await beginNarration(h,remote);
+    if(interrupted)h.channel.receive({type:'input_audio_buffer.speech_started'});
+    const differentlySegmented={...complete.speech,segments:[
+      {text:'The verified',expression:'warm'},
+      {text:'first sentence. The verified second sentence.',expression:'concerned'}]};
+    annotation.resolve(interrupted?complete.speech:differentlySegmented);await settle();
+    remote.silent=false;h.clock.advance(66);
+    assert.equal(h.outputStates.at(-1).expression,'neutral');
+    assert.equal(h.outputStates.at(-1).expressionSource,'neutral');
+    if(interrupted)assert.equal(h.outputStates.at(-1).active,false);
+    assert.equal(narrations(h).length,1);
+  }
+});
+
 test('buffering or a frozen native media clock stops portrait motion and cannot silently advance a sentence', async t => {
   const remote = stream(track('reign-output'));
   const h = await harness(t, {AudioContext:MeterAudioContext,runTurn:async () => annotatedAnswer()}).connect();
@@ -572,7 +651,7 @@ test('a malformed or mismatched expression plan falls back to the original verif
   const result = annotatedAnswer(); result.speech.segments[0].text = 'Unverified replacement text.';
   const h = await harness(t, {AudioContext:MeterAudioContext,runTurn:async () => result}).connect();
   await beginNarration(h, stream(track('reign-output'))); h.clock.advance(66);
-  assert.equal(narrations(h)[0].response.metadata.reign_voice_segment_count, '1');
+  assert.equal(narrations(h)[0].response.metadata.reign_voice_segment_count, '2');
   assert.equal(narrations(h)[0].response.instructions.includes('Unverified replacement text'), false);
   assert.equal(h.audio.muted, false); assert.ok(h.outputLevels.at(-1) > 0);
   assert.equal(h.outputStates.at(-1).expressionSource, 'neutral');

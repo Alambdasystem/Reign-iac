@@ -32,7 +32,7 @@
     let statsBusy = false, lastBytes = 0, lastEnergy = 0, lastAudioTime = 0;
     let measuredOutput = 0, meterAudioTime = 0, lastMediaAdvance = 0;
     let mediaWaiting = false, outputStartedAt = 0;
-    let speech = null, speechRequest = 0, tailQuietSince = null, speechNotice = null;
+    let speech = null, speechRequest = 0, tailQuietSince = null, speechNotice = null, currentSpeechPlan = null;
     let state = {
       phase: 'idle', active: false, status: 'Start voice to talk with REIGN.', muted: false,
       speakerBlocked: false, model: null, queueLength: 0, delegating: false,
@@ -247,21 +247,79 @@
       if (result?.status === 'paused') return 'The task is paused while you control the browser. Return control, then press Resume.';
       return canonicalText(result?.answer || result?.error) || 'No verified answer is available.';
     }
-    function speechPlan(result, turn) {
-      const plan = result?.speech, text = verifiedText(result);
+    function validSpeechPlan(result, plan) {
+      const text = verifiedText(result);
       const expressions = new Set(['neutral','warm','thoughtful','concerned']);
-      const valid = plan?.speech_status === 'ready' && typeof result.thread_id === 'string' &&
+      return plan?.speech_status === 'ready' && typeof result?.thread_id === 'string' &&
         plan.thread_id === result.thread_id && plan.run_id === result.run_id && plan.status === result.status &&
         plan.text === text && Array.isArray(plan.segments) && plan.segments.length > 0 && plan.segments.length <= 4 &&
         plan.segments.every(item => item && typeof item.text === 'string' && item.text.length > 0 &&
           item.text.length <= 400 && canonicalText(item.text) === item.text && expressions.has(item.expression)) &&
         plan.segments.map(item => item.text).join(' ') === text;
-      return {turn, index: 0, source: valid ? 'model' : 'neutral',
-        segments: valid ? plan.segments.map(item => ({text:item.text,expression:item.expression})) : [{text:null,expression:'neutral'}]};
+    }
+    function neutralSegments(text) {
+      if (!text || text.length > 1600) return [{text:null,expression:'neutral',source:'neutral'}];
+      // Deterministic boundaries let audio preparation start before the
+      // optional expression model finishes, without paraphrasing the answer.
+      let sentences;
+      try { sentences = [...new Intl.Segmenter(undefined,{granularity:'sentence'}).segment(text)].map(item=>item.segment.trim()); }
+      catch (_) { sentences = [text]; }
+      const segments=[];
+      for (let sentence of sentences) {
+        while (sentence.length > 400) {
+          const end=sentence.lastIndexOf(' ',400);
+          if(end<=0)return [{text:null,expression:'neutral',source:'neutral'}];
+          segments.push(sentence.slice(0,end)); sentence=sentence.slice(end+1);
+        }
+        if(sentence)segments.push(sentence);
+      }
+      // Retain the existing four-segment bound, merging only exact adjacent
+      // text. No guessed expression or shortened answer enters this fallback.
+      while(segments.length>4){
+        const index=segments.findIndex((part,i)=>i+1<segments.length&&part.length+1+segments[i+1].length<=400);
+        if(index<0)return [{text:null,expression:'neutral',source:'neutral'}];
+        segments.splice(index,2,segments[index]+' '+segments[index+1]);
+      }
+      if(segments.join(' ')!==text)return [{text:null,expression:'neutral',source:'neutral'}];
+      return segments.map(value=>({text:value,expression:'neutral',source:'neutral'}));
+    }
+    function speechPlan(result, turn) {
+      const valid=validSpeechPlan(result,result?.speech);
+      const plan={turn,index:0,source:valid?'model':'neutral',segments:valid
+        ?result.speech.segments.map(item=>({text:item.text,expression:item.expression,source:'model'}))
+        :result?neutralSegments(verifiedText(result)):[{text:null,expression:'neutral',source:'neutral'}]};
+      currentSpeechPlan=plan;
+      if(result?.speechPromise){
+        const e=epoch;
+        Promise.resolve(result.speechPromise).then(annotation=>{
+          if(!current(e)||turn!==turnEpoch||currentSpeechPlan!==plan||!validSpeechPlan(result,annotation))return;
+          let offset=0;
+          const annotated=annotation.segments.map(item=>{
+            const value={...item,offset};offset+=item.text.length+1;return value;
+          });
+          offset=0;
+          for(let index=0;index<plan.segments.length;index++){
+            const segment=plan.segments[index],start=offset;offset+=(segment.text?.length||0)+1;
+            const end=start+(segment.text?.length||0);
+            const match=segment.text&&annotated.find(item=>item.offset<=start&&end<=item.offset+item.text.length&&
+              item.text.slice(start-item.offset,end-item.offset)===segment.text);
+            // A model may group adjacent sentences with one tone. A complete
+            // unplayed sentence can inherit that containing span's cue; a
+            // sentence crossing annotation spans stays neutral. Never change
+            // an expression after that sentence's audible onset.
+            if(!match||speech?.segments===plan.segments&&(index<speech.index||index===speech.index&&speech.expressionStarted))continue;
+            segment.expression=match.expression;segment.source='model';
+            if(speech?.segments===plan.segments&&speech.index===index&&!speech.expressionStarted){
+              speech.expression=match.expression;speech.source='model';
+            }
+          }
+        },()=>{});
+      }
+      return plan;
     }
     function resetSpeech() {
       speech = null; tailQuietSince = null; measuredOutput = 0;
-      pendingNarration = null;
+      pendingNarration = null; currentSpeechPlan = null;
     }
     function settleSpeechTail() {
       if (!speech || speech.stoppedAt === undefined || providerBusy) return;
@@ -302,7 +360,7 @@
       pendingNarration = null; narrationAllowed = true; narrationId = null;
       outputActive = false; outputId = null; audio.muted = true;
       const segment = item.segments[item.index];
-      speech = {turn: item.turn, segments:item.segments, index:item.index, source:item.source,
+      speech = {turn: item.turn, segments:item.segments, index:item.index, source:segment.source||item.source,
         expression:segment.expression, expressionStarted:false, hadOutput:false, cueMs:0,
         replays:item.replays || 0, playbackBlocked:false, request:++speechRequest};
       speechNotice = null;

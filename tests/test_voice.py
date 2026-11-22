@@ -56,6 +56,8 @@ class BrokerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(session["audio"]["output"]["voice"], "marin")
             self.assertEqual(session["audio"]["input"]["transcription"]["model"], "configured-transcriber")
             self.assertTrue(session["audio"]["input"]["turn_detection"]["interrupt_response"])
+            self.assertEqual(session["audio"]["input"]["turn_detection"]["silence_duration_ms"], 450)
+            self.assertEqual(session["audio"]["input"]["turn_detection"]["prefix_padding_ms"], 300)
             self.assertEqual(session["max_output_tokens"], 1200)
             self.assertEqual(len(session["tools"]), 1)
             self.assertEqual(session["tools"][0]["name"], "delegate_to_reign")

@@ -44,10 +44,12 @@ async function eventually(check) {
 
 function harness({threadStatus = 404, oldBrowser = false, search = '', initiallyAuthenticated = true,
   role = 'owner', cleanupStatus = 200, logoutFailures = 0, voiceFailure = false, holdVoiceCleanup = false,
-  portraitMode = 'ready', voiceConfigured = false, speechStatus = 200} = {}) {
+  portraitMode = 'ready', voiceConfigured = false, speechStatus = 200, holdSpeech = false, runningPolls = 0} = {}) {
   const nodes = new Map(), calls = [], timers = new Map(), navigations = [], windowEvents = new Map(), announcements = [];
   const portraits = [];
   let voiceOptions, voiceStarts = 0;
+  let releaseSpeech;
+  const speechWait=holdSpeech?new Promise(resolve=>{releaseSpeech=resolve}):null;
   const node = id => { if (!nodes.has(id)) nodes.set(id, new Element()); return nodes.get(id); };
   const storage = new Map([['reign-session', SESSION], ['reign-thread', THREAD]]);
   let timer = 0, frame = 0;
@@ -99,11 +101,13 @@ function harness({threadStatus = 404, oldBrowser = false, search = '', initially
     if (url === '/api/chat/' + THREAD) return typeof threadStatus === 'number'
       ? json({}, threadStatus) : json(snapshot(THREAD, threadStatus, oldBrowser ? OLD_SESSION : SESSION));
     if (url === '/api/chat' && options.method === 'POST') return json(snapshot(NEW_THREAD, 'completed'));
-    if (url === '/api/chat/' + NEW_THREAD && options.method === 'GET') return json(snapshot(NEW_THREAD, 'completed'));
-    if (url === '/api/chat/' + NEW_THREAD + '/speech' && options.method === 'POST') return speechStatus === 200
-      ? json({thread_id:NEW_THREAD,run_id:RUN,status:'completed',text:'Browser status checked.',
+    if (url === '/api/chat/' + NEW_THREAD && options.method === 'GET') return json(snapshot(NEW_THREAD, runningPolls-->0?'running':'completed'));
+    if (url === '/api/chat/' + NEW_THREAD + '/speech' && options.method === 'POST') {
+      if(speechWait)await speechWait;
+      return speechStatus === 200 ? json({thread_id:NEW_THREAD,run_id:RUN,status:'completed',text:'Browser status checked.',
         segments:[{text:'Browser status checked.',expression:'thoughtful'}],speech_status:'ready'})
       : json({detail:'Synthetic unavailable annotation'},speechStatus);
+    }
     throw new Error('Unexpected simulated request: ' + options.method + ' ' + url);
   };
   class TestURL extends URL {
@@ -141,7 +145,7 @@ function harness({threadStatus = 404, oldBrowser = false, search = '', initially
     }, mute() {}, start() { voiceStarts++; }, enableSpeaker() {}}; }}
   });
   vm.runInContext(source, context, {filename: 'services/ax/live.js'});
-  return {node, calls, storage, session, timers, navigations, windowEvents, announcements, portraits,
+  return {node, calls, storage, session, timers, navigations, windowEvents, announcements, portraits, releaseSpeech,
     get voiceOptions() { return voiceOptions; }, get voiceStarts() { return voiceStarts; },
     ready: () => eventually(() => calls.some(call => call.path === '/api/status') && !node('cancelAgent').disabled)};
 }
@@ -217,9 +221,36 @@ test('private speech requests are bound to the exact graph run and annotation fa
     assert.equal(requests[0].path,'/api/chat/'+NEW_THREAD+'/speech');
     assert.equal(h.calls.filter(call=>call.path==='/api/chat'&&call.method==='POST').length,1);
     assert.equal(result.answer,'Browser status checked.');
-    if(speechStatus===200)assert.equal(result.speech.segments[0].expression,'thoughtful');
-    else assert.equal(result.speech,undefined,'optional annotations cannot replace or discard the verified answer');
+    const speech=await result.speechPromise;
+    if(speechStatus===200)assert.equal(speech.segments[0].expression,'thoughtful');
+    else assert.equal(speech,null,'optional annotations cannot replace or discard the verified answer');
+    const submitted=h.calls.find(call=>call.path==='/api/chat'&&call.method==='POST');
+    assert.equal(submitted.body.input_source,'voice','the graph receives microphone provenance, not a typed-message claim');
   }
+});
+
+test('private narration receives the verified result before optional expression annotation finishes', async () => {
+  const h=harness({voiceConfigured:true,holdSpeech:true}); await h.ready();
+  const signal=new AbortController();
+  const result=await h.voiceOptions.runTurn('Check the workspace.',{voiceCallId:'live-voice-turn',signal:signal.signal});
+  assert.equal(result.answer,'Browser status checked.');
+  assert.ok(result.speechPromise,'expression work continues independently of the verified answer');
+  assert.equal(h.calls.filter(call=>call.path.endsWith('/speech')).length,1);
+  assert.equal(h.calls.filter(call=>call.path==='/api/chat'&&call.method==='POST').length,1);
+  signal.abort();h.releaseSpeech();
+  assert.equal(await result.speechPromise,null,'late optional metadata is discarded after call cancellation');
+});
+
+test('voice graph completion polls every 250ms while synthetic connection checks retain their actual input source', async () => {
+  const h=harness({voiceConfigured:true,runningPolls:1}); await h.ready();
+  const outcome=h.voiceOptions.runTurn('Check the voice connection.',{voiceCallId:'connection-check',connectionCheck:true,signal:new AbortController().signal});
+  await eventually(()=>[...h.timers.values()].some(item=>item.delay===250));
+  const poll=[...h.timers.values()].find(item=>item.delay===250);
+  poll.callback();
+  const result=await outcome;
+  assert.equal(result.answer,'Browser status checked.');await result.speechPromise;
+  const submitted=h.calls.find(call=>call.path==='/api/chat'&&call.method==='POST');
+  assert.equal(submitted.body.input_source,undefined,'a generated connection check is not real microphone speech');
 });
 
 test('restricted and signed-out users never mount the private portrait controller', async () => {

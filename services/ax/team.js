@@ -25,7 +25,7 @@ export function createTeamWorkspace(deps = {}) {
     call: {active: false, phase: 'idle', microphone: false, camera: false, screen: false},
     streams: {local: {}, remote: []}, attachments: [], capture: null, captureUrl: null, captureRevision: 0,
     audioEnabled: false, avatarState: 'loading', avatarMessage: '', logoutFailed: false,
-    dictation: 'idle', dictationGeneration: 0, talkToReign: false,
+    dictation: 'idle', dictationGeneration: 0, dictationAbort: null, talkToReign: false,
     camera: {phase: 'idle', active: false}, cameraBusy: false, cameraRevision: 0, cameraAbort: null};
   const callMe = {};
   let call;
@@ -36,7 +36,7 @@ export function createTeamWorkspace(deps = {}) {
       state.avatarState = value.state; state.avatarMessage = value.message || '';
       if (typeof value.audioEnabled === 'boolean') {
         state.audioEnabled = value.audioEnabled;
-        $('listenReign').textContent = state.audioEnabled ? 'REIGN audio enabled' : 'Enable REIGN audio';
+        $('listenReign').textContent = value.retryAvailable ? 'Retry REIGN audio' : state.audioEnabled ? 'REIGN audio enabled' : 'Enable REIGN audio';
       }
       renderAssistant();
     }});
@@ -209,8 +209,8 @@ export function createTeamWorkspace(deps = {}) {
     if (value && typeof value === 'object') state.assistant = value;
     const phase = state.assistant.status || 'idle'; $('reignCard').dataset.state = phase;
     const available = state.capabilities.assistant !== false;
-    $('assistantStatus').textContent = state.avatarState === 'speaking' ? 'Speaking with your team' : !available ? 'REIGN is unavailable' : phase === 'running' ? 'Thinking with your team' : phase === 'failed' ? 'REIGN needs a retry' : 'Ready for this room';
-    $('assistantDetail').textContent = ['speaking', 'paused', 'error'].includes(state.avatarState) && state.avatarMessage ? state.avatarMessage : !available ? 'The assistant connection isn’t configured. Your room conversation and documents still work.' : phase === 'running' ? 'Working from this room’s discussion and explicitly shared views.' : phase === 'failed' ? (state.assistant.error || 'The last response could not finish. You can ask again explicitly.') : 'Ask a question, shape an idea, or bring the discussion together.';
+    $('assistantStatus').textContent = state.avatarState === 'speaking' ? 'Speaking with your team' : state.avatarState === 'buffering' ? 'Preparing REIGN’s voice' : !available ? 'REIGN is unavailable' : phase === 'running' ? 'Thinking with your team' : phase === 'failed' ? 'REIGN needs a retry' : 'Ready for this room';
+    $('assistantDetail').textContent = ['speaking', 'buffering', 'paused', 'error'].includes(state.avatarState) && state.avatarMessage ? state.avatarMessage : !available ? 'The assistant connection isn’t configured. Your room conversation and documents still work.' : phase === 'running' ? 'Working from this room’s discussion and explicitly shared views.' : phase === 'failed' ? (state.assistant.error || 'The last response could not finish. You can ask again explicitly.') : 'Ask a question, shape an idea, or bring the discussion together.';
     refreshControls();
   }
   function renderEvents(forceBottom = false) {
@@ -227,6 +227,7 @@ export function createTeamWorkspace(deps = {}) {
         row.dataset.eventId = event.id; row.dataset.sequence = String(event.seq);
         const content = element('div', 'message-body'), meta = element('div', 'message-meta');
         meta.append(element('strong', '', assistant ? 'REIGN' : event.display_name || 'Teammate'), element('time', '', timeLabel(event.created_at)));
+        if (!assistant && data.input_source === 'voice') meta.append(element('span', 'voice-message-label', 'Spoken message'));
         const text = typeof data.text === 'string' ? data.text : Array.isArray(data.segments) ? data.segments.map(segment => segment.text || '').join('\n') : '';
         content.append(meta, element('div', 'message-content', text));
         if (assistant && data.speech_status === 'unavailable') content.append(element('p', 'subtle-note', 'The written reply is saved. Voice audio is unavailable for this reply.'));
@@ -807,7 +808,8 @@ export function createTeamWorkspace(deps = {}) {
   }
 
   function cancelDictation() {
-    ++state.dictationGeneration; recorder.cancel(); state.dictation = 'idle'; state.talkToReign = false;
+    ++state.dictationGeneration; state.dictationAbort?.abort(); state.dictationAbort = null;
+    recorder.cancel(); state.dictation = 'idle'; state.talkToReign = false;
     $('dictationTranscript').value = ''; $('dictationTranscript').hidden = true;
     notice('dictationStatus'); refreshControls();
   }
@@ -817,15 +819,17 @@ export function createTeamWorkspace(deps = {}) {
     if (talk && ($('messageInput').value.trim() || state.attachments.length)) { notice('dictationStatus', 'Send or clear your current draft before talking to REIGN. Your draft is kept.', true); return; }
     if (['requesting', 'recording', 'processing', 'transcribing'].includes(state.dictation)) return;
     const roomId = state.roomId, generation = ++state.dictationGeneration;
+    const abort = new AbortController(); state.dictationAbort = abort;
+    let recording = null;
     state.talkToReign = talk;
     $('dictationTranscript').value = ''; $('dictationTranscript').hidden = true;
     try {
       avatar.stop(); // Stop speaker output before opening this microphone capture.
       // start() requests the user's own microphone directly from this gesture.
-      const recording = await recorder.start({stream: state.streams.local.microphone});
+      recording = await recorder.start({stream: state.streams.local.microphone, autoStop: talk});
       if (generation !== state.dictationGeneration || roomId !== state.roomId || !usable()) return;
-      state.dictation = 'transcribing'; notice('dictationStatus', 'Transcribing your message…'); refreshControls();
-      const result = await request(roomPath(roomId) + '/transcriptions', 'POST', recording, {timeout: 30000});
+      state.dictation = 'transcribing'; notice('dictationStatus', 'Understanding your spoken words…'); refreshControls();
+      const result = await request(roomPath(roomId) + '/transcriptions', 'POST', recording, {timeout: 30000, signal: abort.signal});
       recording.audio_base64 = '';
       if (generation !== state.dictationGeneration || roomId !== state.roomId || !usable()) return;
       if (typeof result.text !== 'string' || !result.text.trim()) throw Error('No speech was found. Try again or type your message.');
@@ -841,14 +845,23 @@ export function createTeamWorkspace(deps = {}) {
         $('messageInput').value = combined; rememberComposer();
         if (talk) {
           $('speakReply').checked = true;
+          if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(result.transcription_id || '')) {
+            throw Error('Your words were transcribed, but the voice turn could not be verified. Your transcript is kept above for review.');
+          }
           notice('dictationStatus', 'Sending your spoken question to REIGN…');
-          await sendMessage(true);
+          await sendMessage(true, false, {phase: 'sending', origin: 'voice', payload: {
+            client_message_id: uuid(), text: result.text.trim(), ask_reign: true, speak: true, attachment_ids: [],
+            input_source: 'voice', transcription_id: result.transcription_id}});
           if (generation === state.dictationGeneration) notice('dictationStatus', outgoing.has(roomId) ? 'Your spoken question needs confirmation. Retry this message to confirm the same turn.' : $('messageInput').value ? 'Your spoken question wasn’t accepted. Review the message above before trying again.' : 'Your spoken question was sent. REIGN’s reply will appear in this room.');
         } else { notice('dictationStatus', 'Transcript added. Review it, then choose Send or Ask REIGN.'); $('messageInput').focus(); }
       }
     } catch (error) {
       if (generation === state.dictationGeneration && error.name !== 'AbortError') notice('dictationStatus', error.message || 'Transcription failed. Your message draft is kept.', true);
-    } finally { if (generation === state.dictationGeneration) { state.dictation = 'idle'; state.talkToReign = false; refreshControls(); } }
+    } finally {
+      if (recording) recording.audio_base64 = '';
+      if (state.dictationAbort === abort) state.dictationAbort = null;
+      if (generation === state.dictationGeneration) { state.dictation = 'idle'; state.talkToReign = false; refreshControls(); }
+    }
   }
 
   function stopSession(reason) {

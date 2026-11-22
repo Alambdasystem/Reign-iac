@@ -78,6 +78,7 @@ class TeamRuntime:
     def __init__(self, store, assistant=None, *, clock=None):
         self.store, self.assistant = store, assistant
         self.attachment_validator = None
+        self.transcription_validator = None
         self.clock = clock or time.time
         self.features = {"group_chat": True, "documents": True, "calls": True,
                          "shared_browser": False, "remote_desktop": False,
@@ -252,13 +253,20 @@ class TeamRuntime:
 
     @staticmethod
     def message_data(data):
-        fields(data, {"client_message_id", "text", "ask_reign", "speak", "attachment_ids"}, {"client_message_id", "text"})
+        fields(data, {"client_message_id", "text", "ask_reign", "speak", "attachment_ids", "input_source", "transcription_id"}, {"client_message_id", "text"})
         result = {"client_message_id": identifier(data["client_message_id"]), "text": text(data["text"], 4000, bytes_max=16000),
                   "ask_reign": boolean(data.get("ask_reign", False)), "speak": boolean(data.get("speak", False)),
                   "attachment_ids": data.get("attachment_ids", [])}
         if type(result["attachment_ids"]) is not list or len(result["attachment_ids"]) > 4: raise TeamError("invalid_team_request")
         result["attachment_ids"] = [identifier(value) for value in result["attachment_ids"]]
         if len(set(result["attachment_ids"])) != len(result["attachment_ids"]) or result["speak"] and not result["ask_reign"]:
+            raise TeamError("invalid_team_request")
+        source = data.get("input_source", "text")
+        if not isinstance(source, str) or source not in {"text", "voice"}:
+            raise TeamError("invalid_team_request")
+        if source == "voice":
+            result.update(input_source="voice", transcription_id=identifier(data.get("transcription_id")))
+        elif "transcription_id" in data:
             raise TeamError("invalid_team_request")
         return result
 
@@ -281,6 +289,12 @@ class TeamRuntime:
             if self.closed: raise TeamError("team_unavailable")
             found = await asyncio.to_thread(self.store.message_receipt, actor, room_id, data)
             if found: return {key: found[key] for key in ("event", "run_id")}
+            # A durable retry is resolved before checking an expired ephemeral
+            # recording receipt. New voice-labelled messages must still match
+            # this actor's actual provider transcript in this room exactly.
+            if data.get("input_source") == "voice":
+                if self.transcription_validator is None: raise TeamError("assistant_unavailable")
+                self.transcription_validator(actor, room_id, data["transcription_id"], data["text"])
             if data["attachment_ids"]:
                 if self.attachment_validator is None: raise TeamError("assistant_unavailable")
                 await self.attachment_validator(actor, room_id, data["attachment_ids"])
@@ -299,7 +313,7 @@ class TeamRuntime:
         fields(value, {"text", "segments", "audio_id", "documents", "speech_status"}, {"text"})
         result = {"text": text(value["text"], 12000)}
         if "speech_status" in value:
-            if value["speech_status"] not in {"ready", "unavailable", "not_requested"}: raise TeamError("assistant_failed")
+            if value["speech_status"] not in {"ready", "streaming", "unavailable", "not_requested"}: raise TeamError("assistant_failed")
             result["speech_status"] = value["speech_status"]
         if "segments" in value:
             if type(value["segments"]) is not list or not 1 <= len(value["segments"]) <= 12: raise TeamError("assistant_failed")
@@ -329,6 +343,7 @@ class TeamRuntime:
             context = await asyncio.to_thread(self.store.room_context, actor, room_id, run_id)
             async with asyncio.timeout(ASSISTANT_TIMEOUT):
                 context["current_participants"] = await self.assistant_participants(actor, room_id)
+                context["input_source"] = data.get("input_source", "text")
                 result = await self.assistant(context, actor, data["text"], data["attachment_ids"], data["speak"])
             await asyncio.to_thread(self.store.finish_run, actor, room_id, run_id, self.assistant_result(result))
         except asyncio.CancelledError:
@@ -462,7 +477,7 @@ def install(app, authorize):
     @app.post("/api/team/rooms/{room_id}/messages")
     async def message(room_id: str, request: Request):
         actor = await require_actor(request)
-        value = await body(request, {"client_message_id", "text", "ask_reign", "speak", "attachment_ids"}, {"client_message_id", "text"}, 18000)
+        value = await body(request, {"client_message_id", "text", "ask_reign", "speak", "attachment_ids", "input_source", "transcription_id"}, {"client_message_id", "text"}, 18000)
         return reply(await get_runtime(request).message(actor, room_id, value))
 
     @app.post("/api/team/rooms/{room_id}/presence")

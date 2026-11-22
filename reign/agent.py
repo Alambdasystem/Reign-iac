@@ -99,6 +99,7 @@ class AgentState(TypedDict):
     session_id: str | None
     steps: int
     halted: bool
+    input_source: str
 
 
 class Conversation:
@@ -151,7 +152,18 @@ class Conversation:
         started = time.monotonic()
         self.event("model_started")
         final = state["steps"] >= MAX_STEPS
-        messages = [SystemMessage(SYSTEM), *state["messages"]]
+        source = state.get("input_source", "text")
+        modality = (
+            "The current user turn was spoken through the microphone. The voice transport "
+            "has supplied its words as a transcript or delegated request. Respond as part "
+            "of a spoken conversation; do not say the user typed or that no audio was "
+            "received merely because the words reach you as text. You do not receive the "
+            "raw waveform here, so do not invent details about the speaker's voice."
+            if source == "voice" else
+            "The current user turn was submitted through the text composer. Earlier spoken "
+            "turns do not make this turn a microphone recording."
+        )
+        messages = [SystemMessage(SYSTEM + "\n\n" + modality), *state["messages"]]
         if final:
             messages.append(SystemMessage("Tool budget exhausted. Summarize actual results and any unfinished work. Do not call tools."))
         response = await self.model.ainvoke(messages)
@@ -348,7 +360,9 @@ class AgentRuntime:
             if thread.status != "running" and now - thread.updated > TTL:
                 del self.threads[tid]
 
-    def submit(self, text, tid=None, sid=None):
+    def submit(self, text, tid=None, sid=None, *, input_source="text"):
+        if not isinstance(input_source, str) or input_source not in {"text", "voice"}:
+            raise HTTPException(422, "Invalid input source")
         self.prune()
         if sum(t.status == "running" for t in self.threads.values()) >= 2:
             raise HTTPException(429, "Two agent runs are already active")
@@ -373,7 +387,8 @@ class AgentRuntime:
         thread.pending_user_text = text if self.archive is not None else None
         messages = [*thread.restored_context, HumanMessage(text)]
         thread.restored_context = []
-        thread.start({"messages": messages, "session_id": sid, "steps": 0, "halted": False})
+        thread.start({"messages": messages, "session_id": sid, "steps": 0, "halted": False,
+                      "input_source": input_source})
         return thread.snapshot()
 
     async def resume(self, tid):
