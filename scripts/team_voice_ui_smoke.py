@@ -10,6 +10,7 @@ import json
 from urllib.parse import parse_qs, urlsplit
 
 from playwright.async_api import expect
+from team_callspace_smoke import callspace_click, callspace_control, callspace_media_roundtrip, close_callspace_panel
 
 
 LOOPBACK_VOICE = r"""(() => {
@@ -248,7 +249,7 @@ async def continuous_team_voice_ui(browser, storage_state, origin, evidence):
         await page.goto(origin + '/team')
         await expect(page.locator('#reignAvatar')).to_have_attribute('data-ready','true')
         stage = 'real_webrtc_negotiation_and_upstream_audio'
-        await page.locator('#talkToReign').click()
+        await callspace_click(page, '#callspaceMic')
         await expect(page.locator('#liveVoiceDiagnostics')).to_have_attribute('data-active','true')
         await page.wait_for_function("""() => __teamLiveVoice.providers.at(-1)?.inputRms > .025 &&
             __teamLiveVoice.providers.at(-1)?.channel?.readyState === 'open'""")
@@ -271,6 +272,20 @@ async def continuous_team_voice_ui(browser, storage_state, origin, evidence):
             return audio.currentTime;
         }""")
         await page.wait_for_function("time => document.querySelector('#reignLiveAudio').currentTime > time + .1", arg=playback_time)
+
+        stage = 'layout_changes_preserve_continuous_voice'
+        await (await callspace_control(page, '#messageInput')).fill('Synthetic draft stays while REIGN is speaking.')
+        layout_before = await page.evaluate('__teamLiveVoice.snapshot()')
+        callspace_receipt = await callspace_media_roundtrip(page)
+        await page.wait_for_function("""frames => __teamLiveVoice.providers[0].inputFrames > frames &&
+            document.querySelector('#reignLiveAudio').srcObject?.active &&
+            !document.querySelector('#reignLiveAudio').paused &&
+            document.querySelector('#reignAvatar').dataset.speaking === 'true'""", arg=layout_before['inputFrames'])
+        layout_after = await page.evaluate('__teamLiveVoice.snapshot()')
+        assert layout_after['bytes'] > layout_before['bytes']
+        assert layout_after['clients'] == layout_after['providers'] == layout_after['microphoneRequests'] == 1
+        assert len(offers) == 1 and layout_after['liveTracks'] == 1
+        assert await page.locator('#reignLiveAudio').evaluate('audio => audio.currentTime') > playback_time
 
         # Barge-in travels over the actual SCTP channel while incoming audio
         # continues on the same real media connection.
@@ -299,33 +314,33 @@ async def continuous_team_voice_ui(browser, storage_state, origin, evidence):
         assert len(offers) == 1 and len(turns) == 3 and continuous['microphoneRequests'] == 1
         assert continuous['recorderCount'] == 0 and not forbidden
         stage = 'mute_and_unmute'
-        await page.locator('#muteReignMic').click()
+        await callspace_click(page, '#callspaceMic')
         await expect(page.locator('#muteReignMic')).to_have_attribute('aria-pressed','true')
         await page.wait_for_function('() => __teamLiveVoice.providers.at(-1).inputRms < .002')
         assert (await page.evaluate('__teamLiveVoice.snapshot()'))['enabledTracks'] == 0
-        await page.locator('#muteReignMic').click()
+        await callspace_click(page, '#callspaceMic')
         await page.wait_for_function('() => __teamLiveVoice.providers.at(-1).inputRms > .025')
         assert len(offers) == 1
 
         hold_close = True
         stage = 'off_and_room_change_cleanup'
-        await page.locator('#stopReignMic').click()
+        await callspace_click(page, '#callspaceEnd')
         await asyncio.wait_for(close_started.wait(),5)
         await page.wait_for_function("""() => __teamLiveVoice.captures.every(value => value.stream.getTracks().every(track => track.readyState === 'ended')) &&
             __teamLiveVoice.clients.every(peer => peer.connectionState === 'closed') &&
             document.querySelector('#reignLiveAudio').srcObject === null""")
         close_release.set(); hold_close = False
         await expect(page.locator('#talkToReign')).to_be_enabled()
-        await page.locator('#talkToReign').click()
+        await callspace_click(page, '#talkToReign')
         await page.wait_for_function('() => __teamLiveVoice.providers.length === 2 && __teamLiveVoice.providers[1].inputRms > .025')
-        await page.locator(f'[data-room-id="{room_ids[1]}"]').click()
+        await callspace_click(page, f'[data-room-id="{room_ids[1]}"]')
         await expect(page.locator('#roomTitle')).to_have_text(rooms[1]['title'])
         await page.wait_for_function("() => __teamLiveVoice.captures.every(value => value.stream.getTracks().every(track => track.readyState === 'ended'))")
         await expect(page.locator('#talkToReign')).to_be_enabled()
-        await page.locator('#talkToReign').click()
+        await callspace_click(page, '#talkToReign')
         await page.wait_for_function('() => __teamLiveVoice.providers.length === 3 && __teamLiveVoice.providers[2].inputRms > .025')
         stage = 'logout_cleanup'
-        await page.locator('#logoutButton').click()
+        await callspace_click(page, '#logoutButton')
         await asyncio.wait_for(logout_started.wait(),5)
         await page.wait_for_function("""() => __teamLiveVoice.captures.every(value => value.stream.getTracks().every(track => track.readyState === 'ended')) &&
             __teamLiveVoice.clients.every(peer => peer.connectionState === 'closed') &&
@@ -335,6 +350,7 @@ async def continuous_team_voice_ui(browser, storage_state, origin, evidence):
         assert len(offers) == 3 and len(set(deletes)) == 3
         result = {'status':'passed', 'mode':'real_loopback_webrtc_scripted_provider_and_room_api',
                   'physical_microphone_or_speaker':'not_tested', 'live_provider':'not_tested',
+                  'callspace':callspace_receipt,
                   'streaming_before_utterance_end':{'received_bytes':before_end['bytes'], 'received_packets':before_end['packets'],
                                                     'maximum_input_rms':before_end['maximumRms']},
                   'continuous_capture':{'elapsed_ms':round(continuous['elapsedMs']), 'received_bytes':continuous['bytes'],
@@ -343,6 +359,7 @@ async def continuous_team_voice_ui(browser, storage_state, origin, evidence):
                   'checks':['actual_peer_sdp_and_rtp_audio','audio_reaches_receiver_before_utterance_end',
                             'continuous_microphone_over_twenty_seconds','three_turns_one_connection',
                             'barge_in_clears_native_output_and_face','native_audio_clock_and_model_expressions',
+                            'layout_modes_preserve_native_media_draft_transcript_and_continuous_rtp',
                             'no_recordings_or_transcription_uploads','no_duplicate_cached_reply_audio',
                             'mute_and_unmute_without_reconnect','off_cleanup_before_server_ack',
                             'room_change_releases_microphone','logout_releases_microphone_before_ack']}

@@ -1,0 +1,344 @@
+/* Workspace's conversation / call presentation. The existing controllers own all data and media. */
+body.callspace-ready {
+  color-scheme: light;
+  --bg: #fcfcfc;
+  --panel: #fff;
+  --panel-high: #f5f5f3;
+  --line: #e7e7e4;
+  --muted: #8d8d89;
+  --text: #101110;
+  --accent: #151615;
+  --green: #456d58;
+  --danger: #9f3a3a;
+  margin: 0;
+  overflow: clip;
+  background: #fcfcfc;
+  color: var(--text);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.callspace-ready button,
+.callspace-ready input,
+.callspace-ready textarea,
+.callspace-ready select { font-family: inherit; }
+.callspace-ready button { border-color: #e1e1de; background: #f6f6f4; color: #171817; }
+.callspace-ready button:hover:not(:disabled) { background: #ebebe8; border-color: #c7c7c1; }
+.callspace-ready button.primary { background: #151615; border-color: #151615; color: white; }
+.callspace-ready button.primary:hover:not(:disabled) { background: #353633; border-color: #353633; }
+.callspace-ready button.quiet { color: #555650; border-color: #e2e2de; background: transparent; }
+.callspace-ready button.danger { color: #903e3e; border-color: #ebd4d4; background: #fbf2f1; }
+.callspace-ready button:disabled { opacity: .36; }
+.callspace-ready a { color: #41423d; }
+.callspace-ready input,
+.callspace-ready textarea,
+.callspace-ready select { color: #151615; border-color: #deded9; background: #fff; }
+.callspace-ready input::placeholder,
+.callspace-ready textarea::placeholder { color: #969691; opacity: 1; }
+.callspace-ready label { color: #62635c; }
+.callspace-ready :is(button,a,input,textarea,select,summary,[tabindex]):focus-visible { outline: 2px solid #676b62; outline-offset: 4px; }
+.callspace-ready :is(.eyebrow,.subtle-note,.form-status,.empty-note) { color: #777a71; }
+.callspace-ready .form-status[data-error="true"],
+.callspace-ready .room-event.error { color: #9d3838; }
+
+.callspace-ready .workspace { display: block; max-width: none; min-height: 0; }
+.callspace-ready .room-shell { padding: 0; }
+.callspace-shell {
+  --callspace-transcript-top: 174px;
+  --callspace-transcript-opacity: 1;
+  position: relative;
+  height: 100vh;
+  height: 100dvh;
+  height: var(--callspace-viewport-height, 100dvh);
+  min-height: 320px;
+  width: 100%;
+  overflow: clip;
+  isolation: isolate;
+  background: radial-gradient(ellipse 90% 30% at 45% 103%, #e8e9e6b3 0, #f5f5f380 48%, transparent 100%), #fcfcfc;
+}
+.callspace-ready #roomView { position: absolute; inset: 0; }
+.callspace-ready #roomView > :is(.room-stage,.work-grid) { display: none; }
+.callspace-topbar { position: absolute; z-index: 20; top: max(27px, calc(env(safe-area-inset-top) + 14px)); inset-inline: 14px; display: flex; align-items: center; justify-content: space-between; pointer-events: none; }
+.callspace-ready .callspace-icon {
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  width: 45px;
+  height: 45px;
+  min-height: 45px;
+  border: 0;
+  border-radius: 50%;
+  flex: none;
+  background: #ffffffed;
+  color: #101110;
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  pointer-events: auto;
+  transition: background .18s ease, opacity .18s ease;
+}
+.callspace-icon svg { width: 25px; height: 25px; display: block; }
+.callspace-ready .callspace-icon:hover:not(:disabled) { background: #f0f0ed; }
+.callspace-ready .callspace-icon[aria-expanded="true"] { background: #e9eae6; }
+.callspace-ready .global-notice { position: fixed; z-index: 40; top: max(84px, calc(env(safe-area-inset-top) + 72px)); left: 50%; transform: translateX(-50%); width: min(620px, calc(100% - 32px)); margin: 0; background: #fff9ef; border-color: #e6d7b5; color: #68552e; font-size: 13px; box-shadow: 0 4px 22px #00000008; }
+.callspace-ready .room-empty { position: absolute; inset: 145px 24px 100px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0; color: #8f9189; }
+.callspace-ready .room-empty > span { color: #a6a8a0; }
+.callspace-ready .room-empty h3 { color: #42443d; max-width: 420px; font-size: 27px; }
+.callspace-ready .room-empty p { max-width: 390px; font-size: 15px; margin-top: 10px; }
+
+.callspace-face {
+  position: absolute;
+  z-index: 3;
+  left: var(--callspace-face-x, 54%);
+  top: calc(var(--callspace-face-y, 22px) + env(safe-area-inset-top));
+  width: var(--callspace-face-w, 103px);
+  height: var(--callspace-face-h, 89px);
+  border-radius: var(--callspace-face-r, 23px);
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  background: #edece8;
+  box-shadow: 0 0 0 1px #1b221209;
+  transition: left .4s cubic-bezier(.22,.8,.2,1), top .4s cubic-bezier(.22,.8,.2,1), width .4s cubic-bezier(.22,.8,.2,1), height .4s cubic-bezier(.22,.8,.2,1), border-radius .4s ease;
+}
+.callspace-shell[data-dragging="true"] .callspace-face { transition: none; cursor: grabbing; }
+.callspace-ready .callspace-face .reign-card { display: block; min-height: 0; width: 100%; height: 100%; border: 0; border-radius: 0; background: #eeece7; }
+.callspace-ready .callspace-face .reign-portrait { width: 100%; height: 100%; min-height: 0; max-width: none; background: #eeece7; }
+.callspace-face :is(canvas,.reign-poster) { pointer-events: none; }
+.callspace-face .portrait-shade { background: linear-gradient(transparent 25%, #12140f60); }
+.callspace-face .reign-name { left: 11px; bottom: 11px; font-size: 10px; font-weight: 700; letter-spacing: .09em; color: white; }
+.callspace-face .reign-name small { display: none; }
+.callspace-drag-handle { position: absolute; bottom: 5px; left: 50%; transform: translateX(-50%); width: 27px; height: 3px; border-radius: 3px; background: #ffffffb3; pointer-events: none; }
+.callspace-shell[data-mode="split"] .reign-name { left: 22px; bottom: 22px; font-size: 16px; }
+.callspace-shell[data-mode="split"] .callspace-drag-handle { bottom: 10px; width: 40px; }
+.callspace-shell[data-mode="call"] .callspace-face { top: 0; }
+.callspace-shell[data-mode="call"] .portrait-shade { inset: 25% 0 0; background: linear-gradient(transparent 45%, #0e120ac9); }
+.callspace-shell[data-mode="call"] .reign-name { left: 24px; bottom: 184px; font-size: 23px; }
+.callspace-shell[data-mode="call"] .callspace-drag-handle { bottom: 147px; width: 40px; }
+
+.callspace-ready #callspaceTranscript {
+  position: absolute;
+  z-index: 5;
+  top: calc(var(--callspace-transcript-top) + env(safe-area-inset-top));
+  bottom: calc(136px + env(safe-area-inset-bottom));
+  left: max(16px, calc((100% - 880px) / 2));
+  right: max(16px, calc((100% - 880px) / 2));
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
+  opacity: var(--callspace-transcript-opacity);
+  transition: opacity .18s ease;
+}
+.callspace-shell[data-dragging="true"] #callspaceTranscript { transition: none; }
+.callspace-ready #callspaceTranscript > .panel-heading { display: none; }
+.callspace-ready #callspaceTranscript .room-header { margin-bottom: 22px; flex: none; align-items: baseline; gap: 12px; }
+.callspace-ready #callspaceTranscript .room-header h2 { color: #989a94; font-size: 19px; font-weight: 700; line-height: 1.35; letter-spacing: -.035em; }
+.callspace-ready #callspaceTranscript .room-header :is(.eyebrow,#roomSubtitle) { display: none; }
+.callspace-ready .connection-status { border: 0; padding: 0; font-size: 10px; letter-spacing: .02em; color: #8e9487; background: transparent; }
+.callspace-ready .connection-status[data-state="connected"] { color: #7c8777; border: 0; background: transparent; }
+.callspace-ready .connection-status[data-state="error"] { color: #94642b; }
+.callspace-ready #eventFeed { flex: 1; height: auto; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 3px 28px 0; scrollbar-color: #d0d2c9 transparent; scrollbar-width: thin; overflow-anchor: none; }
+.callspace-ready .message { display: block; margin: 0 0 26px; }
+.callspace-ready .message > .initials { display: none; }
+.callspace-ready .message-meta { color: #999b93; margin: 0 0 8px; gap: 8px; font-size: 11px; }
+.callspace-ready .message-meta strong { font-weight: 600; }
+.callspace-ready .message-meta time { color: #a8aaa3; font-size: 10px; }
+.callspace-ready .message-content { font-size: clamp(20px, 2.8vw, 28px); line-height: 1.49; letter-spacing: -.025em; font-weight: 650; color: #111310; }
+.callspace-ready .message.assistant .message-content { padding: 0; border: 0; border-radius: 0; background: transparent; color: #111310; }
+.callspace-ready .message:not(.assistant) { margin-left: auto; width: fit-content; max-width: 88%; }
+.callspace-ready .message:not(.assistant) .message-meta { justify-content: flex-end; }
+.callspace-ready .message:not(.assistant) .message-content { padding: 12px 17px; border-radius: 25px; background: #f0f1ee; font-size: clamp(19px, 2.5vw, 25px); }
+.callspace-ready .room-event { color: #9b9d95; font-size: 17px; font-weight: 650; line-height: 1.5; padding: 0; margin: 18px 0; }
+.callspace-ready #eventFeed > .empty-note { font-size: 22px; font-weight: 650; line-height: 1.5; max-width: 600px; padding: 5px 0; letter-spacing: -.02em; color: #a4a69e; }
+.callspace-ready .new-messages { flex: none; margin: 0 auto 0; min-height: 32px; font-size: 12px; background: #f0f1ec; border-color: #e4e6de; border-radius: 20px; color: #62685b; box-shadow: 0 3px 18px #00000005; }
+.callspace-shell[data-mode="call"] #callspaceTranscript { visibility: hidden; pointer-events: none; }
+.callspace-activity { position: absolute; z-index: 6; top: calc(var(--callspace-transcript-top) - 34px + env(safe-area-inset-top)); left: max(16px, calc((100% - 880px) / 2)); right: max(16px, calc((100% - 880px) / 2)); color: #a1a39b; font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: top .4s cubic-bezier(.22,.8,.2,1); pointer-events: none; }
+.callspace-shell[data-dragging="true"] .callspace-activity { transition: none; }
+.callspace-shell[data-mode="call"] .callspace-activity { top: auto; bottom: calc(106px + env(safe-area-inset-bottom)); left: 24px; right: 24px; color: #ffffffe0; font-size: 13px; font-weight: 500; line-height: 1.5; white-space: normal; max-height: 40px; }
+
+.callspace-dock { position: absolute; z-index: 15; bottom: max(16px, calc(env(safe-area-inset-bottom) + 12px)); left: 50%; transform: translateX(-50%); width: min(calc(100% - 24px), 900px); }
+.callspace-dock-row { display: grid; grid-template-columns: 49px 49px minmax(0,1fr); align-items: end; gap: 8px; }
+.callspace-ready .callspace-dock-row > .callspace-icon { width: 49px; height: 49px; min-height: 49px; }
+.callspace-ready .callspace-end { background: #111210; color: #fff; }
+.callspace-ready .callspace-end:hover:not(:disabled) { background: #30322b; }
+.callspace-ready .callspace-end:disabled { opacity: .72; }
+.callspace-ready .callspace-mic { background: #f8f8f6e8; }
+.callspace-ready .callspace-mic[aria-pressed="true"] { background: white; box-shadow: inset 0 0 0 1px #d9dfd2; }
+.callspace-ready .callspace-mic[data-scope="both"][aria-pressed="true"]::after { content: ""; position: absolute; bottom: 5px; width: 4px; height: 4px; border-radius: 50%; background: #5f7356; }
+.callspace-composer { min-width: 0; }
+.callspace-ready .callspace-composer .chat-form { position: relative; padding: 0; margin: 0; border: 0; border-radius: 28px; background: #ffffffeb; box-shadow: 0 0 0 1px #ffffff38; backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+.callspace-ready .callspace-composer textarea { display: block; min-height: 49px; max-height: 128px; resize: none; overflow-y: auto; width: 100%; padding: 12px 48px 12px 19px; border: 0; border-radius: 28px; background: transparent; font-size: 19px; font-weight: 650; line-height: 25px; letter-spacing: -.03em; scrollbar-width: thin; }
+.callspace-ready .callspace-composer textarea:focus-visible { outline-offset: 1px; }
+.callspace-ready .callspace-composer textarea::placeholder { color: #9a9c96; }
+.callspace-ready .callspace-add { position: absolute; right: 0; bottom: 0; width: 49px; height: 49px; min-height: 49px; background: transparent; }
+.callspace-ready .callspace-add:hover:not(:disabled) { background: #f3f4ef; }
+.callspace-ready .callspace-composer .composer-actions { position: absolute; right: 0; bottom: calc(100% + 11px); margin: 0; display: none; flex-wrap: nowrap; width: max-content; max-width: calc(100vw - 32px); gap: 7px; }
+.callspace-composer[data-has-draft="true"] .composer-actions,
+.callspace-composer:focus-within .composer-actions { display: flex !important; }
+.callspace-ready .callspace-composer .composer-actions button { min-height: 36px; border-radius: 20px; font-size: 12px; padding: 9px 13px; font-weight: 550; background: #f3f4ef; border-color: #e5e7de; white-space: nowrap; box-shadow: 0 2px 12px #00000003; }
+.callspace-ready .callspace-composer .composer-actions .primary { color: white; background: #151713; border-color: #151713; }
+.callspace-ready .callspace-composer .attachment-list { position: absolute; bottom: calc(100% + 58px); right: 0; max-width: min(340px, 80vw); margin: 0; }
+.callspace-ready .attachment-chip { color: #555c4e; background: #f2f5ed; border-color: #dce3d1; }
+.callspace-feedback { position: absolute; left: 0; right: 0; bottom: 111px; max-height: 78px; overflow-y: auto; font-size: 12px; pointer-events: auto; }
+.callspace-feedback .form-status { margin: 0; color: #868c7d; font-size: 12px; line-height: 1.5; }
+.callspace-feedback .form-status:empty { display: none; }
+.callspace-feedback #retryMessage { min-height: 30px; padding: 5px 10px; margin-top: 4px; font-size: 11px; border-radius: 18px; background: #fff; }
+.callspace-shell[data-mode="call"] .callspace-feedback .form-status { color: white; }
+
+.callspace-ready #callParticipants { position: absolute; z-index: 8; top: max(25px, calc(env(safe-area-inset-top) + 14px)); left: 76px; right: auto; width: min(27vw, 180px); display: flex; gap: 7px; overflow-x: auto; margin: 0; scrollbar-width: thin; }
+.callspace-ready #callParticipants:empty { display: none; }
+.callspace-ready #callParticipants .media-tile { min-width: 75px; width: 100%; max-width: 140px; flex: none; border: 0; border-radius: 15px; background: #f0f0ed; }
+.callspace-ready #callParticipants .media-tile video { width: 100%; height: 72px; aspect-ratio: auto; object-fit: cover; background: #eeefe9; }
+.callspace-ready #callParticipants .media-tile figcaption { padding: 5px 7px; gap: 3px; color: #52584a; font-size: 9px; flex-wrap: wrap; }
+.callspace-ready #callParticipants .media-tile button { font-size: 9px; min-height: 24px; padding: 3px 5px; }
+.callspace-shell[data-mode="split"] #callParticipants,
+.callspace-shell[data-mode="call"] #callParticipants { top: max(87px, calc(env(safe-area-inset-top) + 74px)); left: auto; right: 16px; width: 88px; flex-direction: column; max-height: 30%; }
+.callspace-ready #liveCameraView { position: absolute; z-index: 9; left: 80px; top: max(23px, calc(env(safe-area-inset-top) + 12px)); width: 82px; height: 89px; border: 0; border-radius: 18px; overflow: hidden; box-shadow: 0 0 0 1px #12150b0d; background: #e9eae3; }
+.callspace-ready #liveCameraPreview { display: block; width: 100%; height: 100%; max-height: none; object-fit: cover; }
+.callspace-ready #liveCameraView > span { position: absolute; bottom: 7px; left: 8px; font-size: 7px; font-weight: 650; color: white; text-shadow: 0 1px 4px #0008; }
+.callspace-shell[data-mode="split"] #liveCameraView,
+.callspace-shell[data-mode="call"] #liveCameraView { top: max(87px, calc(env(safe-area-inset-top) + 74px)); right: 16px; left: auto; }
+.callspace-ready #roomView:has(#liveCameraView:not([hidden])) #callParticipants { top: 126px; }
+.callspace-shell[data-mode="split"] #roomView:has(#liveCameraView:not([hidden])) #callParticipants,
+.callspace-shell[data-mode="call"] #roomView:has(#liveCameraView:not([hidden])) #callParticipants { top: 190px; }
+.callspace-shell[data-mode="split"] #roomView:has(#liveCameraView:not([hidden])) #callParticipants { max-height: max(30px, calc(var(--callspace-face-h) - 120px)); }
+
+.callspace-ready .callspace-panel { position: fixed; inset: 12px 12px 12px auto; margin: 0; width: min(480px, calc(100vw - 24px)); max-width: none; height: calc(100dvh - 24px); max-height: none; padding: 0; border: 1px solid #e9eae4; border-radius: 28px; background: #fffffff5; color: #171913; box-shadow: 0 18px 100px #00000018; overflow: hidden; }
+.callspace-ready .callspace-panel-settings { inset: 12px auto 12px 12px; }
+.callspace-ready .callspace-panel-actions { inset: auto 12px 12px auto; height: auto; max-height: min(700px, calc(100dvh - 24px)); }
+.callspace-panel::backdrop { background: #e8eae275; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+.callspace-panel[open] { display: flex; flex-direction: column; }
+.callspace-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 20px 12px; flex: none; }
+.callspace-panel-heading h2 { font-size: 22px; letter-spacing: -.035em; line-height: 1.2; }
+.callspace-panel-heading .callspace-icon { width: 39px; height: 39px; min-height: 39px; background: #f1f2ec; }
+.callspace-panel-heading .callspace-icon svg { width: 20px; height: 20px; }
+.callspace-panel-body { min-height: 0; overflow-y: auto; padding: 6px 20px 24px; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #d1d4c7 transparent; }
+.callspace-panel-body > :is(section,.call-panel,.reign-copy,.check-label,.dictation-tools,.share-actions,.callspace-action-links) { margin-bottom: 24px; }
+.callspace-panel-note { font-size: 12px; line-height: 1.6; color: #95998d; margin-top: 12px; }
+.callspace-menu-nav { display: flex; gap: 5px; padding: 0 20px 16px; flex: none; overflow-x: auto; scrollbar-width: none; }
+.callspace-ready .callspace-menu-nav button { flex: 1; white-space: nowrap; padding: 8px 10px; min-height: 35px; font-size: 11px; border: 0; border-radius: 20px; background: #f3f4ee; color: #8a8e81; }
+.callspace-ready .callspace-menu-nav button[aria-current="page"] { color: #1e2418; background: #e6e9df; }
+.callspace-ready .callspace-panel .sidebar { width: auto; padding: 0; border: 0; background: transparent; }
+.callspace-ready .callspace-panel .workspace-heading { display: none; }
+.callspace-ready .callspace-panel .storage-state { margin: 0 0 22px; font-size: 11px; color: #92968a; }
+.callspace-ready .callspace-panel .section-heading h2 { font-size: 14px; letter-spacing: -.015em; }
+.callspace-ready .callspace-panel .icon-button { background: #f0f2ea; border: 0; border-radius: 50%; }
+.callspace-ready .callspace-panel .room-list { display: flex; flex-direction: column; overflow: visible; gap: 5px; padding: 0; }
+.callspace-ready .callspace-panel .room-button { border: 0; border-radius: 14px; width: 100%; max-width: none; min-height: 47px; padding: 12px; font-size: 14px; background: transparent; }
+.callspace-ready .callspace-panel .room-button[aria-current="page"] { background: #eff2e8; color: #27351e; }
+.callspace-ready .callspace-panel .room-symbol { color: #929a87; }
+.callspace-ready .callspace-panel .member-list { display: grid; gap: 15px; }
+.callspace-ready .initials { background: #eaeee2; color: #6f7b60; }
+.callspace-ready .callspace-panel .member-row { max-width: none; }
+.callspace-ready .callspace-panel .member-row strong { color: #454e3a; font-size: 13px; }
+.callspace-ready .callspace-panel .sidebar-note { color: #9b9f91; margin-top: 24px; font-size: 11px; }
+.callspace-ready .callspace-panel .app-header { display: block; min-height: 0; padding: 23px 0 0; border: 0; border-top: 1px solid #eceee7; background: transparent; }
+.callspace-ready .callspace-panel .brand { font-size: 18px; color: #59644b; letter-spacing: -.025em; }
+.callspace-ready .callspace-panel .brand span { color: #9ba38e; font-size: 7px; letter-spacing: .13em; }
+.callspace-ready .callspace-panel .header-account { margin-top: 18px; max-width: none; justify-content: flex-start; gap: 12px; font-size: 12px; }
+.callspace-ready .callspace-panel .header-account > #accountName { display: block; flex-basis: 100%; color: #7c8570; font-size: 12px; max-width: none; }
+.callspace-ready .callspace-panel .header-account button { margin-left: auto; min-height: 34px; font-size: 12px; }
+.callspace-ready .callspace-panel :is(.documents,.shared-browser,.live-voice-panel,.call-panel) { padding: 0; border: 0; border-radius: 0; background: transparent; margin: 0 0 26px; overflow: visible; }
+.callspace-ready .callspace-panel .panel-heading { padding: 0 0 16px; border-color: #e8ebe0; }
+.callspace-ready .callspace-panel .panel-heading h3 { font-size: 17px; }
+.callspace-ready .callspace-panel .document-empty { padding: 45px 10px; color: #989f8d; }
+.callspace-ready .callspace-panel .document-empty :is(span,small) { color: #a7ae9d; }
+.callspace-ready .callspace-panel .document-list { padding: 12px 0; border-color: #e8ebe0; }
+.callspace-ready .callspace-panel .document-tab { background: #f5f6f1; color: #7b866e; border-color: #e4e8dc; }
+.callspace-ready .callspace-panel .document-tab[aria-current="true"] { background: #e9eddf; border-color: #cbd4be; }
+.callspace-ready .callspace-panel .document-form { padding: 16px 0 0; }
+.callspace-ready .callspace-panel .document-form textarea { font-size: 13px; min-height: 270px; }
+.callspace-ready .callspace-panel .editor-meta { color: #98a08c; font-size: 10px; }
+.callspace-ready .callspace-panel .editor-meta #documentDirty { color: #8f7742; }
+.callspace-ready .callspace-panel .shared-browser > summary { padding: 0 0 15px; font-size: 17px; }
+.callspace-ready .callspace-panel .shared-browser > summary span { display: block; margin: 3px 0 0; color: #9aa28e; }
+.callspace-ready .callspace-panel .browser-panel-body { padding: 0; }
+.callspace-ready .callspace-panel .browser-view { background: #e9ede1; }
+.callspace-ready .callspace-panel .browser-form { flex-wrap: wrap; }
+.callspace-ready .callspace-panel .browser-form input { flex-basis: 100%; }
+.callspace-ready .callspace-panel :is(.live-voice-heading strong,.call-panel h3) { font-size: 16px; }
+.callspace-ready .callspace-panel .live-voice-panel { margin-top: 27px; }
+.callspace-ready .callspace-panel .live-voice-controls { gap: 7px; }
+.callspace-ready .callspace-panel .live-voice-controls button { min-height: 38px; font-size: 12px; }
+.callspace-ready .callspace-panel .live-voice-heading progress { accent-color: #8b9a78; }
+.callspace-ready .callspace-panel .live-voice-caption { color: #606d50; }
+.callspace-ready .callspace-panel .reign-copy { padding: 16px; background: #f3f5ee; border-radius: 17px; }
+.callspace-ready .callspace-panel .reign-copy strong { font-size: 13px; color: #667259; }
+.callspace-ready .callspace-panel .reign-copy p { color: #949e88; font-size: 12px; }
+.callspace-ready .callspace-panel .assistant-dot { display: none; }
+.callspace-ready .callspace-panel .check-label { padding: 0 2px; font-size: 13px; color: #707b63; }
+.callspace-ready .callspace-panel .check-label input { width: 16px; height: 16px; accent-color: #596c47; }
+.callspace-ready .callspace-panel .call-panel { padding-top: 24px; border-top: 1px solid #e8ebdf; }
+.callspace-ready .callspace-panel .count-badge { color: #9aa38d; }
+.callspace-ready .callspace-panel .presence-chip { background: #f4f7ee; border-color: #e3ead8; color: #7d8a6b; }
+.callspace-ready .callspace-panel .call-controls button { font-size: 12px; min-height: 38px; }
+.callspace-ready .callspace-panel .call-controls button[aria-pressed="true"] { color: #4e653b; border-color: #b9cda6; background: #eff8e5; }
+.callspace-view-settings h3 { font-size: 13px; font-weight: 600; color: #919a84; margin-bottom: 13px; }
+.callspace-mode-controls { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; }
+.callspace-ready .callspace-mode-controls button { display: flex; flex-direction: column; align-items: center; gap: 9px; min-height: 83px; padding: 14px 8px; border: 1px solid #e6ebdf; border-radius: 17px; background: #f7f9f3; font-size: 12px; color: #8b987c; }
+.callspace-ready .callspace-mode-controls button[aria-pressed="true"] { color: #324526; border-color: #c7d4bb; background: #eaf1e1; }
+.callspace-mode-controls svg { width: 23px; height: 23px; }
+.callspace-ready .callspace-panel .dictation-tools { gap: 9px; margin: 4px 0 18px; }
+.callspace-ready .callspace-panel .dictation-tools button { font-size: 13px; min-height: 42px; border-radius: 15px; }
+.callspace-ready .callspace-panel .dictation-tools .form-status { flex-basis: 100%; }
+.callspace-ready .callspace-panel .dictation-help { font-size: 11px; }
+.callspace-ready .callspace-panel .share-actions button { min-height: 40px; font-size: 12px; border-radius: 14px; }
+.callspace-action-links { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.callspace-ready .callspace-action-links button { min-height: 45px; border-radius: 14px; font-size: 12px; }
+.callspace-ready .callspace-panel .composer-note { padding: 0; color: #9ba58e; font-size: 11px; }
+
+/* Existing permission, member and image dialogs stay native and retain every field. */
+.callspace-ready .app-dialog { background: #fff; color: #20251b; border-color: #e4e9da; box-shadow: 0 24px 90px #0000001c; }
+.callspace-ready .app-dialog::backdrop { background: #e3e8da88; backdrop-filter: blur(9px); }
+.callspace-ready .app-dialog > p,
+.callspace-ready .dialog-intro { color: #818e71; }
+.callspace-ready .managed-member { border-color: #e4e9db; }
+.callspace-ready .conflict-box { color: #7e6b40; background: #fbf7ec; border-color: #e5d9b6; }
+.callspace-ready .camera-preview { border-color: #e2e8d9; background: #f0f3eb; }
+.callspace-ready[data-callspace-unavailable="true"] > .app-header { display: flex; min-height: 90px; padding: 22px; background: #fff; border-color: #eceee7; }
+.callspace-ready[data-callspace-unavailable="true"] > .app-header .brand { color: #30372a; }
+.callspace-ready[data-callspace-unavailable="true"] > .app-header .brand span { color: #9ba38e; }
+.callspace-ready[data-callspace-unavailable="true"] .header-account > #accountName { color: #717a66; }
+.callspace-ready[data-callspace-unavailable="true"] .global-notice { top: 112px; }
+
+@media (min-width: 760px) {
+  .callspace-topbar { top: max(28px, calc(env(safe-area-inset-top) + 18px)); inset-inline: 28px; }
+  .callspace-ready .callspace-topbar > .callspace-icon { width: 49px; height: 49px; min-height: 49px; }
+  .callspace-ready #callspaceTranscript { bottom: 144px; }
+  .callspace-dock { bottom: max(25px, calc(env(safe-area-inset-bottom) + 14px)); }
+  .callspace-ready .message { margin-bottom: 32px; }
+  .callspace-ready #callspaceTranscript .room-header { margin-bottom: 26px; }
+  .callspace-ready #callspaceTranscript .room-header h2 { font-size: 22px; }
+  .callspace-ready #callParticipants { left: 100px; width: 230px; }
+  .callspace-ready #liveCameraView { left: 104px; width: 105px; height: 112px; }
+  .callspace-ready #roomView:has(#liveCameraView:not([hidden])) #callParticipants { top: 151px; }
+  .callspace-shell[data-mode="split"] #roomView:has(#liveCameraView:not([hidden])) #callParticipants,
+  .callspace-shell[data-mode="call"] #roomView:has(#liveCameraView:not([hidden])) #callParticipants { top: 211px; }
+  .callspace-shell[data-mode="call"] .reign-name { left: max(28px, calc((100% - 900px) / 2)); }
+  .callspace-shell[data-mode="call"] .callspace-activity { left: max(28px, calc((100% - 900px) / 2)); right: max(28px, calc((100% - 900px) / 2)); }
+}
+@media (max-height: 600px) and (min-width: 600px) {
+  .callspace-ready #callspaceTranscript { top: 133px; bottom: 110px; }
+  .callspace-shell[data-mode="chat"] #roomView:has(#liveCameraView:not([hidden])):has(#callParticipants:not(:empty)) #callspaceTranscript { top: calc(var(--callspace-transcript-top) + env(safe-area-inset-top)); }
+  .callspace-shell[data-mode="split"] #callspaceTranscript { left: 52%; top: 103px; right: 24px; }
+  .callspace-shell[data-mode="split"] .callspace-face { left: 16px; top: 92px; width: calc(48% - 16px); height: calc(100% - 180px); }
+  .callspace-shell[data-mode="split"] .callspace-activity { left: 52%; top: 78px; }
+  .callspace-ready .message-content { font-size: 20px; }
+}
+@media (max-width: 350px) {
+  .callspace-dock { width: calc(100% - 18px); }
+  .callspace-dock-row { grid-template-columns: 45px 45px minmax(0,1fr); gap: 6px; }
+  .callspace-ready .callspace-dock-row > .callspace-icon { width: 45px; height: 45px; min-height: 45px; }
+  .callspace-ready .callspace-composer textarea { font-size: 17px; padding-left: 14px; }
+  .callspace-ready .callspace-panel { inset-inline: 8px; width: calc(100vw - 16px); }
+  .callspace-panel-body { padding-inline: 16px; }
+  .callspace-menu-nav { padding-inline: 16px; gap: 3px; }
+  .callspace-ready .callspace-menu-nav button { font-size: 10px; padding-inline: 8px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .callspace-ready *, .callspace-ready *::before, .callspace-ready *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+}

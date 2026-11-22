@@ -15,6 +15,7 @@ import wave
 from urllib.parse import parse_qs, urlsplit
 
 from playwright.async_api import expect
+from team_callspace_smoke import callspace_click, callspace_control
 
 
 AUDIO_OBSERVER = r"""(() => {
@@ -180,8 +181,8 @@ async def simulated_team_speech_ui(browser, storage_state, origin, evidence):
         await expect(page.locator('#reignAvatar')).to_have_attribute('data-ready', 'true')
         await expect(page.locator('#speakReply')).to_be_checked()
         assert await page.evaluate('__speechOutput.contexts.length') == 0
-        await page.locator('#messageInput').fill('Synthetic audio synchronization check.')
-        await page.locator('#askReign').click()
+        await (await callspace_control(page, '#messageInput')).fill('Synthetic audio synchronization check.')
+        await callspace_click(page, '#askReign')
         # A pending later segment must not delay already available first audio.
         # Release it only after real playback and mouth movement are observed.
         await page.wait_for_function("""() => __speechOutput.sources.length === 1 &&
@@ -229,18 +230,18 @@ async def simulated_team_speech_ui(browser, storage_state, origin, evidence):
 
         # A real suspended AudioContext must stop facial speech immediately and
         # recover from the visible audio control without replaying old replies.
-        await page.locator('#messageInput').fill('Synthetic suspension and room-change check.')
-        await page.locator('#askReign').click()
+        await (await callspace_control(page, '#messageInput')).fill('Synthetic suspension and room-change check.')
+        await callspace_click(page, '#askReign')
         await page.wait_for_function("""() => __speechOutput.sources.length === 3 &&
             Number(document.querySelector('#reignAvatar').dataset.mouth) > .15""")
         await page.evaluate('__speechOutput.contexts[0].suspend()')
         await page.wait_for_function("""() => document.querySelector('#reignAvatar').dataset.speaking === 'false' &&
             Number(document.querySelector('#reignAvatar').dataset.mouth) < .001""")
         await expect(page.locator('#assistantDetail')).to_contain_text(re.compile('audio|listen|paused', re.I))
-        await page.locator('#listenReign').click()
+        await callspace_click(page, '#listenReign')
         await page.wait_for_function("""() => __speechOutput.contexts[0].state === 'running' &&
             Number(document.querySelector('#reignAvatar').dataset.mouth) > .15""")
-        await page.locator(f'[data-room-id="{other_id}"]').click()
+        await callspace_click(page, f'[data-room-id="{other_id}"]')
         await expect(page.locator('#roomTitle')).to_have_text('Synthetic empty room')
         await expect(page.locator('#roomView')).to_be_visible()
         await expect(page.locator('#messageInput')).to_be_enabled()
@@ -249,7 +250,7 @@ async def simulated_team_speech_ui(browser, storage_state, origin, evidence):
         assert await page.evaluate("Number(document.querySelector('#reignAvatar').dataset.mouth)") == 0
         before = await page.evaluate('__speechOutput.sources.length')
         requests_before = len(audio_requests)
-        await page.locator(f'[data-room-id="{room_id}"]').click()
+        await callspace_click(page, f'[data-room-id="{room_id}"]')
         await expect(page.locator('#roomTitle')).to_have_text('Synthetic audio check')
         await expect(page.locator('#roomView')).to_be_visible()
         await expect(page.locator('#messageInput')).to_be_enabled()
@@ -258,18 +259,18 @@ async def simulated_team_speech_ui(browser, storage_state, origin, evidence):
         await page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
         assert await page.evaluate('__speechOutput.sources.length') == before
         assert len(audio_requests) == requests_before, 'Restored archive requested old speech'
-        await page.locator('#speakReply').uncheck()
-        await page.locator('#messageInput').fill('Synthetic explicit text-only check.')
-        await page.locator('#askReign').click()
+        await (await callspace_control(page, '#speakReply')).uncheck()
+        await (await callspace_control(page, '#messageInput')).fill('Synthetic explicit text-only check.')
+        await callspace_click(page, '#askReign')
         await expect(page.locator('#eventFeed')).to_contain_text('Synthetic explicit text-only check.')
         await expect(page.locator(f'[data-sequence="{len(events)}"]')).to_be_visible()
         assert posts[-1]['speak'] is False
         assert await page.evaluate('__speechOutput.sources.length') == before
-        await page.locator(f'[data-room-id="{other_id}"]').click()
+        await callspace_click(page, f'[data-room-id="{other_id}"]')
         await expect(page.locator('#roomTitle')).to_have_text('Synthetic empty room')
         await expect(page.locator('#roomView')).to_be_visible()
         await expect(page.locator('#messageInput')).to_be_enabled()
-        await page.locator(f'[data-room-id="{room_id}"]').click()
+        await callspace_click(page, f'[data-room-id="{room_id}"]')
         await expect(page.locator('#roomView')).to_be_visible()
         await expect(page.locator('#messageInput')).to_be_enabled()
         await expect(page.locator('#speakReply')).not_to_be_checked()
