@@ -422,6 +422,16 @@ def install(app, authorize):
         finally:
             if reserved: runtime.pending_auth -= 1
 
+    @app.post("/internal/team/console-access")
+    async def console_access(request: Request):
+        authorize(request); runtime = get_runtime(request)
+        value = await body(request, {"id", "credential_revision"}, {"id", "credential_revision"}, 2048)
+        identifier(value["id"])
+        if type(value["credential_revision"]) is not int or not 1 <= value["credential_revision"] < 2**31:
+            raise TeamError("team_identity_required")
+        allowed = await asyncio.to_thread(runtime.store.console_access, value["id"], value["credential_revision"])
+        return reply({"console_access": allowed})
+
     @app.post("/internal/team/identity")
     async def resolve_identity(request: Request):
         authorize(request); runtime = get_runtime(request)
@@ -442,6 +452,16 @@ def install(app, authorize):
         if actor["role"] != "owner": raise TeamError("team_owner_required")
         value = await body(request, {"username", "display_name"}, {"username", "display_name"}, 2048)
         return reply(await asyncio.to_thread(runtime.store.create_member, actor, value["username"], value["display_name"]), 201)
+
+    @app.patch("/api/team/members/{user_id}/console-access")
+    async def member_console_access(user_id: str, request: Request):
+        actor = await require_actor(request); runtime = get_runtime(request)
+        if actor["role"] != "owner" or user_id == OWNER_ID:
+            raise TeamError("team_owner_required")
+        value = await body(request, {"enabled"}, {"enabled"}, 1024)
+        if type(value["enabled"]) is not bool:
+            raise TeamError("invalid_team_request")
+        return reply(await asyncio.to_thread(runtime.store.set_console_access, actor, user_id, value["enabled"]))
 
     @app.patch("/api/team/members/{user_id}")
     async def disable_member(user_id: str, request: Request):

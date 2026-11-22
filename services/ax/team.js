@@ -216,9 +216,13 @@ export function createTeamWorkspace(deps = {}) {
       }
       if (!owner()) continue;
       const row = element('div', 'managed-member'), text = element('div');
-      text.append(element('strong', '', member.display_name), element('small', '', `${member.username} · ${member.active === false ? 'Access revoked' : member.role === 'owner' ? 'Owner' : 'Employee'}`));
+      text.append(element('strong', '', member.display_name), element('small', '', `${member.username} · ${member.active === false ? 'Access revoked' : member.role === 'owner' ? 'Owner' : member.console_access ? 'REIGN + Genesis collaborator' : 'Employee'}`));
       row.append(text);
       if (member.role !== 'owner' && member.active !== false && member.id !== state.profile.me.id) {
+        const access = element('button', 'quiet', member.console_access ? 'Remove console access' : 'Grant REIGN + Genesis');
+        access.type = 'button'; access.disabled = state.memberBusy;
+        access.addEventListener('click', () => setConsoleAccess(member, !member.console_access));
+        row.append(access);
         const revoke = element('button', 'danger', 'Revoke access'); revoke.type = 'button'; revoke.disabled = state.memberBusy;
         revoke.addEventListener('click', () => revokeMember(member)); row.append(revoke);
       }
@@ -649,6 +653,19 @@ export function createTeamWorkspace(deps = {}) {
       state.memberUncertain = !error.status || error.status >= 500;
       notice('memberStatus', state.memberUncertain ? 'Creation wasn’t confirmed. Refresh the team before trying again. A generated password cannot be retrieved later.' : error.message, true);
     } finally { state.memberBusy = false; $('createMember').disabled = state.memberUncertain; renderMembers(); }
+  }
+  async function setConsoleAccess(member, enabled) {
+    if (!owner() || state.memberBusy || member.active === false ||
+        !confirm(`${enabled ? 'Grant' : 'Remove'} REIGN and Genesis console access ${enabled ? 'to' : 'from'} ${member.display_name}? Owner credentials and security administration remain restricted.`)) return;
+    state.memberBusy = true; renderMembers();
+    try {
+      const result = await request('/api/team/members/' + escapedId(member.id) + '/console-access', 'PATCH', {enabled});
+      const index = state.members.findIndex(value => value.id === member.id);
+      if (index >= 0 && result.member?.id === member.id) state.members[index] = result.member;
+      else throw Error('The change was not confirmed. Refresh members to verify access.');
+      notice('memberStatus', `${member.display_name}: ${enabled ? 'REIGN and Genesis access granted' : 'console access removed'}.`);
+    } catch (error) { notice('memberStatus', error.message, true); }
+    finally { state.memberBusy = false; renderMembers(); }
   }
   async function revokeMember(member) {
     if (!owner() || state.memberBusy || !confirm(`Revoke ${member.display_name}’s access to Workspace? Their saved messages and documents will remain.`)) return;
