@@ -8,12 +8,12 @@ has a dedicated 1 GB disk at `/var/data/reign-vault`. This integration adds no
 Render service, disk or compute-plan upgrade. It does add runtime CPU/memory
 usage, which must be measured during rollout on the existing 512 MB instance.
 
-The code remains **disabled by default**. The Blueprint now contains the tested
-Core image and settings for the requested enrollment rollout. The release evidence
-and pending manual-apply checkpoint are recorded in
-[TAILSCALE_PROMOTION_RECEIPT.md](TAILSCALE_PROMOTION_RECEIPT.md). Prepare the
-private enrollment key before applying the existing Blueprint with auto-sync off.
-Enrollment, backend SSH and retained-identity restart still need live verification.
+The code remains **disabled by default**. The Blueprint temporarily keeps the
+client disabled while a runtime-directory repair passes release and promotion
+checks. It uses a diagnostic command that explicitly invokes the nonroot Core
+entrypoint. [TAILSCALE_PROMOTION_RECEIPT.md](TAILSCALE_PROMOTION_RECEIPT.md) records
+the earlier prepared rollout checkpoint. Enrollment, backend SSH and retained
+identity after restart still need live verification. Keep Blueprint auto-sync off.
 
 Core is an outbound Tailscale client. It runs neither an SSH server nor a subnet
 router, exit node or publicly reachable proxy. This does not add model-call
@@ -42,6 +42,11 @@ or repair unsafe state recursively. Keep Core at one instance with this disk.
 
 The local control socket is `/tmp/reign-tailscale/tailscaled.sock` inside a
 private directory. The app receives its path as `REIGN_TAILSCALE_SOCKET`.
+When creating that directory, the runtime resets an inherited setgid group to
+Core's primary group and mode `0700` through its owned directory descriptor.
+Existing unsafe directories remain rejected without repair. Daemon log files
+use the private persistent state directory through `TS_LOGS_DIR`; they must not
+leave extra files under the ephemeral runtime directory across restarts.
 No proxy port or system-wide DNS/routing change is configured. Ordinary TCP
 clients use Tailscale's userspace dialer explicitly.
 
@@ -59,7 +64,9 @@ The auth key is removed from the wrapper's environment before starting child
 processes. Enrollment receives a temporary private file reference rather than
 the key in command-line arguments. The file is removed after enrollment or
 failure. Saved Running/Stopped identity does not consume another key on restart.
-Tailscale child output is suppressed; startup failures expose fixed diagnostics.
+An exactly empty auth-key value means no key; whitespace remains invalid.
+Tailscale child output is suppressed; storage failures expose only a fixed
+message and numeric ownership, mode, type and link-count metadata.
 Changing `REIGN_TAILSCALE_TAGS` does not retag an existing saved identity; manage
 later tag changes explicitly in the tailnet and verify its effective policy.
 
@@ -88,10 +95,13 @@ CI, logs, release artifacts or a URL.
    service tag. Preauthorize only if appropriate under the existing device
    approval policy. Store it privately on the existing Core service. Keep the
    selected hostname stable. Device/key approval remains a tailnet operation.
-4. Run the repository's required validation. The added container check starts
-   the actual pinned daemon as UID 10001 with Docker networking disabled; it
-   checks local API and CLI preferences without enrolling a device. This check
-   does not establish internet reachability, authentication or backend SSH.
+4. Run the repository's required validation. The container check reproduces
+   setgid inheritance with primary UID/GID 10001 and supplementary group 1000.
+   It starts the actual pinned daemon twice with Docker networking disabled,
+   checks private log placement and reapplies/verifies the safe CLI preferences
+   on each start, and never enrolls a device. The release workflow repeats this
+   check on the exact image it publishes. These checks do not establish internet reachability,
+   authentication, retained node identity or backend SSH.
 5. Publish the tested Core image through the existing release workflow. Promote
    its immutable digest through the existing Blueprint
    `exs-dbofqkm417fc7384kou0` and set `REIGN_TAILSCALE_ENABLED=1` only when the
@@ -101,7 +111,8 @@ CI, logs, release artifacts or a URL.
    instance. Watch deployment logs, Core memory/CPU and application readiness.
    Record actual enrollment, SSH and application evidence separately.
 7. After successful enrollment, remove the one-off auth key from the service
-   configuration without replacing unrelated variables. Test restart with
+   configuration, or set it to an exactly empty value, without replacing
+   unrelated variables. Test restart with
    the retained identity and no enrollment key. Do not revoke the node itself.
 
 ## SSH verification from the deployed service
@@ -109,6 +120,11 @@ CI, logs, release artifacts or a URL.
 Run diagnostics as the `reign` account (or an authorized root administrator)
 in the deployed Core container. The private socket is not reachable from other
 Render services or from this coding workspace.
+Storage-validator diagnostics must run as the dedicated service account. A
+temporary Render Docker command must explicitly invoke
+`python -m reign.core_entrypoint` before its diagnostic command; the live custom-command
+path bypassed the image entrypoint. Remove the override when promoting the
+repaired image so normal startup uses its image entrypoint and CMD.
 
 ```bash
 /usr/local/bin/tailscale --socket=/tmp/reign-tailscale/tailscaled.sock status
