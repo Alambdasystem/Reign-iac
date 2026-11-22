@@ -5,11 +5,13 @@ does not establish physical-device or cross-network/TURN reliability. No model
 provider credentials or employee passwords are written to evidence.
 """
 import asyncio
+import base64
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from playwright.async_api import async_playwright, expect
 
@@ -92,9 +94,211 @@ async def shared_browser_check(page, room_id):
     assert (await api(page, path))["data"]["status"] == "closed"
 
 
+async def camera_check(browser, room_id, room_title, passed, errors, receipt):
+    """Real synthetic-camera capture and protected transport, with no AI provider.
+
+    The capability advertisement alone is overridden for the description case.
+    Upload, viewer admission, message rejection and explicit retry all use the
+    actual disposable AX/Core services. This cannot prove model vision or audio.
+    """
+    context = await browser.new_context(ignore_https_errors=True, permissions=["camera"],
+                                        viewport={"width": 390, "height": 900})
+    await context.add_init_script(PROBE)
+    page = await context.new_page()
+    page.set_default_timeout(30000)
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    media_requests = []
+    page.on("request", lambda request: media_requests.append(request) if request.method == "POST" and
+            urlsplit(request.url).path.endswith(("/attachments", "/messages", "/signals", "/transcriptions")) else None)
+    logout_started, release_logout = asyncio.Event(), asyncio.Event()
+    receipt.update(status="RUNNING", device_source="Chromium synthetic camera",
+                   capability_override="Client advertisement only: assistant, vision, speech",
+                   provider_inference="NOT EXERCISED; CI has no provider", physical_device="NOT EXERCISED")
+
+    def matching(response, suffix):
+        return response.request.method == "POST" and urlsplit(response.url).path == f"/api/team/rooms/{room_id}/{suffix}"
+
+    async def ready():
+        await expect(page.locator("#cameraDialog")).to_be_visible()
+        await expect(page.locator("#cameraPreview")).to_have_attribute("data-state", "ready")
+        await page.wait_for_function("""() => {
+          const v = document.getElementById('cameraPreview');
+          return v.srcObject?.getVideoTracks().some(t=>t.readyState==='live') &&
+            !v.srcObject.getAudioTracks().length && v.videoWidth>0 && v.videoHeight>0 &&
+            !v.paused && v.muted && v.playsInline;
+        }""")
+
+    async def stopped():
+        await page.wait_for_function("""() => !document.getElementById('cameraPreview').srcObject &&
+          __teamProbe.tracks.length>0 && __teamProbe.tracks.every(t=>t.readyState==='ended')""")
+        await expect(page.locator("#describeCamera")).to_be_disabled()
+
+    async def device_summary():
+        value = await page.evaluate("""() => ({requests:__teamProbe.deviceRequests,
+          kinds:__teamProbe.tracks.map(t=>t.kind), peers:__teamProbe.peers.length})""")
+        assert value["peers"] == 0 and all(kind == "video" for kind in value["kinds"])
+        assert all(item.get("audio") is False and item.get("video") for item in value["requests"])
+        return len(value["requests"])
+
+    try:
+        # A distinct login avoids revoking the baseline owner's session. This
+        # helper runs after the original call/revocation/logout acceptance.
+        await login(page, "owner", os.environ["AX_ADMIN_PASSWORD"])
+        await page.locator(f'[data-room-id="{room_id}"]').click()
+        await expect(page.locator("#roomTitle")).to_have_text(room_title)
+        profile = (await api(page, "/api/team"))["data"]
+        assert profile["capabilities"]["assistant"] is False and profile["capabilities"]["vision"] is False
+        assert await device_summary() == 0
+        await page.locator("#openCamera").click()
+        await ready()
+        await expect(page.locator("#describeCamera")).to_be_disabled()
+        await expect(page.locator("#cameraAvailability")).to_contain_text("vision connection is unavailable")
+        await page.wait_for_timeout(250)
+        assert not media_requests, "Opening a private camera preview sent media or a message"
+        await page.screenshot(path=str(OUTPUT / "team-camera-private-preview.png"))
+        await page.locator("#stopCamera").click()
+        await stopped()
+        await expect(page.locator("#cameraDialog")).to_be_visible()
+        await page.locator("#restartCamera").click()
+        await ready()
+        await page.locator("#closeCamera").click()
+        await stopped()
+        await expect(page.locator("#cameraDialog")).to_be_hidden()
+        passed("T17 camera opens only by gesture with video-only live preview; no upload, microphone or peer; Stop and Close release tracks")
+
+        other = next((room for room in profile["rooms"] if room["id"] != room_id), None)
+        if other is None:
+            # The only additional durable record is a synthetic lifecycle room
+            # in the disposable CI disk. The saved acceptance room stays intact.
+            title = "CI camera lifecycle " + uuid4().hex[:8]
+            await page.locator("#newRoomButton").click()
+            await page.locator("#roomTitleInput").fill(title)
+            await page.locator("#roomCreateForm button[type=submit]").click()
+            await expect(page.locator("#roomTitle")).to_have_text(title)
+            other = {"id": await page.locator('[data-room-id][aria-current="page"]').get_attribute("data-room-id"), "title": title}
+            await page.locator(f'[data-room-id="{room_id}"]').click()
+            await expect(page.locator("#roomTitle")).to_have_text(room_title)
+        await page.locator("#openCamera").click()
+        await ready()
+        # A modal makes background buttons inert to pointer input. Invoke the
+        # actual room-change handler to prove teardown even for an asynchronous
+        # navigation while the preview is open; no application state is mocked.
+        await page.locator(f'[data-room-id="{other["id"]}"]').evaluate("button=>button.click()")
+        await expect(page.locator("#roomTitle")).to_have_text(other["title"])
+        await stopped()
+        await expect(page.locator("#cameraDialog")).to_be_hidden()
+        await page.locator(f'[data-room-id="{room_id}"]').click()
+        await expect(page.locator("#roomTitle")).to_have_text(room_title)
+        prior_device_requests = await device_summary()
+        passed("T18 room transition closes the preview and stops owned camera tracks without joining a call")
+
+        async def advertise_only(route):
+            response = await route.fetch(timeout=15000)
+            assert response.status == 200
+            value = await response.json()
+            assert value["capabilities"]["assistant"] is False
+            value["capabilities"].update(assistant=True, vision=True, speech=True)
+            await route.fulfill(response=response, json=value)
+
+        await page.route(AX + "/api/team", advertise_only)
+        await page.reload()
+        await expect(page.locator("#workspace")).to_have_attribute("aria-busy", "false")
+        await expect(page.locator("#roomTitle")).to_have_text(room_title)
+        assert await device_summary() == 0, "Restoring the room reopened camera access"
+        draft = "Synthetic typed draft retained while describing a separate camera still."
+        await page.locator("#messageInput").fill(draft)
+        await page.locator("#openCamera").click()
+        await ready()
+        await expect(page.locator("#describeCamera")).to_be_enabled()
+        assert not media_requests
+        async with page.expect_response(lambda r: matching(r, "attachments")) as upload_info, \
+                page.expect_response(lambda r: matching(r, "messages")) as question_info:
+            await page.locator("#describeCamera").click()
+        upload, question = await upload_info.value, await question_info.value
+        assert upload.status == 200, "Real protected camera attachment was not accepted"
+        assert question.status == 503 and await question.json() == {
+            "detail": "The team workspace is temporarily unavailable."}
+        await expect(page.locator("#cameraStatus")).to_have_attribute("data-error", "true")
+        await ready()
+        await expect(page.locator("#messageInput")).to_have_value(draft)
+        body, result = upload.request.post_data_json, await upload.json()
+        assert set(body) == {"data_url", "source", "connection_id", "captured_at"}
+        assert body["source"] == "camera_preview" and str(UUID(body["connection_id"])) == body["connection_id"]
+        captured = datetime.fromisoformat(body["captured_at"].replace("Z", "+00:00"))
+        assert captured.utcoffset() is not None and abs((datetime.now(timezone.utc) - captured).total_seconds()) < 60
+        assert body["data_url"].startswith("data:image/jpeg;base64,")
+        jpeg = base64.b64decode(body["data_url"].split(",", 1)[1], validate=True)
+        assert 0 < len(jpeg) <= 512 * 1024 and jpeg.startswith(b"\xff\xd8") and jpeg.endswith(b"\xff\xd9")
+        image = await page.evaluate("""async source => {
+          const image = new Image(); image.src=source; await image.decode();
+          const canvas=document.createElement('canvas'); canvas.width=32; canvas.height=18;
+          const ctx=canvas.getContext('2d'); ctx.drawImage(image,0,0,32,18);
+          const pixels=ctx.getImageData(0,0,32,18).data; let sum=0,squares=0,n=0;
+          for(let i=0;i<pixels.length;i++) if(i%4!==3){sum+=pixels[i];squares+=pixels[i]*pixels[i];n++;}
+          return {width:image.naturalWidth,height:image.naturalHeight,variance:squares/n-(sum/n)**2};
+        }""", body["data_url"])
+        assert 0 < image["width"] <= 960 and 0 < image["height"] <= 540 and image["variance"] > 20
+        attachment = result["attachment"]
+        assert attachment["source"] == "camera_preview" and attachment["participant_id"] == profile["me"]["id"]
+        presence = (await api(page, f"/api/team/rooms/{room_id}"))["data"]["presence"]
+        own = next(item for item in presence if item["connection_id"] == body["connection_id"])
+        assert own["user_id"] == profile["me"]["id"] and not any(own[key] for key in ("in_call", "microphone", "camera", "screen"))
+        question_body = question.request.post_data_json
+        assert set(question_body) == {"client_message_id", "text", "ask_reign", "speak", "attachment_ids"}
+        assert question_body["ask_reign"] is True and question_body["speak"] is True
+        assert question_body["attachment_ids"] == [attachment["id"]] and question_body["text"] != draft
+        assert str(UUID(question_body["client_message_id"])) == question_body["client_message_id"]
+        await page.locator("#closeCamera").click()
+        await stopped()
+        async with page.expect_response(lambda r: matching(r, "messages")) as retry_info:
+            await page.locator("#retryMessage").click()
+        retry = await retry_info.value
+        assert retry.status == 503 and retry.request.post_data_json == question_body
+        await expect(page.locator("#messageInput")).to_have_value(draft)
+        await expect(page.locator("#retryMessage")).to_be_enabled()
+        await page.wait_for_timeout(400)
+        assert sum(urlsplit(r.url).path.endswith("/attachments") for r in media_requests) == 1
+        assert sum(urlsplit(r.url).path.endswith("/messages") for r in media_requests) == 2
+        assert not any(urlsplit(r.url).path.endswith(("/signals", "/transcriptions")) for r in media_requests)
+        receipt.update(attachment_status=upload.status, description_status=question.status, retry_status=retry.status,
+                       jpeg_bytes=len(jpeg), jpeg_width=image["width"], jpeg_height=image["height"],
+                       pixel_variance=round(image["variance"], 2), explicit_uploads=1, explicit_message_attempts=2)
+        # Camera bytes and attachment/message identities stay in process memory;
+        # only dimensions, status and counters enter the retained CI receipt.
+        del jpeg, body, result, question_body
+        await page.screenshot(path=str(OUTPUT / "team-camera-provider-unavailable.png"))
+        passed("T19 explicit Describe uploads real bounded JPEG through protected viewer admission; actual provider 503 retains draft; Retry reuses the same message and image")
+
+        async def held_logout(route):
+            logout_started.set()
+            await asyncio.wait_for(release_logout.wait(), timeout=10)
+            await route.continue_()
+
+        await page.route(AX + "/logout", held_logout)
+        await page.locator("#openCamera").click()
+        await ready()
+        total_requests = prior_device_requests + await device_summary()
+        # Exercise the real logout handler while the modal is open, and hold its
+        # server request so navigation cannot hide a missing media teardown.
+        await page.locator("#logoutButton").evaluate("button=>button.click()")
+        await asyncio.wait_for(logout_started.wait(), timeout=5)
+        await stopped()
+        await expect(page.locator("#cameraDialog")).to_be_hidden()
+        assert prior_device_requests + await device_summary() == total_requests
+        release_logout.set()
+        await expect(page.locator("#loginForm")).to_be_visible()
+        receipt.update(status="PASS", camera_requests=total_requests, microphone_requests=0, peer_connections=0,
+                       cleanup=["stop", "close", "room transition", "logout before server acknowledgement"])
+        passed("T20 camera logout cleanup completes before the server responds; isolated flow never requests a microphone or creates a peer")
+    finally:
+        release_logout.set()
+        await context.close()
+
+
 async def main():
     OUTPUT.mkdir(parents=True, exist_ok=True)
     cases, errors, employee_requests, owner_requests = [], [], [], []
+    camera_receipt = {}
     def passed(name):
         cases.append({"case": name, "status": "PASS", "evidence": "Disposable CI containers / Chromium"})
     async with async_playwright() as p:
@@ -269,12 +473,13 @@ async def main():
                 await page.locator("#logoutButton").click()
                 await expect(page.locator("#loginForm")).to_be_visible()
                 passed("T14 owner logs out without deleting saved room or shared history")
+                await camera_check(browser, room_id, room_title, passed, errors, camera_receipt)
             assert not errors, "JavaScript runtime errors: " + repr(errors)
         finally:
             password = ""
             (OUTPUT / f"team-{PHASE}-results.json").write_text(json.dumps({"phase": PHASE,
                 "scope": "CI containers; synthetic devices; no physical-device or public-network claim",
-                "cases": cases, "page_errors": errors}, indent=2))
+                "cases": cases, "page_errors": errors, "camera": camera_receipt}, indent=2))
             await employee.close()
             await owner.close()
             await browser.close()

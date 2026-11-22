@@ -81,7 +81,8 @@ async function request(path,method='GET',body,options={}){
   if(method!=='GET'){headers['Content-Type']='application/json';headers['X-CSRF-Token']=csrf()}
   const cancel=()=>requestAbort.abort();
   if(options.signal?.aborted)cancel();else options.signal?.addEventListener('abort',cancel,{once:true});
-  const timeout=setTimeout(()=>{timedOut=true;requestAbort.abort()},path==='/logout'||path.startsWith('/api/chat')||path.startsWith('/api/accounts')?15000:path.startsWith('/api/voice')?40000:90000);
+  const speechRequest=/^\/api\/chat\/[0-9a-f-]{36}\/speech$/.test(path);
+  const timeout=setTimeout(()=>{timedOut=true;requestAbort.abort()},speechRequest?18000:path==='/logout'||path.startsWith('/api/chat')||path.startsWith('/api/accounts')?15000:path.startsWith('/api/voice')?40000:90000);
   try{
     const response=await fetch(path,{method,headers,credentials:'same-origin',body:body===undefined?undefined:JSON.stringify(body),cache:'no-store',signal:requestAbort.signal,keepalive:!!options.keepalive});
     if(!response.ok){
@@ -605,7 +606,25 @@ async function clearChat(expectedOwner){
     throw error;
   }
 }
-async function runVoiceTurn(message,options){return startChatRun(message,{...options,owner:options.voiceCallId})}
+async function runVoiceTurn(message,options){
+  const result=await startChatRun(message,{...options,owner:options.voiceCallId});
+  if(options.signal?.aborted)throw abortError();
+  if(!validSessionId(result?.thread_id)||!validSessionId(result?.run_id)||!['completed','failed','paused'].includes(result.status))return result;
+  options.onStatus?.('preparing_speech');
+  try{
+    // Core resolves this exact graph run and labels its verified text. The
+    // browser supplies no answer text and cannot turn annotations into actions.
+    const speech=await api('/api/chat/'+encodeURIComponent(result.thread_id)+'/speech','POST',
+      {run_id:result.run_id},{signal:options.signal});
+    if(options.signal?.aborted)throw abortError();
+    return {...result,speech};
+  }catch(error){
+    if(options.signal?.aborted||error.name==='AbortError')throw abortError();
+    if(error.status===401||error.status===403)throw error;
+    // Optional expression metadata cannot suppress the verified spoken reply.
+    return result;
+  }
+}
 async function cancelVoiceTurn(owner){if(authenticated&&accountRole==='owner'&&chatPending?.owner===owner)await clearChat(owner)}
 $('cancelAgent').onclick=async()=>{try{if(voiceUi.active)await voiceController.stop({reason:'Call ended. Microphone off.'});await clearChat()}catch(error){entry('AGENT',error.message,true)}};
 $('resumeAgent').onclick=async()=>{if(!threadId)return;try{await api('/api/chat/'+encodeURIComponent(threadId)+'/resume','POST');chatRun=null;await pollChat()}catch(error){entry('AGENT','Return browser control before resuming. '+error.message,true)}};
@@ -616,11 +635,26 @@ function refreshVoiceControls(){
   $('voiceEnd').hidden=!active&&!ending;$('voiceEnd').disabled=ending;
   $('mute').hidden=!active;$('mute').disabled=!active||accountsVisible||['checking','microphone'].includes(voiceUi.phase);
   $('mute').setAttribute('aria-pressed',String(!!voiceUi.muted));$('mute').querySelector('span').textContent=voiceUi.muted?'Unmute':'Mute';
-  $('voiceSpeaker').hidden=!active||!voiceUi.speakerBlocked;
+  $('voiceSpeaker').hidden=!active||(!voiceUi.speakerBlocked&&!voiceUi.playback?.needsGesture&&!voiceUi.playback?.retryAvailable);
+}
+function renderPlaybackDiagnostics(value){
+  if(!value)return;
+  const data=$('voiceDiagnostics').dataset;
+  const number=(value,max=86400)=>Number.isFinite(Number(value))?String(Math.max(0,Math.min(max,Number(value)))):'0';
+  data.verified=String(value.verified===true);data.paused=String(value.paused===true);data.muted=String(value.muted===true);
+  data.mediaTime=number(value.mediaTime);data.advancing=String(value.advancing===true);data.streamActive=String(value.streamActive===true);
+  data.waiting=String(value.waiting===true);
+  data.retryAvailable=String(value.retryAvailable===true);
+  data.contextState=['running','suspended','interrupted','closed','unavailable'].includes(value.meterState)?value.meterState:'unavailable';
+  data.meterAvailable=String(value.meterAvailable===true);data.outputLevel=number(value.outputLevel,1);data.outputActive=String(value.outputActive===true);
+  data.expression=['neutral','warm','thoughtful','concerned'].includes(value.expression)?value.expression:'neutral';
+  data.expressionSource=value.expressionSource==='model'?'model':'neutral';
+  data.segmentIndex=number(value.segmentIndex,4);data.segmentCount=number(value.segmentCount,4);
+  data.tailEvidence=['meter_silence','server_stop_and_native_progress'].includes(value.tailEvidence)?value.tailEvidence:'none';
 }
 function renderVoice(value){
   voiceUi=value;
-  if(!authenticated||loggingOut||logoutFailed||!value.active||value.speakerBlocked)reignPortrait?.setSpeaking(false);
+  if(!authenticated||loggingOut||logoutFailed||!value.active||value.speakerBlocked)reignPortrait?.stop();
   if(accountsVisible&&value.active&&!value.muted&&voiceController?.mute())return;
   $('voiceStatus').textContent=value.status;$('voiceStatus').dataset.error=String(value.phase==='failed');
   refreshVoiceControls();
@@ -631,7 +665,10 @@ function renderVoice(value){
     document.querySelector('.orb').dataset.mode=voiceState;activity=value.phase==='speaking'?.65:value.phase==='thinking'?.4:.1;
   }
   $('voiceDiagnostics').hidden=!value.active;
-  $('voiceDiagnostics').textContent=value.audioPlaying?'Playing REIGN’s response':value.audioEnergy||value.audioReceived?'Audio connected':'Waiting for REIGN’s response';
+  renderPlaybackDiagnostics(value.playback);
+  $('voiceDiagnostics').textContent=value.speakerBlocked?'Playback paused · Enable speaker':value.playback?.waiting?'Audio is buffering':
+    value.playback?.outputActive&&!value.playback.meterAvailable?'Audio playback active · face meter unavailable':
+    value.playback?.outputLevel>.012?'Playing REIGN’s response':value.audioEnergy||value.audioReceived?'Audio connected':'Waiting for REIGN’s response';
   if(value.phase==='ended'&&connected)say(controller==='human'?'Click, type, or scroll in the expanded screen.':'Watch REIGN’s browser, or take control whenever you need.',controller==='human'?'Your control':'Connected');
   refreshAccountsControls();wake();
 }
@@ -650,9 +687,20 @@ voiceController=REIGNVoice.createVoiceController({
     $('voiceCaption').textContent=(value.role==='user'?'You: ':'REIGN: ')+captionText;
   },
   onLevel(level){document.querySelector('.orb').style.setProperty('--voice-level',String(level));if(voiceUi.active)activity=Math.max(voiceUi.phase==='thinking'?.25:.06,level)},
-  onOutputLevel(level){
-    const speaking=authenticated&&!loggingOut&&!logoutFailed&&voiceUi.active&&!voiceUi.speakerBlocked&&level>0;
-    reignPortrait?.setSpeaking(speaking);reignPortrait?.setSpeechLevel(speaking?level:0);
+  onOutputLevel(level,playback){
+    renderPlaybackDiagnostics(playback);
+    const speaking=authenticated&&!loggingOut&&!logoutFailed&&voiceUi.active&&!voiceUi.speakerBlocked&&
+      (playback?playback.active===true:level>0);
+    const expression=speaking&&playback?.expressionSource==='model'?playback.expression:'neutral';
+    if(reignPortrait?.setPlaybackState){
+      reignPortrait.setPlaybackState({active:speaking,level:speaking?level:0,expression,
+        clockMs:(playback?.mediaTime||0)*1000,cueMs:playback?.cueMs||0,
+        expressionSource:speaking&&playback?.expressionSource==='model'?'response-segment':'neutral',
+        segment:speaking?playback?.segmentIndex||0:0});
+    }else{
+      reignPortrait?.setSpeaking(speaking);reignPortrait?.setSpeechLevel(speaking?level:0);
+      reignPortrait?.setExpression?.(expression);
+    }
   }
 });
 $('voiceStart').onclick=()=>{captionRole='';captionText='';$('voiceCaption').hidden=true;voiceController.start()};

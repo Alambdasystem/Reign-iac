@@ -5,12 +5,12 @@ import json
 import math
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 import wave
 
 from PIL import Image
 
-from reign.team_acceptance import run_acceptance
+from reign.team_acceptance import EXPRESSION_FIXTURE, run_acceptance
 
 
 def audible_fixture():
@@ -23,7 +23,7 @@ def audible_fixture():
 
 
 class TeamAcceptanceTests(unittest.IsolatedAsyncioTestCase):
-    async def probe(self, content):
+    async def probe(self, content, expression_segments=None, expression_error=None):
         test = self
         caches = []
         class FixtureAssistant:
@@ -40,8 +40,14 @@ class TeamAcceptanceTests(unittest.IsolatedAsyncioTestCase):
                 key = self.cache.put(context["room"]["id"], "reign", audible_fixture(), "audio")
                 return {"text": sentence, "segments": [{"text": sentence, "expression": "warm", "audio_id": key}],
                         "documents": [{"title": "Team release probe", "content": content}], "speech_status": "ready"}
-        with patch("reign.team_acceptance.TeamAssistant", FixtureAssistant):
+        expression_segments = expression_segments if expression_segments is not None else [
+            {"text": "The draft is saved.", "expression": "warm"},
+            {"text": "Please review it before sharing.", "expression": "thoughtful"}]
+        with patch("reign.team_acceptance.TeamAssistant", FixtureAssistant), \
+             patch("reign.team_acceptance.PrivateSpeech.annotate", new_callable=AsyncMock,
+                   return_value=expression_segments, side_effect=expression_error) as annotations:
             receipt = await run_acceptance()
+            if receipt["status"] == "passed": annotations.assert_awaited_once_with(EXPRESSION_FIXTURE)
         self.assertTrue(caches); self.assertTrue(all(not cache.items for cache in caches))
         return receipt
 
@@ -50,6 +56,7 @@ class TeamAcceptanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(receipt["status"], "passed")
         self.assertTrue(receipt["document_draft"])
         self.assertTrue(receipt["image_interpreted"])
+        self.assertTrue(receipt["private_expression_annotation"])
         self.assertEqual(receipt["archive_writes"], 0)
         self.assertEqual(receipt["physical_device"], "not_run")
         self.assertEqual(receipt["audio"]["duration_seconds"], .5)
@@ -64,6 +71,20 @@ class TeamAcceptanceTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(receipt["error_code"], "team_provider_probe_failed")
                 self.assertNotIn("document_draft", receipt)
                 if content.strip(): self.assertNotIn(content, json.dumps(receipt))
+
+    async def test_expression_failure_or_changed_words_cannot_pass_the_live_provider_gate(self):
+        for segments, error in (
+            ([{"text": "The draft is shared.", "expression": "warm"}], None),
+            ([{"text": EXPRESSION_FIXTURE, "expression": "invented-mood"}], None),
+            ([], None),
+            (None, TimeoutError("private-provider-details")),
+        ):
+            with self.subTest(segments=segments, error=type(error).__name__):
+                receipt = await self.probe("A blue square.", segments, error)
+                self.assertEqual(receipt["status"], "failed")
+                self.assertEqual(receipt["stage"], "expressions")
+                self.assertNotIn("private_expression_annotation", receipt)
+                self.assertNotIn("private-provider-details", json.dumps(receipt))
 
 
 if __name__ == "__main__": unittest.main()

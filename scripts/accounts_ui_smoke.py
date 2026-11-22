@@ -123,7 +123,7 @@ async def _voice_interlock(browser, storage_state, origin, voice_bootstrap, mark
     account_writes = []
     page.on("request", lambda request: account_writes.append(request.method)
             if request.method != "GET" and urlsplit(request.url).path.startswith("/api/accounts") else None)
-    snapshot = {"thread_id": thread, "run_id": "accounts-ui-synthetic-run", "status": "completed",
+    snapshot = {"thread_id": thread, "run_id": "00000000-0000-4000-8000-000000000201", "status": "completed",
                 "session_id": None, "events": [{"sequence": 1, "kind": "account_entry_requested",
                                                   "label": requested_label, "origin": TARGET_ORIGIN},
                                                  {"sequence": 2, "kind": "completed"}],
@@ -139,6 +139,11 @@ async def _voice_interlock(browser, storage_state, origin, voice_bootstrap, mark
                       "model": "synthetic-accounts-realtime", "max_duration_seconds": 900}
         elif path == "/api/agent":
             result = {"configured": True, "model": "synthetic-accounts-graph", "max_turns": 24}
+        elif path == "/api/chat/" + thread + "/speech":
+            assert route.request.method == "POST"
+            assert route.request.post_data_json == {"run_id": snapshot["run_id"]}
+            result = {"thread_id": thread, "run_id": snapshot["run_id"], "status": "completed",
+                      "text": "", "segments": [], "speech_status": "unavailable"}
         elif path == "/api/chat" or path == "/api/chat/" + thread:
             if route.request.post_data:
                 assert not any(marker in route.request.post_data for marker in markers), "Account data entered the synthetic graph request"

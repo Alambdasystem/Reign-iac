@@ -692,6 +692,23 @@ async def chat_resume(tid: str, request: Request):
     return JSONResponse((await core("POST", f"/api/chat/{session_id(tid)}/resume")).json(), headers={"Cache-Control": "no-store"})
 
 
+@app.post("/api/chat/{tid}/speech")
+async def chat_speech(tid: str, request: Request):
+    from reign.speech import read_speech_request
+    csrf(request)
+    thread_id = session_id(tid)
+    run_id = await read_speech_request(request)
+    try:
+        async with asyncio.timeout(16):
+            result = await core("POST", f"/api/chat/{thread_id}/speech", {"run_id": run_id})
+    except TimeoutError:
+        raise HTTPException(503, "Speech expressions are unavailable") from None
+    # Logout or a password revision while the optional model request was in
+    # flight must also prevent delivery of the private response.
+    user(request)
+    return JSONResponse(result.json(), headers={"Cache-Control": "no-store"})
+
+
 @app.get("/api/genesis/status")
 async def genesis_status(request: Request):
     user(request)

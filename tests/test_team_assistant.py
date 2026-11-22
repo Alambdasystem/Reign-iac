@@ -151,6 +151,56 @@ class MediaAPITests(unittest.TestCase):
         self.store.disable_member(self.owner, self.member["id"])
         self.assertEqual(self.client.get(self.path("audio/" + key), headers=self.headers()).status_code, 401)
 
+    def test_local_camera_preview_uses_owned_viewer_lease_without_joining_or_sharing_a_call(self):
+        cid = str(uuid.uuid4())
+        self.client.post(self.path("presence"), headers=self.headers(), json={"connection_id": cid})
+        payload = {**self.payload(cid), "source": "camera_preview"}
+        response = self.client.post(self.path("attachments"), headers=self.headers(), json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        receipt = response.json()["attachment"]
+        self.assertEqual(receipt["source"], "camera_preview")
+        self.assertEqual(receipt["participant_id"], self.member["id"])
+        stored = self.media.get(receipt["id"], self.room, "image", self.member["id"])
+        self.assertEqual(stored["data"], clean_image(payload["data_url"]))
+        self.assertNotIn("private-fixture-image-metadata", response.text)
+        self.assertTrue(all(not self.runtime.presence[cid][flag] for flag in ("in_call", "camera", "microphone", "screen")))
+        # The new local still purpose cannot weaken shared-call track checks.
+        for source in ("camera", "screen"):
+            result = self.client.post(self.path("attachments"), headers=self.headers(), json={**payload, "source": source})
+            self.assertEqual(result.status_code, 403)
+
+    def test_local_preview_cannot_use_another_person_room_call_or_expired_connection(self):
+        own, foreign, other_room, call = (str(uuid.uuid4()) for _ in range(4))
+        self.client.post(self.path("presence"), headers=self.headers(), json={"connection_id": own})
+        self.client.post(self.path("presence"), headers=self.headers(self.owner), json={"connection_id": foreign})
+        self.client.post(f"/api/team/rooms/{self.other}/presence", headers=self.headers(), json={"connection_id": other_room})
+        self.client.post(self.path("presence"), headers=self.headers(), json={"connection_id": call, "in_call": True, "camera": True})
+        self.runtime.presence[own]["expires_at"] = self.runtime.clock() - 1
+        with patch("reign.team_media.clean_image") as decoder:
+            for cid in (own, foreign, other_room, call, str(uuid.uuid4())):
+                with self.subTest(connection=cid):
+                    response = self.client.post(self.path("attachments"), headers=self.headers(),
+                        json={**self.payload(cid), "source": "camera_preview"})
+                    self.assertEqual(response.status_code, 403)
+            decoder.assert_not_called()
+        self.assertEqual(self.media.items, {})
+
+    def test_local_preview_rechecks_room_leave_and_membership_after_decoding(self):
+        original = clean_image
+        for action in ("leave", "revoke"):
+            cid = str(uuid.uuid4())
+            self.client.post(self.path("presence"), headers=self.headers(), json={"connection_id": cid})
+            def change_access(value):
+                if action == "leave": self.runtime.presence.pop(cid, None)
+                else: self.store.disable_member(self.owner, self.member["id"])
+                return original(value)
+            with self.subTest(action=action), patch("reign.team_media.clean_image", side_effect=change_access):
+                response = self.client.post(self.path("attachments"), headers=self.headers(),
+                    json={**self.payload(cid), "source": "camera_preview"})
+                self.assertEqual(response.status_code, 403 if action == "leave" else 401)
+            self.assertEqual(self.media.items, {})
+            self.assertEqual(self.media.pending_images, 0)
+
     def test_transcription_is_bounded_pinned_and_sanitizes_invalid_provider_responses(self):
         payload = {"mime_type": "audio/wav", "audio_base64": base64.b64encode(wav_clip()).decode()}
         self.http.post.return_value = httpx.Response(200, json={"text": "  A dictated room message.  "})
@@ -208,6 +258,28 @@ class AssistantTests(unittest.IsolatedAsyncioTestCase):
             key = self.media.put(room, user, clean_image(data_image()), "image")
             with self.assertRaises(TeamMediaError): await self.assistant(self.context, self.actor, "Look", [key], False)
         self.http.post.assert_not_awaited()
+
+    async def test_local_camera_description_uses_actual_receipt_pixels_and_narrates_the_same_answer(self):
+        clean = clean_image(data_image())
+        metadata = {"source": "camera_preview", "participant_id": self.actor["id"],
+                    "captured_at": datetime.now(timezone.utc).isoformat()}
+        key = self.media.put(self.room, self.actor["id"], clean, "image", metadata)
+        result = await self.assistant(self.context, self.actor,
+            "Describe what you can see in this camera frame aloud.", [key], True)
+        payload = self.http.post.await_args.kwargs["json"]
+        content = payload["input"][0]["content"]
+        images = [part for part in content if part["type"] == "input_image"]
+        self.assertEqual(len(images), 1)
+        self.assertEqual(base64.b64decode(images[0]["image_url"].split(",", 1)[1]), clean)
+        self.assertIn("camera_preview", json.dumps(content))
+        self.assertIn("not the identity of anyone pictured", payload["instructions"])
+        self.assertIn("Do not fill in unseen details", payload["instructions"])
+        self.assertIn("not a group-call broadcast or live feed", payload["instructions"])
+        self.assertEqual(result["speech_status"], "ready")
+        spoken = self.narrator.generate.await_args.args[0]
+        self.assertEqual(" ".join(segment["text"] for segment in spoken), result["text"])
+        audio = self.media.get(result["segments"][0]["audio_id"], self.room, "audio")
+        self.assertEqual(audio["data"], wav_clip())
 
     async def test_narration_gets_exact_sentences_and_room_bound_segment_audio_receipts(self):
         segments = [{"text": "First sentence.", "expression": "warm"}, {"text": "Second sentence.", "expression": "thoughtful"}]

@@ -80,3 +80,32 @@ test('destroy before decoding cannot resurrect or paint a retired canvas', async
   assert.equal(await avatar.ready, false); assert.equal(canvas.width, 0);
   assert.equal(canvas.dataset.ready, 'false'); assert.equal(draws.length, 0); assert.equal(h.frames.size, 0);
 });
+
+test('verified playback separates activity from silence and blends expressions on its media clock', async () => {
+  const h = harness(), {avatar, canvas} = h.create(); await avatar.ready;
+  const state = {active: true, level: .8, expression: 'warm', clockMs: 50, cueMs: 0, expressionSource: 'response-segment', segment: 1};
+  avatar.setPlaybackState(state); h.advance(50);
+  avatar.setPlaybackState({...state, clockMs: 150}); h.advance(100);
+  assert.ok(Number(canvas.dataset.mouth) > .5);
+  const progress = canvas.dataset.expressionProgress, mouth = canvas.dataset.mouth;
+  h.advance(500);
+  assert.equal(canvas.dataset.expressionProgress, progress); assert.equal(canvas.dataset.mouth, mouth);
+  avatar.setPlaybackState({...state, level: 0, clockMs: 180}); h.advance(50);
+  assert.equal(canvas.dataset.speaking, 'true');
+  assert.ok(Number(canvas.dataset.mouth) > 0 && Number(canvas.dataset.mouth) < Number(mouth), 'silent PCM eases rather than resets a live mouth');
+  assert.equal(canvas.dataset.expressionSource, 'response-segment'); assert.equal(canvas.dataset.audioTime, '0.180');
+  avatar.destroy();
+});
+
+test('an explicit inactive neutral state clears an interrupted sentence and its model cue immediately', async () => {
+  const h = harness(), {avatar, canvas} = h.create(); await avatar.ready;
+  avatar.setPlaybackState({active: true, level: .8, expression: 'warm', clockMs: 1000, cueMs: 900, expressionSource: 'response-segment', segment: 2});
+  h.advance(50);
+  assert.equal(canvas.dataset.expression, 'warm');
+  avatar.setPlaybackState({active: false, level: 0, expression: 'neutral', segment: 0});
+  assert.equal(canvas.dataset.expression, 'neutral'); assert.equal(canvas.dataset.expressionSource, 'neutral');
+  assert.equal(canvas.dataset.mouth, '0.000'); assert.equal(canvas.dataset.speaking, 'false');
+  assert.equal(canvas.dataset.segment, '0'); assert.equal(canvas.dataset.audioTime, '0.000');
+  h.advance(500); assert.equal(canvas.dataset.expression, 'neutral');
+  avatar.destroy();
+});

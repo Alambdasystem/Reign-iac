@@ -1,4 +1,35 @@
-## Current product note: Workspace and REIGN (2026-11-21)
+## Current implementation: speech timing and camera descriptions (2026-11-21)
+
+The shared composer now requests speech by default when available and unlocks
+audio from the Ask REIGN gesture. An explicit text-only choice is retained while
+switching rooms. Audio suspension exposes retry instead of reporting false
+speech. The prepared portrait samples the decoded PCM using the audio output
+clock, so sentence expressions and mouth energy pause and resume with playback.
+
+Private voice retains its mandatory graph delegation. A bounded owner-only
+annotation route labels the exact completed graph result with the existing
+sentence-expression schema; it cannot rewrite the result or authorize actions.
+Verified narration plays the segments in order, applying each expression only
+when its output begins and waiting for the previous audio tail. Annotation
+failure retains the verified neutral narration. Meter-context failures cannot
+block the native audio player's independent recovery.
+
+Workspace also provides a direct Camera preview and Describe what you see action.
+It requests video only, shares one explicit frame through the existing room-bound
+vision path, and requests a spoken reply with the same expressions. A confirmed
+send returns to REIGN's visible portrait and stops the preview camera. Stop,
+close, room changes and logout also stop it. The viewer connection stays outside
+the group call; typed drafts are retained and no continuous camera feed is sent.
+The original call snapshot path now sends the required ISO capture timestamp.
+
+Browser acceptance now checks actual Web Audio progression, non-silent output
+graph samples, PCM silence/voice mouth timing, expression boundaries, suspension,
+recovery and room cleanup with synthetic clips. Private controller fixtures
+remain simulated provider/graph media. The actual provider pre-deploy gate is
+separate, and neither establishes physical-device speaker audibility. This note
+describes source behavior; its release and rollout require separate receipts.
+
+## Product note: Workspace and REIGN (2026-11-21)
 
 The application is named **Workspace**, including the shared team area at
 `/team`. Its AI participant is

@@ -31,12 +31,26 @@ sharing are separate controls. Participants can see shared video; sending an
 image to REIGN requires a separate local preview and confirmation. Only that
 caller's selected camera or screen still is uploaded for a model turn. There is
 no continuous room recording or automatic capture of another participant's
-video. The first call or Listen gesture enables browser audio playback.
+video. Asking REIGN with Voice reply enabled also enables browser audio in that
+same click or tap. Voice reply starts enabled when speech is available; an
+explicit text-only choice is retained while switching rooms. The visible audio
+button retries playback if the browser pauses or blocks it.
+
+**Camera** opens a local video preview without joining a call or requesting the
+microphone. **Describe what you see** shares the current frame with REIGN and
+requests a spoken description using the same expressions and portrait player.
+After an accepted request, the preview closes and its camera stops so REIGN's
+face is visible for the reply. **Stop camera** or closing the preview stops it
+without sharing a frame. Room changes, logout and leaving the page also stop it.
+Typed drafts are preserved. A description is grounded in the one shared image;
+REIGN does not receive a continuous camera feed from this control.
 
 REIGN replies with text, short spoken segments, and a face in the room. Each
 segment has a neutral, warm, thoughtful, or concerned expression. The portrait
-player blends pre-rendered neural frames and drives mouth opening from the
-spoken audio. It does not perform phoneme alignment or live neural inference.
+player blends pre-rendered neural frames and samples mouth opening from the
+spoken PCM at the audio output position. Sentence expressions use that same
+playback clock. Suspending playback stops facial speech; resuming continues the
+current segment. It does not perform phoneme alignment or live neural inference.
 Audio generation, transcription, image understanding, and assistant work run
 through Core; the team page does not download an ONNX model. The compressed
 portrait atlas is approximately 320 KB and decodes to approximately 12 MiB.

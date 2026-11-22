@@ -39,11 +39,13 @@ export function speechEnvelope(samples) {
   return Math.min(.9, Math.max(0, Math.sqrt(sum / samples.length) - .008) * 5.5);
 }
 
-export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel = null}) {
+export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel = null, getPlaybackState = null}) {
   const ctx = canvas.getContext('2d', {alpha: false});
   let atlas = null, loaded = false, dead = false, speaking = false, level = 0, mouth = 0;
   let animation = null, lastPaint = -Infinity, lastTime = 0, paints = 0;
   let expression = 0, previousExpression = 0, expressionChanged = 0;
+  let playbackClock = null, lastPlaybackClock = null, expressionClock = false;
+  let expressionSource = 'neutral', segment = 0, expressionProgress = 1;
   canvas.width = canvas.height = SIZE;
   function diagnostics(state) {
     canvas.dataset.ready = String(loaded && !dead);
@@ -51,6 +53,10 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
     canvas.dataset.speaking = String(speaking && !dead);
     canvas.dataset.mouth = mouth.toFixed(3);
     canvas.dataset.expression = EXPRESSIONS[expression];
+    canvas.dataset.expressionSource = expressionSource;
+    canvas.dataset.expressionProgress = expressionProgress.toFixed(3);
+    canvas.dataset.audioTime = (Number.isFinite(playbackClock) ? playbackClock / 1000 : 0).toFixed(3);
+    canvas.dataset.segment = String(segment);
     canvas.dataset.mode = 'precomputed-neural';
     canvas.dataset.frames = String(paints);
   }
@@ -72,7 +78,13 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
     animation = null;
     if (dead || !loaded || (document.hidden && !initial)) return;
     if (now - lastPaint < 1000 / 30) { schedule(); return; }
-    const dt = Math.min(100, Math.max(0, now - (lastTime || now)));
+    if (getPlaybackState) {
+      try { setPlaybackState(getPlaybackState() || {active: false}, false); }
+      catch { setPlaybackState({active: false}, false); }
+    }
+    const dt = playbackClock === null ? Math.min(100, Math.max(0, now - (lastTime || now))) :
+      Math.min(100, Math.max(0, playbackClock - (lastPlaybackClock ?? playbackClock)));
+    lastPlaybackClock = playbackClock;
     lastTime = lastPaint = now;
     let desired = 0;
     if (speaking) {
@@ -81,7 +93,9 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
     }
     mouth += (desired - mouth) * (1 - Math.exp(-dt / (desired > mouth ? 35 : 90)));
     const yaw = Math.sin(now / 2200) * 1.65;
-    const transition = Math.min(1, Math.max(0, (now - expressionChanged) / 260));
+    const expressionTime = expressionClock && playbackClock !== null ? playbackClock : now;
+    const transition = Math.min(1, Math.max(0, (expressionTime - expressionChanged) / 260));
+    expressionProgress = transition;
     const expressions = previousExpression === expression ? [[expression, 1]] :
       [[previousExpression, 1 - transition], [expression, transition]];
     const yawWeights = mixAxis(yaw, -3, 3, 3), mouthWeights = mixAxis(mouth, 0, .9, 3);
@@ -115,9 +129,39 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
     const next = Math.max(0, EXPRESSIONS.indexOf(value));
     if (next === expression) return;
     previousExpression = expression; expression = next; expressionChanged = performance.now();
+    expressionClock = false; expressionSource = next === 0 ? 'neutral' : 'manual';
     diagnostics(); schedule();
   }
-  function stop() { setSpeaking(false); setExpression('neutral'); }
+  function setPlaybackState(value = {}, redraw = true) {
+    if (dead) return;
+    speaking = value.active === true;
+    if (!speaking && value.expression === 'neutral') {
+      level = mouth = 0; expression = previousExpression = 0; expressionChanged = 0;
+      playbackClock = lastPlaybackClock = null; expressionClock = false;
+      expressionSource = 'neutral'; expressionProgress = 1; segment = 0;
+      diagnostics(); if (redraw) schedule(); return;
+    }
+    level = speaking && Number.isFinite(value.level) ? Math.min(.9, Math.max(0, value.level)) : 0;
+    if (!speaking) mouth = 0;
+    playbackClock = Number.isFinite(value.clockMs) && value.clockMs >= 0 ? value.clockMs : null;
+    segment = Number.isInteger(value.segment) && value.segment >= 1 && value.segment <= 4 ? value.segment : 0;
+    // Expressions enter on the verified audio cue, never on a server response
+    // or a fetch completing. A suspended clock cannot advance this blend.
+    if (speaking && EXPRESSIONS.includes(value.expression)) {
+      const next = EXPRESSIONS.indexOf(value.expression);
+      const timed = playbackClock !== null && Number.isFinite(value.cueMs) && value.cueMs >= 0;
+      if (next !== expression || expressionClock !== timed) {
+        previousExpression = expression; expression = next;
+        expressionChanged = timed ? value.cueMs : performance.now();
+        expressionClock = timed;
+      }
+      expressionSource = value.expressionSource === 'response-segment' ? 'response-segment' : 'neutral';
+    }
+    diagnostics(); if (redraw) schedule();
+  }
+  function stop() {
+    setPlaybackState({active: false, expression: 'neutral'});
+  }
   function visibility() {
     if (document.hidden && animation !== null) { cancelAnimationFrame(animation); animation = null; }
     else { lastTime = performance.now(); schedule(); }
@@ -145,7 +189,7 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
     if (!dead) { loaded = false; status('error', 'REIGN’s face could not load. Reload to try again.'); }
     return false;
   });
-  return {ready, setSpeaking, setSpeechLevel, setExpression, stop, destroy};
+  return {ready, setSpeaking, setSpeechLevel, setExpression, setPlaybackState, stop, destroy};
 }
 
 // The private interface remains a classic script; expose the same renderer

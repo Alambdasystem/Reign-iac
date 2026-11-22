@@ -321,6 +321,12 @@ prepared REIGN portrait. It loads automatically, without model initialization;
 only the exact versioned public atlas receives immutable browser caching.
 Private mouth movement follows verified assistant output audio, never the
 microphone. Team speech uses its own output meter and sentence expressions.
+Private speech reuses that bounded sentence-expression schema through an
+owner-only, CSRF-protected graph-run endpoint. Expression text must match the
+server's current verified graph result exactly after whitespace normalization;
+the annotation has no tools and cannot replace graph execution. A stale run is
+rejected, while optional annotation failures retain neutral verified narration.
+These cues do not supply word/phoneme timestamps or a phoneme-based lip model.
 Audio remains usable if the portrait fails to load. Interruption, call end,
 logout and navigation clear the appropriate playback and renderer state.
 

@@ -2,6 +2,7 @@ import { createTeamCall } from '/assets/team-call.js';
 import { createTeamAvatar } from '/assets/team-avatar.js';
 import { createTeamRecorder } from '/assets/team-recorder.js';
 import { createTeamBrowser } from '/assets/team-browser.js';
+import { createTeamCamera } from '/assets/team-camera.js';
 
 // The shared workspace uses only room-scoped endpoints. Owner tools and private
 // browser/conversation recovery intentionally have no dependency in this page.
@@ -24,17 +25,33 @@ export function createTeamWorkspace(deps = {}) {
     call: {active: false, phase: 'idle', microphone: false, camera: false, screen: false},
     streams: {local: {}, remote: []}, attachments: [], capture: null, captureUrl: null, captureRevision: 0,
     audioEnabled: false, avatarState: 'loading', avatarMessage: '', logoutFailed: false,
-    dictation: 'idle', dictationGeneration: 0, talkToReign: false};
+    dictation: 'idle', dictationGeneration: 0, talkToReign: false,
+    camera: {phase: 'idle', active: false}, cameraBusy: false, cameraRevision: 0, cameraAbort: null};
   const callMe = {};
   let call;
   call = (deps.createCall || createTeamCall)({api: request, me: callMe, onState: renderCall,
     onStreams: renderStreams, onPresence: value => applyPresence(value?.presence || value)});
   const avatar = (deps.createAvatar || createTeamAvatar)({canvas: $('reignAvatar'), api: request,
-    onStatus: value => { state.avatarState = value.state; state.avatarMessage = value.message || ''; renderAssistant(); }});
+    onStatus: value => {
+      state.avatarState = value.state; state.avatarMessage = value.message || '';
+      if (typeof value.audioEnabled === 'boolean') {
+        state.audioEnabled = value.audioEnabled;
+        $('listenReign').textContent = state.audioEnabled ? 'REIGN audio enabled' : 'Enable REIGN audio';
+      }
+      renderAssistant();
+    }});
   const recorder = (deps.createRecorder || createTeamRecorder)({onState: value => {
     state.dictation = value.state; notice('dictationStatus', value.message || '', value.state === 'error'); refreshControls();
   }});
   const sharedBrowser = (deps.createBrowser || createTeamBrowser)({api: request, document: doc, window: win, timers: clock});
+  const camera = (deps.createCamera || createTeamCamera)({video: $('cameraPreview'), document: doc,
+    onState: value => {
+      state.camera = value;
+      if (state.cameraBusy && !value.active) {
+        state.cameraRevision++; state.cameraAbort?.abort(); state.cameraAbort = null; state.cameraBusy = false;
+      }
+      notice('cameraStatus', value.message || '', value.phase === 'error'); refreshControls();
+    }});
   function owner() { return state.profile?.me?.role === 'owner'; }
   function usable() { return !!state.roomId && !state.closed && !state.accessLost && !state.loggingOut && !state.logoutFailed && !state.loadingRoom; }
   const roomPath = (roomId = state.roomId) => '/api/team/rooms/' + encodeURIComponent(roomId);
@@ -98,8 +115,8 @@ export function createTeamWorkspace(deps = {}) {
     const available = usable(), pending = outgoing.get(state.roomId);
     $('newRoomButton').disabled = !state.profile || state.accessLost || state.loggingOut || state.logoutFailed;
     $('messageInput').disabled = !available || pending?.phase === 'sending' || state.talkToReign;
-    $('sendMessage').disabled = !available || !!pending || state.talkToReign;
-    $('askReign').disabled = !available || !!pending || state.talkToReign || state.capabilities.assistant === false || state.assistant.status === 'running';
+    $('sendMessage').disabled = !available || !!pending || state.talkToReign || state.cameraBusy;
+    $('askReign').disabled = !available || !!pending || state.talkToReign || state.cameraBusy || state.capabilities.assistant === false || state.assistant.status === 'running';
     $('retryMessage').hidden = !pending || pending.phase !== 'uncertain';
     $('retryMessage').disabled = !available;
     $('speakReply').disabled = !available || state.capabilities.speech !== true;
@@ -122,6 +139,15 @@ export function createTeamWorkspace(deps = {}) {
     $('talkToReign').disabled = !available || !!pending || state.capabilities.transcription !== true || state.capabilities.assistant !== true || state.capabilities.speech !== true || state.assistant.status === 'running';
     $('stopDictation').hidden = !['requesting', 'recording'].includes(state.dictation);
     $('cancelDictation').hidden = !recording;
+    $('openCamera').disabled = !available;
+    $('describeCamera').disabled = !available || !state.camera.active || state.cameraBusy || !!pending || recording ||
+      state.capabilities.vision !== true || state.capabilities.assistant !== true || state.assistant.status === 'running';
+    $('stopCamera').disabled = !state.camera.active && state.camera.phase !== 'requesting';
+    $('restartCamera').hidden = state.camera.active || state.camera.phase === 'requesting';
+    $('cameraAvailability').textContent = state.capabilities.vision !== true || state.capabilities.assistant !== true
+      ? 'REIGN’s vision connection is unavailable. You can use the private preview, but no image can be sent right now.'
+      : state.capabilities.speech !== true ? 'REIGN can describe this image in text. Voice replies are currently unavailable.'
+      : 'Describe sends one still image and asks REIGN for a spoken reply. Your typed draft is kept.';
   }
   function renderRooms() {
     $('roomList').replaceChildren();
@@ -274,7 +300,7 @@ export function createTeamWorkspace(deps = {}) {
   async function selectRoom(roomId, {force = false} = {}) {
     if (state.closed || state.accessLost || state.loggingOut || state.logoutFailed || (!force && roomId === state.roomId)) return;
     if (!state.rooms.some(room => room.id === roomId)) return;
-    rememberComposer(); clearCapture(); closeDialog('shareDialog'); cancelDictation(); sharedBrowser.setRoom(null);
+    rememberComposer(); clearCapture(); closeDialog('shareDialog'); stopCamera(); closeDialog('cameraDialog'); cancelDictation(); sharedBrowser.setRoom(null);
     avatar.stop();
     const previousRoom = state.roomId, previousConnection = state.connectionId;
     const generation = ++state.roomGeneration; state.editorGeneration++;
@@ -299,7 +325,8 @@ export function createTeamWorkspace(deps = {}) {
       $('roomSubtitle').textContent = 'A saved conversation, shared notes, and your team in one place.';
       $('roomEmpty').hidden = true; $('roomView').hidden = false;
       const composer = composers.get(roomId) || {};
-      $('messageInput').value = composer.text || ''; $('speakReply').checked = !!composer.speak;
+      $('messageInput').value = composer.text || '';
+      $('speakReply').checked = composer.speak === undefined ? state.capabilities.speech === true : composer.speak === true;
       state.attachments = composer.attachments || []; renderAttachments();
       notice('messageStatus', outgoing.get(roomId) ? 'A previous send still needs confirmation. Retry it with the same message ID.' : '');
       renderEvents(true); renderDocuments(); restoreEditor(roomId);
@@ -366,18 +393,19 @@ export function createTeamWorkspace(deps = {}) {
     if (outgoing.get(roomId) !== pending) return;
     outgoing.delete(roomId);
     const composer = composers.get(roomId);
-    if (composer?.text.trim() === pending.payload.text) composers.set(roomId, {text: '', speak: composer.speak, attachments: []});
+    if (pending.origin !== 'camera' && composer?.text.trim() === pending.payload.text) composers.set(roomId, {text: '', speak: composer.speak, attachments: []});
     if (state.roomId === roomId) {
-      if ($('messageInput').value.trim() === pending.payload.text) $('messageInput').value = '';
+      if (pending.origin !== 'camera' && $('messageInput').value.trim() === pending.payload.text) $('messageInput').value = '';
       state.attachments = state.attachments.filter(item => !pending.payload.attachment_ids.includes(item.id));
       renderAttachments(); notice('messageStatus', ''); refreshControls();
     }
   }
-  async function sendMessage(askReign = false, retry = false) {
+  async function sendMessage(askReign = false, retry = false, prepared = null) {
     if (!usable()) return;
     const roomId = state.roomId, generation = state.roomGeneration;
     let pending = outgoing.get(roomId);
     if (pending && !retry) { notice('messageStatus', 'Confirm the previous send with Retry before sending another message.', true); return; }
+    if (!pending && prepared) { pending = prepared; outgoing.set(roomId, pending); }
     if (!pending) {
       const text = $('messageInput').value.trim(); if (!text) return;
       if (state.attachments.length && !askReign) { notice('messageStatus', 'Choose Ask REIGN to send this question with the images you selected, or remove the images to send a room message.', true); return; }
@@ -388,8 +416,10 @@ export function createTeamWorkspace(deps = {}) {
       outgoing.set(roomId, pending);
     }
     pending.phase = 'sending'; rememberComposer(); refreshControls(); notice('messageStatus', 'Sending…');
+    let accepted = false;
     try {
       const result = await request(roomPath(roomId) + '/messages', 'POST', pending.payload);
+      accepted = true;
       finishMessage(roomId, pending);
       if (generation === state.roomGeneration && !state.closed) {
         if (result.event) applyEvents([result.event], true);
@@ -397,12 +427,13 @@ export function createTeamWorkspace(deps = {}) {
         $('eventFeed').scrollTop = $('eventFeed').scrollHeight;
       }
     } catch (error) {
-      if (outgoing.get(roomId) !== pending) return; // A room event already acknowledged this exact send.
+      if (outgoing.get(roomId) !== pending) return {accepted: true}; // A room event acknowledged this exact send.
       if (error.status && error.status < 500) outgoing.delete(roomId);
       else pending.phase = 'uncertain';
       if (generation === state.roomGeneration) notice('messageStatus', pending.phase === 'uncertain'
         ? 'This send wasn’t confirmed. Your text is kept. Retry sends the same message ID, so it won’t be duplicated.' : error.message, true);
     } finally { if (generation === state.roomGeneration) refreshControls(); }
+    return {accepted, uncertain: outgoing.get(roomId) === pending && pending.phase === 'uncertain'};
   }
   function draftKey(roomId, id) { return roomId + '/' + id; }
   function restoreEditor(roomId) {
@@ -683,7 +714,7 @@ export function createTeamWorkspace(deps = {}) {
       if (revision !== state.captureRevision || roomId !== state.roomId || generation !== state.roomGeneration || !$('shareDialog').open || state.closed) return;
       const blob = result.blob || result;
       if (!(blob instanceof Blob)) throw Error('That view could not be captured.');
-      state.capture = {blob, source, connectionId: state.call.connectionId, roomId, capturedAt: Date.now() / 1000};
+      state.capture = {blob, source, connectionId: state.call.connectionId, roomId, capturedAt: new Date().toISOString()};
       state.captureUrl = URL.createObjectURL(blob); $('sharePreview').src = state.captureUrl; $('sharePreview').hidden = false;
       $('confirmShare').disabled = false;
       notice('shareStatus', 'Review this still image. Attach it only if you want REIGN to receive this view with your next question.');
@@ -694,6 +725,59 @@ export function createTeamWorkspace(deps = {}) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = () => reject(Error('The captured image could not be read.')); reader.readAsDataURL(blob);
     });
+  }
+  function stopCamera() {
+    state.cameraRevision++; state.cameraAbort?.abort(); state.cameraAbort = null; state.cameraBusy = false;
+    camera.stop();
+  }
+  function openCamera() {
+    if (!usable()) return;
+    stopCamera(); openDialog('cameraDialog'); void camera.start();
+  }
+  async function describeCamera() {
+    if (!usable() || !state.camera.active || state.cameraBusy || outgoing.has(state.roomId) ||
+        state.capabilities.vision !== true || state.capabilities.assistant !== true || state.assistant.status === 'running' ||
+        ['requesting', 'recording', 'processing', 'transcribing'].includes(state.dictation)) return;
+    // Preserve browser activation before capturing or awaiting any request.
+    if (state.capabilities.speech === true) void enableReignAudio();
+    const revision = ++state.cameraRevision, roomId = state.roomId, generation = state.roomGeneration;
+    const connectionId = state.connectionId, abort = new AbortController();
+    const current = () => revision === state.cameraRevision && roomId === state.roomId && generation === state.roomGeneration &&
+      usable() && state.camera.active && $('cameraDialog').open;
+    state.cameraBusy = true; state.cameraAbort = abort; refreshControls();
+    notice('cameraStatus', 'Capturing this view for REIGN…');
+    try {
+      const capture = await camera.capture();
+      if (!current()) return;
+      // The private preview uses this page's own viewer lease, never a call's
+      // connection or a fabricated microphone/camera presence flag.
+      const presence = await request(roomPath(roomId) + '/presence', 'POST', {connection_id: connectionId,
+        in_call: false, microphone: false, camera: false, screen: false}, {timeout: 12000, signal: abort.signal});
+      if (!current()) return;
+      applyPresence(presence.presence || []);
+      const data_url = await blobDataUrl(capture.blob);
+      if (!current()) return;
+      notice('cameraStatus', 'Sending this still image to REIGN…');
+      const result = await request(roomPath(roomId) + '/attachments', 'POST', {data_url, source: 'camera_preview',
+        connection_id: connectionId, captured_at: capture.capturedAt}, {signal: abort.signal});
+      if (!current()) return;
+      if (!result.attachment?.id) throw Error('The camera image could not be confirmed. No question was sent.');
+      const prepared = {origin: 'camera', phase: 'sending', payload: {client_message_id: uuid(),
+        text: 'Describe what you can see in this camera image. Be brief, mention visible details, and say when something is unclear.',
+        ask_reign: true, speak: state.capabilities.speech === true, attachment_ids: [result.attachment.id]}};
+      const sent = await sendMessage(true, false, prepared);
+      if (!current()) return;
+      if (sent?.accepted) {
+        stopCamera(); closeDialog('cameraDialog');
+        notice('messageStatus', 'View sent to REIGN. The camera is off, and your typed draft is kept.');
+      } else notice('cameraStatus', sent?.uncertain
+        ? 'The question was not confirmed. Close this preview and use Retry this message to confirm the same request.'
+        : 'REIGN could not accept the image question. Your typed draft is kept; check the message status and try again.', true);
+    } catch (error) {
+      if (current()) notice('cameraStatus', error.message || 'The camera image could not be sent. Try again.', true);
+    } finally {
+      if (revision === state.cameraRevision) { state.cameraBusy = false; state.cameraAbort = null; refreshControls(); }
+    }
   }
   async function confirmShare() {
     const capture = state.capture;
@@ -715,7 +799,7 @@ export function createTeamWorkspace(deps = {}) {
   function renderAttachments() {
     $('attachmentList').replaceChildren(); $('attachmentList').hidden = !state.attachments.length;
     for (const attachment of state.attachments) {
-      const chip = element('span', 'attachment-chip', attachment.source === 'camera' ? 'Shared camera still' : 'Shared screen still');
+      const chip = element('span', 'attachment-chip', ['camera', 'camera_preview'].includes(attachment.source) ? 'Shared camera still' : 'Shared screen still');
       const remove = element('button', '', '×'); remove.type = 'button'; remove.setAttribute('aria-label', 'Remove shared image');
       remove.addEventListener('click', () => { state.attachments = state.attachments.filter(value => value.id !== attachment.id); renderAttachments(); rememberComposer(); });
       chip.append(remove); $('attachmentList').append(chip);
@@ -773,8 +857,8 @@ export function createTeamWorkspace(deps = {}) {
     const roomId = state.roomId, connectionId = state.connectionId;
     state.connectionId = null;
     releasePresence(roomId, connectionId);
-    clearCapture(); clearCredential(); cancelDictation(); sharedBrowser.setRoom(null);
-    for (const id of ['shareDialog', 'credentialDialog', 'membersDialog']) closeDialog(id);
+    clearCapture(); stopCamera(); clearCredential(); cancelDictation(); sharedBrowser.setRoom(null);
+    for (const id of ['shareDialog', 'cameraDialog', 'credentialDialog', 'membersDialog']) closeDialog(id);
     // Media shutdown is immediate. Its best-effort presence DELETE must never
     // prevent the independent logout request from reaching the server.
     try { Promise.resolve(call.leave({reason})).catch(() => {}); } catch {}
@@ -821,6 +905,7 @@ export function createTeamWorkspace(deps = {}) {
     try { avatar.destroy(); } catch {}
     try { recorder.dispose(); } catch {}
     try { sharedBrowser.dispose(); } catch {}
+    try { camera.dispose(); } catch {}
     for (const remove of listeners.splice(0)) remove();
   }
   listen($('newRoomButton'), 'click', () => { $('roomCreateForm').hidden = false; $('roomTitleInput').focus(); });
@@ -828,14 +913,26 @@ export function createTeamWorkspace(deps = {}) {
   listen($('roomCreateForm'), 'submit', createRoom);
   listen($('retryBoot'), 'click', () => void start());
   listen($('logoutButton'), 'click', () => void logout());
-  listen($('chatForm'), 'submit', event => { event.preventDefault(); void sendMessage(event.submitter?.dataset.action === 'ask'); });
+  listen($('chatForm'), 'submit', event => {
+    event.preventDefault();
+    const ask = event.submitter?.dataset.action === 'ask';
+    // Begin resume inside this gesture, before the request or any other await.
+    if (ask && $('speakReply').checked && state.capabilities.speech === true) void enableReignAudio();
+    void sendMessage(ask);
+  });
   listen($('messageInput'), 'input', rememberComposer);
-  listen($('speakReply'), 'change', rememberComposer);
+  listen($('speakReply'), 'change', () => {
+    rememberComposer();
+    if ($('speakReply').checked && usable() && state.capabilities.speech === true) void enableReignAudio();
+  });
   listen($('dictateMessage'), 'click', () => void dictateMessage());
   listen($('talkToReign'), 'click', () => { void enableReignAudio(); void dictateMessage(true); });
   listen($('stopDictation'), 'click', () => { void recorder.stop().catch(() => {}); });
   listen($('cancelDictation'), 'click', cancelDictation);
-  listen($('retryMessage'), 'click', () => void sendMessage(false, true));
+  listen($('retryMessage'), 'click', () => {
+    if (outgoing.get(state.roomId)?.payload.speak) void enableReignAudio();
+    void sendMessage(false, true);
+  });
   listen($('newMessagesButton'), 'click', () => { $('eventFeed').scrollTop = $('eventFeed').scrollHeight; $('newMessagesButton').hidden = true; });
   listen($('newDocument'), 'click', newDocument);
   listen($('documentTitle'), 'input', editDocument); listen($('documentContent'), 'input', editDocument);
@@ -859,6 +956,12 @@ export function createTeamWorkspace(deps = {}) {
   listen($('toggleCamera'), 'click', () => mediaAction(() => call.setCamera(!state.call.camera)));
   listen($('toggleScreen'), 'click', () => mediaAction(() => call.setScreen(!state.call.screen)));
   listen($('listenReign'), 'click', () => void enableReignAudio());
+  listen($('openCamera'), 'click', openCamera);
+  listen($('restartCamera'), 'click', () => { if (usable() && $('cameraDialog').open) void camera.start(); });
+  listen($('describeCamera'), 'click', () => void describeCamera());
+  listen($('stopCamera'), 'click', stopCamera);
+  listen($('closeCamera'), 'click', () => closeDialog('cameraDialog'));
+  listen($('cameraDialog'), 'close', stopCamera);
   listen($('shareWithReign'), 'click', openShare);
   listen($('captureShare'), 'click', () => void captureShare());
   listen($('confirmShare'), 'click', () => void confirmShare());
