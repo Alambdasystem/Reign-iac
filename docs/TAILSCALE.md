@@ -8,10 +8,12 @@ has a dedicated 1 GB disk at `/var/data/reign-vault`. This integration adds no
 Render service, disk or compute-plan upgrade. It does add runtime CPU/memory
 usage, which must be measured during rollout on the existing 512 MB instance.
 
-The implementation is prepared with enrollment **disabled by default**. The
-Tailscale account sign-in did not complete during preparation. No device has
-been enrolled, no access policy has been changed, and live SSH is unverified.
-Historical device names and Tailscale IPs are discovery hints, not live proof.
+The code remains **disabled by default**. The Blueprint now contains the tested
+Core image and settings for the requested enrollment rollout. The release evidence
+and pending manual-apply checkpoint are recorded in
+[TAILSCALE_PROMOTION_RECEIPT.md](TAILSCALE_PROMOTION_RECEIPT.md). Prepare the
+private enrollment key before applying the existing Blueprint with auto-sync off.
+Enrollment, backend SSH and retained-identity restart still need live verification.
 
 Core is an outbound Tailscale client. It runs neither an SSH server nor a subnet
 router, exit node or publicly reachable proxy. This does not add model-call
@@ -50,7 +52,7 @@ clients use Tailscale's userspace dialer explicitly.
 | `REIGN_TAILSCALE_ENABLED` | `0` by default; `1` at the reviewed enrollment rollout |
 | `REIGN_TAILSCALE_HOSTNAME` | `render-reign-core` |
 | `REIGN_TAILSCALE_AUTHKEY` | Private one-off enrollment key; never commit its value |
-| `REIGN_TAILSCALE_TAGS` | Optional enrollment-only tags already authorized in the actual tailnet |
+| `REIGN_TAILSCALE_TAGS` | `tag:reign-render-core`; enrollment-only tag authorized in the actual tailnet |
 | `REIGN_VAULT_DIR` | Existing `/var/data/reign-vault` dedicated mount |
 
 The auth key is removed from the wrapper's environment before starting child
