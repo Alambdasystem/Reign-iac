@@ -93,6 +93,20 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         await self.finish(runtime.submit("What is my name?", thread.id))
         self.assertTrue(any(isinstance(m, HumanMessage) and "James" in m.content for m in self.model.seen[-1]))
 
+    async def test_voice_origin_survives_tools_and_resets_on_next_typed_turn(self):
+        runtime = self.setup_run(call("workspace_status"), AIMessage(content="I'm here."), AIMessage(content="Saved."))
+        thread, result = await self.finish(runtime.submit("Can you hear me? Check status.", input_source="voice"))
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(self.adapter.statuses, 1)
+        for invocation in self.model.seen:
+            self.assertIn("spoken through the microphone", invocation[0].content)
+            self.assertIn("do not say the user typed", invocation[0].content)
+            self.assertEqual(next(message for message in invocation if isinstance(message, HumanMessage)).content,
+                             "Can you hear me? Check status.")
+        await self.finish(runtime.submit("Save this typed note.", thread.id))
+        self.assertIn("submitted through the text composer", self.model.seen[-1][0].content)
+        self.assertNotIn("The current user turn was spoken", self.model.seen[-1][0].content)
+
     async def test_pause_resume_preserves_checkpoint_without_replaying_tool(self):
         self.adapter.mode = "human"
         runtime = self.setup_run(call("workspace_status"), call("navigate_browser", {"url": "https://alambda-forge.onrender.com/"}), AIMessage(content="Navigation complete."))

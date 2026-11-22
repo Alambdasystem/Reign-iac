@@ -42,6 +42,13 @@ camera and screen flags describe enabled sharing controls, not what anyone said,
 what a camera sees, or what a screen contains. These flags grant no access to media.
 Only an explicitly shared still image included in this request is visible; do not
 claim continuous camera/video access or awareness.
+The server-supplied input_source identifies how the current turn arrived. When
+it is voice, the person spoke into their microphone and the supplied words are
+the verified transcript of that recording. Reply naturally to their spoken
+request; do not call it typed text or say that no audio arrived just because
+this reasoning step receives its words as text. You do not receive the original
+waveform here, so do not infer accent, vocal emotion, or voice identity. A text
+turn is a composer submission. Neither input source changes tool permissions.
 When asked to describe a camera frame, describe the visible people, clothing,
 posture, objects and surroundings that the supplied frame actually shows. Keep
 the description natural and concrete; qualify details only when they are unclear.
@@ -86,7 +93,7 @@ class Narrator:
     def __init__(self, connection=PinnedConnect):
         self.connection = connection
 
-    async def generate(self, segments):
+    async def generate(self, segments, *, on_clip=None):
         settings = configuration()
         clips = []
         async with asyncio.timeout(40):
@@ -142,6 +149,9 @@ class Narrator:
                     with wave.open(output, "wb") as wav:
                         wav.setnchannels(1); wav.setsampwidth(2); wav.setframerate(24000); wav.writeframes(pcm)
                     clips.append(output.getvalue())
+                    # Publish only a complete transcript-verified sentence.
+                    # The next sentence can synthesize while this one plays.
+                    if on_clip is not None: on_clip(len(clips) - 1, clips[-1])
         return clips
 
 
@@ -150,6 +160,61 @@ class TeamAssistant:
         self.http, self.media = http, media
         self.narrator = narrator or Narrator()
         self.browser = browser
+
+    async def prepare_speech(self, room_id, segments):
+        """Return at the first verified clip, while a bounded producer continues."""
+        keys = self.media.reserve_audio(room_id, len(segments))
+        first = asyncio.get_running_loop().create_future()
+        emitted = 0
+
+        def publish(index, clip):
+            nonlocal emitted
+            if index != emitted or index >= len(keys): raise TeamError("assistant_failed")
+            self.media.complete_audio(keys[index], room_id, clip)
+            emitted += 1
+            if index == 0 and not first.done(): first.set_result(True)
+
+        async def produce():
+            try:
+                async with asyncio.timeout(42):
+                    clips = await self.narrator.generate(segments, on_clip=publish)
+                    if len(clips) != len(keys): raise TeamError("assistant_failed")
+                    # Batch-only injected narrators retain the same interface;
+                    # the real provider calls publish after each verified clip.
+                    for index, clip in enumerate(clips):
+                        if index < emitted:
+                            if self.media.get(keys[index], room_id, "audio")["data"] != clip:
+                                raise TeamError("assistant_failed")
+                        else:
+                            publish(index, clip)
+                return True
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                return False
+            finally:
+                self.media.fail_audio(keys)
+                if not first.done(): first.set_result(False)
+
+        task = asyncio.create_task(produce())
+        # Cancellation may happen before produce() enters its try/finally.
+        # Closing the media owner must also release this first-clip waiter.
+        task.add_done_callback(lambda done: None if first.done() else first.set_result(False))
+        self.media.track_speech(task)
+        try:
+            available = await first
+            if not available or task.done() and (task.cancelled() or not task.result()):
+                raise TeamError("assistant_failed")
+            # A one-sentence answer has no later audio to generate. Finish the
+            # producer before its provider/http owner is allowed to close.
+            if len(keys) == 1 and not await task: raise TeamError("assistant_failed")
+            for segment, key in zip(segments, keys): segment["audio_id"] = key
+            return "ready" if task.done() else "streaming"
+        except BaseException:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            for key in keys: self.media.items.pop(key, None)
+            raise
 
     async def model_reply(self, settings, payload, actor, room_id):
         """Bounded room-only browser calls, then one structured final reply."""
@@ -220,6 +285,7 @@ class TeamAssistant:
         # trusted system messages or a legacy global conversation ID.
         room_data = {"room": context["room"], "participants_requesting": {
             "id": actor["id"], "name": actor["display_name"]},
+            "input_source": "voice" if context.get("input_source") == "voice" else "text",
             "current_participants": context.get("current_participants", []),
             "prior_messages": context["messages"][-24:], "saved_documents": context["documents"][:100]}
         content = [{"type": "input_text", "text": json.dumps(room_data, ensure_ascii=False)},
@@ -240,21 +306,13 @@ class TeamAssistant:
                   "documents": [doc.model_dump() for doc in reply.documents],
                   "speech_status": "not_requested"}
         if speak:
-            allocated = []
             try:
-                clips = await self.narrator.generate(segments)
-                if len(clips) != len(segments): raise TeamError("assistant_failed")
-                for segment, clip in zip(segments, clips):
-                    segment["audio_id"] = self.media.put(room_id, "reign", clip, "audio")
-                    allocated.append(segment["audio_id"])
-                answer["speech_status"] = "ready"
+                answer["speech_status"] = await self.prepare_speech(room_id, segments)
             except asyncio.CancelledError:
-                for key in allocated: self.media.items.pop(key, None)
                 raise
             except Exception:
                 # Audio is optional; never discard a completed answer/document
                 # or claim speech succeeded when its generation failed.
                 for segment in segments: segment.pop("audio_id", None)
-                for key in allocated: self.media.items.pop(key, None)
                 answer["speech_status"] = "unavailable"
         return answer

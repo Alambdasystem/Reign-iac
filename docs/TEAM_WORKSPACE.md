@@ -15,10 +15,23 @@ membership, presence, signaling, media access, and shared-browser control.
 
 Choose a saved room or create one. Room messages and Markdown documents are
 shared with current workspace members. **Ask REIGN** requests one assistant turn
-in the room; **Talk to REIGN** records up to twenty seconds from the caller's own
-microphone, then transcribes and submits that turn when the caller stops.
-**Dictate** only puts the transcript in the composer for review. Cancelling,
-changing rooms, or signing out discards an unfinished recording.
+in the room; **Talk to REIGN** starts the caller's own microphone and sends one
+question after about 750 milliseconds of quiet following speech. **Finish
+recording** ends capture immediately, and the recording still has a twenty-second cap.
+Short pauses and quieter syllables keep the same capture open. This lightweight
+local sound detector is not semantic turn prediction; a longer pause can finish
+the question, and background noise can require the manual Finish control. If
+audio analysis is unavailable, Finish and the time limit remain available.
+**Dictate** keeps manual completion and only puts the transcript in the composer
+for review. Cancelling, changing rooms, or signing out stops owned microphone
+tracks and cancels an unfinished transcription. The microphone never reopens
+automatically.
+
+Talk's transcript carries a server-issued, room- and member-bound receipt. REIGN
+is told that this is a spoken question, and the saved message is labeled **Spoken
+message**. Transcripts still appear in the conversation so the team can review
+them. An edited Dictate draft is sent as ordinary text. A failed send retains
+the same message and receipt for an explicit retry, without recording again.
 
 Each assistant turn includes a current, membership-checked presence snapshot for
 that room. Multiple tabs belonging to one person count as one participant. REIGN
@@ -51,6 +64,13 @@ player blends pre-rendered neural frames and samples mouth opening from the
 spoken PCM at the audio output position. Sentence expressions use that same
 playback clock. Suspending playback stops facial speech; resuming continues the
 current segment. It does not perform phoneme alignment or live neural inference.
+The first sentence becomes available as soon as its generated audio and exact
+transcript have been checked; later sentences can finish generating while it
+plays. The browser loads only the next sentence ahead, reducing network pauses
+without preloading an entire conversation. Waiting audio is labeled **Preparing
+REIGN's voice**, and **Speaking** begins only when audio reaches the playback
+clock. If a later clip fails, the face stops and **Retry REIGN audio** retries the
+unheard part without repeating the assistant's room actions or the earlier audio.
 Audio generation, transcription, image understanding, and assistant work run
 through Core; the team page does not download an ONNX model. The compressed
 portrait atlas is approximately 320 KB and decodes to approximately 12 MiB.

@@ -48,12 +48,30 @@ annotations return `speech_status: "unavailable"`, empty text and no segments;
 the existing verified voice narration remains available with a neutral face.
 
 Expression preparation has a twelve-second model deadline, at most two pending
-requests and 64 process-local plans retained for five minutes. It is separate
-from executing the graph and never retries an action. Private narration binds
-each segment to its own verified audio response; expression changes follow
-playback, not the arrival of model text. The segment schema has no phoneme or
-word timestamps. Output-energy mouth motion is not a claim of phoneme-accurate
-lip synchronization.
+requests and 64 process-local plans retained for five minutes. It starts alongside
+spoken-answer preparation; it is no longer an extra model round trip that blocks
+the first audio. The client segments the exact verified answer into bounded
+sentences and starts neutral narration immediately. A returned model annotation
+may label a sentence only when its entire exact text and position fall within
+one annotated span and that sentence has not started playing. This preserves
+model cues when the annotation groups adjacent sentences with the same tone.
+A sentence crossing annotation spans stays neutral. A late annotation cannot
+change an expression mid-sentence. The client rejects late
+plans after interruption, call end or replacement of the spoken answer. Long
+answers outside the four-by-400-character expression bound retain the existing
+neutral verified-result narration.
+
+This preparation is separate from executing the graph and never retries an
+action. Private narration binds each segment to its own verified audio response;
+expression changes follow playback, not the arrival of model text. The segment
+schema has no phoneme or word timestamps. Output-energy mouth motion is not a
+claim of phoneme-accurate lip synchronization.
+
+Actual microphone turns send `input_source: "voice"` with the graph request, so
+the graph can preserve their spoken origin even though delegated words use a
+text representation internally. Typed requests default to `"text"`; the generated
+startup connection check is also text, not a claim of user speech. Active voice
+runs poll graph completion every 250 ms rather than the typed interface's 750 ms.
 
 Typed and spoken requests share thread ID, browser session, process-local
 checkpoints, trace events, and usage. Requests are serialized to protect the
@@ -74,6 +92,7 @@ Workmates `OPENAI_API_KEY` through the existing Render service reference.
 | `REALTIME_MODEL` | `gpt-realtime-2.1`, matching Workmates' transport |
 | `REALTIME_TRANSCRIPTION_MODEL` | `gpt-4o-mini-transcribe`, configurable for provider compatibility |
 | Output voice | `marin` |
+| Server VAD | 450 ms silence, 300 ms pre-roll; interrupts output on new speech |
 | Call duration | Fifteen minutes, enforced by the browser lifecycle |
 | Offer limits | 64 KiB SDP; 96 KiB JSON body; two pending offers; six starts per minute |
 

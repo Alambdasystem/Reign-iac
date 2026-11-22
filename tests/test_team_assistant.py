@@ -151,6 +151,16 @@ class MediaAPITests(unittest.TestCase):
         self.store.disable_member(self.owner, self.member["id"])
         self.assertEqual(self.client.get(self.path("audio/" + key), headers=self.headers()).status_code, 401)
 
+    def test_member_revoked_during_pending_clip_wait_never_receives_audio(self):
+        key = self.media.put(self.room, "reign", wav_clip(), "audio")
+        async def finished_after_revocation(audio_id, room_id):
+            self.store.disable_member(self.owner, self.member["id"])
+            return wav_clip()
+        with patch.object(self.media, "audio_bytes", side_effect=finished_after_revocation):
+            response = self.client.get(self.path("audio/" + key), headers=self.headers())
+        self.assertEqual(response.status_code, 401)
+        self.assertNotIn(b"RIFF", response.content)
+
     def test_local_camera_preview_uses_owned_viewer_lease_without_joining_or_sharing_a_call(self):
         cid = str(uuid.uuid4())
         self.client.post(self.path("presence"), headers=self.headers(), json={"connection_id": cid})
@@ -205,7 +215,9 @@ class MediaAPITests(unittest.TestCase):
         payload = {"mime_type": "audio/wav", "audio_base64": base64.b64encode(wav_clip()).decode()}
         self.http.post.return_value = httpx.Response(200, json={"text": "  A dictated room message.  "})
         response = self.client.post(self.path("transcriptions"), headers=self.headers(), json=payload)
-        self.assertEqual(response.json(), {"text": "A dictated room message."})
+        self.assertEqual(response.json()["text"], "A dictated room message.")
+        key = response.json()["transcription_id"]
+        self.media.validate_transcription(self.member, self.room, key, "A dictated room message.")
         args = self.http.post.await_args
         self.assertEqual(args.args[0], PROVIDER["base"] + "/audio/transcriptions")
         self.assertFalse(args.kwargs["follow_redirects"])
