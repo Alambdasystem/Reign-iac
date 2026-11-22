@@ -1,16 +1,20 @@
 """Exercise real Tailscale binaries offline; never authenticate or enroll a node.
 
-Run only in the Core image with --user 10001:10001 and --network none.
+Run only in the Core image with --user 10001:10001 --group-add 1000,
+PYTHONPATH=/app and --network none.
 All daemon state lives in a temporary directory removed on completion.
 """
 
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 import tempfile
 import time
+
+from reign import tailscale_runtime as runtime
 
 
 TAILSCALE = "/usr/local/bin/tailscale"
@@ -39,15 +43,49 @@ def command(arguments, environment):
                           text=True, timeout=3, check=False)
 
 
-def unenrolled(status):
-    if (status.get("BackendState") != "NeedsLogin" or status.get("HaveNodeKey", False)
+def unenrolled(status, states):
+    if (status.get("BackendState") not in states or status.get("HaveNodeKey", False)
             or status.get("TailscaleIPs") or status.get("AuthURL")):
         raise SmokeError("daemon must remain unauthenticated throughout the smoke")
 
 
+def check_daemon(instance, first_start):
+    environment = instance.environment
+    cli = [TAILSCALE, "--socket=" + instance.socket]
+    states = {"NeedsLogin"} if first_start else {"NeedsLogin", "Stopped"}
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        if instance.daemon.poll() is not None:
+            raise SmokeError("real userspace daemon exited before LocalAPI readiness")
+        result = command([*cli, "status", "--json", "--peers=false"], environment)
+        if result.returncode == 0:
+            status = json.loads(result.stdout)
+            if status.get("BackendState") in states:
+                unenrolled(status, states)
+                break
+        time.sleep(0.1)
+    else:
+        raise SmokeError("real userspace daemon did not become ready offline")
+    if first_start:
+        flags = ["--" + name + "=" + (str(value).lower() if isinstance(value, bool) else value)
+                 for name, value in PREFERENCES.items()]
+        if command([*cli, "set", *flags], environment).returncode:
+            raise SmokeError("real CLI rejected outbound-only client preferences")
+    result = command([*cli, "get", "--json"], environment)
+    if result.returncode:
+        raise SmokeError("real CLI could not read client preferences")
+    preferences = json.loads(result.stdout)
+    if any(preferences.get(name) != value for name, value in PREFERENCES.items()):
+        raise SmokeError("client preferences did not persist across daemon startup")
+    result = command([*cli, "status", "--json", "--peers=false"], environment)
+    if result.returncode:
+        raise SmokeError("real LocalAPI stopped responding after preference check")
+    unenrolled(json.loads(result.stdout), states)
+
+
 def main():
-    if os.geteuid() != 10001 or os.getegid() != 10001:
-        raise SmokeError("run the Core image with --user 10001:10001")
+    if os.geteuid() != 10001 or os.getegid() != 10001 or 1000 not in os.getgroups():
+        raise SmokeError("run with --user 10001:10001 --group-add 1000")
     if sorted(os.listdir("/sys/class/net")) != ["lo"]:
         raise SmokeError("run the Core image with --network none")
     if any(os.environ.get(name) for name in (
@@ -58,64 +96,72 @@ def main():
         root = Path(directory)
         state = root / "state"
         state.mkdir(mode=0o700)
-        socket = root / "tailscaled.sock"
-        environment = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": directory,
-                       "TMPDIR": directory}
-        for binary, option in ((TAILSCALE, "version"), (TAILSCALED, "--version")):
-            result = command([binary, option], environment)
-            if result.returncode or result.stdout.splitlines()[:1] != [EXPECTED_VERSION]:
-                raise SmokeError("Core must contain the pinned Tailscale client and daemon")
-        if command(["ssh", "-V"], environment).returncode:
-            raise SmokeError("Core must contain the OpenSSH client")
-        cli = [TAILSCALE, "--socket=" + str(socket)]
-        daemon = subprocess.Popen(
-            [TAILSCALED, "--tun=userspace-networking", "--state=" + str(state / "tailscaled.state"),
-             "--statedir=" + str(state), "--socket=" + str(socket), "--no-logs-no-support"],
-            env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        parent = root / "setgid-parent"
+        parent.mkdir(mode=0o700)
+        os.chown(parent, -1, 1000)
+        parent.chmod(0o2700)
+        runtime_path = parent / "runtime"
+        runtime.RUNTIME_DIR = str(runtime_path)
+        # Reproduce the observed inherited group/mode without changing an existing object.
+        runtime_path.mkdir(mode=0o700)
+        before = runtime_path.stat()
+        if before.st_gid != 1000 or stat.S_IMODE(before.st_mode) != 0o2700:
+            raise SmokeError("the real filesystem did not reproduce setgid inheritance")
         try:
-            deadline = time.monotonic() + 20
-            while time.monotonic() < deadline:
-                if daemon.poll() is not None:
-                    raise SmokeError("real userspace daemon exited before LocalAPI readiness")
-                result = command([*cli, "status", "--json", "--peers=false"], environment)
-                if result.returncode == 0:
-                    status = json.loads(result.stdout)
-                    if status.get("BackendState") == "NeedsLogin":
-                        unenrolled(status)
-                        break
-                time.sleep(0.1)
-            else:
-                raise SmokeError("real userspace daemon did not reach NeedsLogin offline")
-            flags = ["--" + name + "=" + (str(value).lower() if isinstance(value, bool) else value)
-                     for name, value in PREFERENCES.items()]
-            if command([*cli, "set", *flags], environment).returncode:
-                raise SmokeError("real CLI rejected outbound-only client preferences")
-            result = command([*cli, "get", "--json"], environment)
-            if result.returncode:
-                raise SmokeError("real CLI could not read applied client preferences")
-            preferences = json.loads(result.stdout)
-            if any(preferences.get(name) != value for name, value in PREFERENCES.items()):
-                raise SmokeError("applied client preferences differ from the outbound-only policy")
-            result = command([*cli, "status", "--json", "--peers=false"], environment)
-            if result.returncode:
-                raise SmokeError("real LocalAPI stopped responding after preference update")
-            unenrolled(json.loads(result.stdout))
-            print("Offline Tailscale smoke passed: v" + EXPECTED_VERSION + ", nonroot, no enrollment")
-        finally:
-            if daemon.poll() is None:
-                daemon.terminate()
+            runtime._runtime_directory()
+        except runtime.TailscaleError:
+            pass
+        else:
+            raise SmokeError("an existing runtime directory with the wrong group was accepted")
+        after = runtime_path.stat()
+        if (after.st_uid, after.st_gid, after.st_mode) != (before.st_uid, before.st_gid, before.st_mode):
+            raise SmokeError("an existing unsafe runtime directory was modified")
+        runtime_path.rmdir()  # Remove only the empty directory created by this fixture.
+
+        for attempt in range(2):
+            runtime._runtime_directory()
+            info = runtime_path.stat()
+            if ((info.st_uid, info.st_gid) != (10001, 10001)
+                    or stat.S_IMODE(info.st_mode) != 0o700):
+                raise SmokeError("new runtime directory did not clear inherited group and setgid")
+            instance = runtime._Runtime(str(state), "render-offline-smoke", "")
+            environment = instance.environment
+            if environment.get("TS_LOGS_DIR") != str(state):
+                raise SmokeError("daemon logs must use the validated private state directory")
+            if attempt == 0:
+                for binary, option in ((TAILSCALE, "version"), (TAILSCALED, "--version")):
+                    result = command([binary, option], environment)
+                    if result.returncode or result.stdout.splitlines()[:1] != [EXPECTED_VERSION]:
+                        raise SmokeError("Core must contain the pinned Tailscale client and daemon")
+                if command(["ssh", "-V"], environment).returncode:
+                    raise SmokeError("Core must contain the OpenSSH client")
+            # Use production logging behavior; network isolation prevents any log upload.
+            instance.daemon = subprocess.Popen(
+                [TAILSCALED, "--tun=userspace-networking", "--state=" + str(state / "tailscaled.state"),
+                 "--statedir=" + str(state), "--socket=" + instance.socket],
+                env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, start_new_session=True,
+            )
             try:
-                daemon.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                daemon.kill()
-                daemon.wait(timeout=5)
+                check_daemon(instance, first_start=attempt == 0)
+            finally:
+                instance.close()
+            if runtime_path.exists():
+                raise SmokeError("daemon left unexpected files in the ephemeral runtime directory")
+            descriptor = os.open(state, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                runtime._check_tree(descriptor)
+            finally:
+                os.close(descriptor)
+            if not (state / "tailscaled.log.conf").is_file() or not list(state.glob("tailscaled.log*.txt")):
+                raise SmokeError("real daemon did not write logs into private persistent storage")
+        print("Offline Tailscale smoke passed: v" + EXPECTED_VERSION
+              + ", nonroot SGID directory, private logs, two daemon starts, no enrollment")
 
 
 if __name__ == "__main__":
     try:
         main()
-    except (SmokeError, OSError, ValueError, subprocess.SubprocessError) as error:
+    except (SmokeError, runtime.TailscaleError, OSError, ValueError, subprocess.SubprocessError) as error:
         message = str(error) if isinstance(error, SmokeError) else type(error).__name__
         raise SystemExit("Offline Tailscale smoke failed: " + message) from None
