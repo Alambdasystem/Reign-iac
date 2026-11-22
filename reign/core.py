@@ -18,6 +18,7 @@ from reign.session_errors import BrowserOccupied, browser_occupied_response
 from reign.owned_workflow import execute_owned_workflow
 from reign.tool_errors import ACTION_MESSAGES, BrowserActionError, browser_action_error_response
 from reign.voice import VoiceBroker, VoiceError, capabilities as voice_capabilities, read_offer, voice_error_response
+from reign.speech import PrivateSpeech, read_speech_request
 
 
 def authorize(request: Request):
@@ -75,6 +76,7 @@ async def lifespan(app: FastAPI):
             app.state.genesis = genesis
             app.state.nodes = nodes
             app.state.voice = VoiceBroker(app.state.http)
+            app.state.private_speech = PrivateSpeech(app.state.http)
             app.state.team = team
             app.state.team_media = team_media
             app.state.team_browser = team_browser
@@ -387,6 +389,13 @@ async def chat_state(tid: uuid.UUID):
 @app.post("/api/chat/{tid}/resume", dependencies=[Depends(authorize)])
 async def chat_resume(tid: uuid.UUID):
     return await app.state.agent.resume(str(tid))
+
+
+@app.post("/api/chat/{tid}/speech", dependencies=[Depends(authorize)])
+async def chat_speech(tid: uuid.UUID, request: Request):
+    run_id = await read_speech_request(request)
+    result = await app.state.private_speech.plan(app.state.agent, str(tid), run_id)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @app.delete("/api/chat/{tid}", dependencies=[Depends(authorize)])

@@ -28,11 +28,14 @@ const profile = (role = 'owner') => ({workspace: {id: 'rain', name: 'Workspace',
   rooms: [{id: 'room-a', title: 'Planning'}, {id: 'room-b', title: 'Research'}], capabilities: {assistant: true, speech: true, calls: true, documents: true, manage_members: role === 'owner', vision: true, transcription: true}});
 const event = (seq, text, extra = {}) => ({id: 'event-' + seq, seq, type: 'message', user_id: 'user-1', display_name: 'CI Teammate', created_at: 1700000000, data: {text}, ...extra});
 const snapshot = id => ({room: {id, title: id === 'room-a' ? 'Planning' : 'Research'}, events: [], documents: [{id: 'document-1', title: 'Shared plan', version: 1}], presence: [], assistant: {status: 'idle'}, last_seq: 0});
-function harness({handle, role, leaveThrows = false} = {}) {
-  const nodes = new Map(), requests = [], timers = new Map(), polls = [], recordings = [], redirects = [], stored = [], media = {joins: 0, leaves: 0, disposed: 0}, avatar = {played: [], stopped: 0, destroyed: 0};
+function harness({handle, role, leaveThrows = false, cameraCapture} = {}) {
+  const nodes = new Map(), requests = [], timers = new Map(), polls = [], recordings = [], redirects = [], stored = [], media = {joins: 0, leaves: 0, disposed: 0}, avatar = {played: [], stopped: 0, destroyed: 0, unlocked: 0};
   let timer = 0, id = 0, options;
+  const camera = {started: 0, stopped: 0, captures: 0, disposed: 0};
+  const picture = () => ({blob: new Blob([new Uint8Array([255, 216, 255, 217])], {type: 'image/jpeg'}), capturedAt: '2026-11-22T12:00:00.000Z'});
   for (const match of html.matchAll(/id="([^"]+)"/g)) nodes.set(match[1], new Element());
   const node = name => { assert.ok(nodes.has(name), 'unknown DOM ID ' + name); return nodes.get(name); };
+  node('askReign').dataset.action = 'ask'; node('sendMessage').dataset.action = 'send';
   const doc = new Element('document'); Object.assign(doc, {getElementById: node, createElement: tag => new Element(tag), body: new Element('body'), cookie: 'ax_csrf=synthetic-token'});
   const win = new Element('window'); Object.assign(win, {location: {origin: 'https://ax.test', replace: target => redirects.push(target), reload() {}}, sessionStorage: {getItem() { return null; }, setItem() {}}, localStorage: {setItem: (key, value) => stored.push({key, value})}, navigator: {clipboard: {writeText: async () => {}}}, confirm: () => true, dispatchEvent() {}});
   const response = (value, status = 200) => ({ok: status >= 200 && status < 300, status, json: async () => value});
@@ -48,17 +51,25 @@ function harness({handle, role, leaveThrows = false} = {}) {
     throw Error('Unexpected request: ' + url);
   };
   const context = vm.createContext({console, AbortController, Blob, TextEncoder, CustomEvent: class { constructor(type, value) { this.type = type; Object.assign(this, value); } },
-    URL: {createObjectURL: () => 'blob:test', revokeObjectURL() {}}, FileReader: class {},
-    createTeamCall: config => { options = config; return {join() { media.joins++; return Promise.resolve(); }, leave() { media.leaves++; if (leaveThrows) throw Error('cleanup failed'); return Promise.resolve(); }, syncPresence() {}, dispose() { media.disposed++; }, setMicrophone() {}, setCamera() {}, setScreen() {}}; },
-    createTeamAvatar: config => { config.onStatus({state: 'ready', message: 'Ready'}); return {play(room, value) { avatar.played.push({room, value}); }, unlock: async () => true, stop() { avatar.stopped++; }, destroy() { avatar.destroyed++; }}; },
+    URL: {createObjectURL: () => 'blob:test', revokeObjectURL() {}}, FileReader: class {
+      readAsDataURL(blob) { void blob.arrayBuffer().then(data => { this.result = 'data:' + blob.type + ';base64,' + Buffer.from(data).toString('base64'); this.onload?.(); }); }
+    },
+    createTeamCall: config => { options = config; return {join() { media.joins++; return Promise.resolve(); }, leave() { media.leaves++; if (leaveThrows) throw Error('cleanup failed'); return Promise.resolve(); }, syncPresence() {}, dispose() { media.disposed++; }, setMicrophone() {}, setCamera() {}, setScreen() {}, captureFrame: async () => picture()}; },
+    createTeamAvatar: config => { config.onStatus({state: 'ready', message: 'Ready'}); return {play(room, value) { avatar.played.push({room, value}); }, unlock: async () => { avatar.unlocked++; return true; }, stop() { avatar.stopped++; }, destroy() { avatar.destroyed++; }}; },
     createTeamRecorder: config => ({start() { const value = pending(); recordings.push(value); config.onState({state: 'recording', message: 'Recording'}); return value.promise; },
       cancel() { recordings.at(-1)?.reject(Object.assign(Error('cancelled'), {name: 'AbortError'})); config.onState({state: 'idle'}); },
       stop() { const value = recordings.at(-1); value?.resolve({audio_base64: 'c3ludGhldGlj', mime_type: 'audio/webm'}); config.onState({state: 'idle'}); return value?.promise || Promise.resolve(); }, dispose() {}}),
-    createTeamBrowser: () => ({setRoom() {}, dispose() {}})});
+    createTeamBrowser: () => ({setRoom() {}, dispose() {}}),
+    createTeamCamera: config => ({
+      async start() { camera.started++; config.video.srcObject = {localCamera: true}; config.onState({phase: 'ready', active: true, message: 'Private preview.'}); return true; },
+      stop() { camera.stopped++; config.video.srcObject = null; config.onState({phase: 'idle', active: false, message: 'Camera stopped.'}); },
+      async capture() { camera.captures++; if (cameraCapture) await cameraCapture.promise; return picture(); },
+      dispose() { camera.disposed++; },
+    })});
   vm.runInContext(source, context);
   const app = context.createTeamWorkspace({document: doc, window: win, fetch: fetcher, uuid: () => 'test-id-' + ++id,
     timers: {setTimeout(fn, delay) { const key = ++timer; timers.set(key, {fn, delay}); return key; }, clearTimeout(key) { timers.delete(key); }}});
-  return {app, node, doc, win, requests, polls, recordings, redirects, media, avatar, stored, timers, get callOptions() { return options; }, response,
+  return {app, node, doc, win, requests, polls, recordings, redirects, media, avatar, camera, stored, timers, get callOptions() { return options; }, response,
     click: name => node(name).emit('click'), submit(name, submitter) { node(name).emit('submit', {submitter: submitter ? node(submitter) : undefined}); },
     input(name, value) { node(name).value = value; node(name).emit('input'); },
     run(delay) { const task = [...timers.entries()].find(([, value]) => value.delay === delay); assert.ok(task, 'missing timer ' + delay); timers.delete(task[0]); task[1].fn(); }};
@@ -210,4 +221,138 @@ test('the confirmed leave response replaces remote flags with the current room p
   h.callOptions.onPresence([viewer, {...remoteViewer, connection_id: 'call-remote', in_call: true, microphone: true, camera: true}]);
   await h.callOptions.api('/api/team/rooms/room-a/presence/call-local', 'DELETE');
   assert.deepEqual(h.node('presenceList').children.map(node => node.textContent), ['CI Teammate', 'Other teammate']); h.app.destroy();
+});
+
+test('typed Ask requests voice by default and unlocks output synchronously within its submit gesture', async () => {
+  const h = harness({handle: (request, {response}) => request.url.endsWith('/messages')
+    ? response({event: event(1, request.body.text, {data: request.body}), run_id: 'run-1'}) : undefined});
+  await h.app.start();
+  assert.equal(h.node('speakReply').checked, true); assert.equal(h.avatar.unlocked, 0);
+  h.input('messageInput', 'Please speak this reply.'); h.submit('chatForm', 'askReign');
+  assert.equal(h.avatar.unlocked, 1, 'unlock begins before the submit gesture returns');
+  await until(() => h.requests.some(request => request.url.endsWith('/messages')));
+  const request = h.requests.find(request => request.url.endsWith('/messages'));
+  assert.equal(request.body.ask_reign, true); assert.equal(request.body.speak, true);
+  h.app.destroy();
+});
+
+test('an explicit voice opt-out survives room switches and avoids output unlock for text-only Ask', async () => {
+  const h = harness({handle: (request, {response}) => request.url.endsWith('/messages')
+    ? response({event: event(1, request.body.text, {data: request.body})}) : undefined});
+  await h.app.start();
+  h.node('speakReply').checked = false; h.node('speakReply').emit('change');
+  await h.app.selectRoom('room-b'); assert.equal(h.node('speakReply').checked, true);
+  await h.app.selectRoom('room-a'); assert.equal(h.node('speakReply').checked, false);
+  h.input('messageInput', 'Keep this reply text-only.'); h.submit('chatForm', 'askReign');
+  await until(() => h.requests.some(request => request.url.endsWith('/messages')));
+  assert.equal(h.requests.find(request => request.url.endsWith('/messages')).body.speak, false);
+  assert.equal(h.avatar.unlocked, 0);
+  h.node('speakReply').checked = true; h.node('speakReply').emit('change');
+  assert.equal(h.avatar.unlocked, 1, 'checking voice is also an explicit audio gesture');
+  h.app.destroy();
+});
+
+test('Camera is a local preview until Describe sends one still and a spoken question while preserving the draft', async () => {
+  const h = harness({handle: (request, {response}) => {
+    if (request.url.endsWith('/attachments')) return response({attachment: {id: 'camera-receipt', source: 'camera_preview'}});
+    if (request.url.endsWith('/messages')) return response({event: event(1, request.body.text, {data: request.body}), run_id: 'camera-run'});
+  }});
+  await h.app.start(); h.input('messageInput', 'Keep my unfinished typed question.');
+  h.click('openCamera');
+  assert.equal(h.camera.started, 1); assert.equal(h.node('cameraDialog').open, true);
+  assert.ok(h.node('cameraPreview').srcObject); assert.equal(h.media.joins, 0);
+  assert.equal(h.camera.captures, 0); assert.equal(h.requests.some(request => request.url.endsWith('/attachments')), false);
+  h.click('describeCamera');
+  assert.equal(h.avatar.unlocked, 1, 'Describe starts audio activation in the same gesture');
+  await until(() => !h.node('cameraDialog').open);
+  const attachment = h.requests.find(request => request.url.endsWith('/attachments'));
+  const question = h.requests.find(request => request.url.endsWith('/messages'));
+  assert.equal(attachment.body.source, 'camera_preview');
+  assert.equal(attachment.body.connection_id, 'test-id-1');
+  assert.match(attachment.body.captured_at, /^\d{4}-\d\d-\d\dT/);
+  assert.match(attachment.body.data_url, /^data:image\/jpeg;base64,/);
+  const lease = h.requests.filter(request => request.url.endsWith('/presence')).at(-1);
+  assert.equal(lease.body.in_call, false); assert.equal(lease.body.camera, false); assert.equal(lease.body.microphone, false);
+  assert.equal(question.body.ask_reign, true); assert.equal(question.body.speak, true);
+  assert.deepEqual(question.body.attachment_ids, ['camera-receipt']);
+  assert.equal(h.node('messageInput').value, 'Keep my unfinished typed question.');
+  assert.equal(h.node('cameraPreview').srcObject, null);
+  assert.equal(h.requests.filter(request => request.url.endsWith('/messages')).length, 1);
+  h.app.destroy();
+});
+
+test('stopping or closing a camera preview never uploads a frame and a late capture cannot submit', async () => {
+  const held = pending(), h = harness({cameraCapture: held}); await h.app.start();
+  h.click('openCamera'); h.click('stopCamera');
+  assert.equal(h.node('cameraDialog').open, true); assert.equal(h.node('describeCamera').disabled, true);
+  assert.equal(h.node('cameraPreview').srcObject, null);
+  h.click('restartCamera'); h.click('describeCamera'); h.click('closeCamera');
+  held.resolve(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.node('cameraDialog').open, false); assert.equal(h.node('cameraPreview').srcObject, null);
+  assert.equal(h.requests.some(request => /\/(attachments|messages)$/.test(request.url)), false);
+  h.app.destroy();
+});
+
+test('a late camera upload cannot ask in the room the person left', async () => {
+  const held = pending(), h = harness({handle: request => request.url.endsWith('/attachments') ? held.promise : undefined});
+  await h.app.start(); h.click('openCamera'); h.click('describeCamera');
+  await until(() => h.requests.some(request => request.url.endsWith('/attachments')));
+  await h.app.selectRoom('room-b');
+  held.resolve(h.response({attachment: {id: 'late-receipt', source: 'camera_preview'}}));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.node('cameraDialog').open, false); assert.equal(h.node('cameraPreview').srcObject, null);
+  assert.equal(h.requests.some(request => request.url.endsWith('/messages')), false);
+  h.app.destroy();
+});
+
+test('an uncertain camera question retries the same message and receipt without recapturing or replacing the draft', async () => {
+  let sends = 0;
+  const h = harness({handle: (request, {response}) => {
+    if (request.url.endsWith('/attachments')) return response({attachment: {id: 'one-camera-receipt', source: 'camera_preview'}});
+    if (request.url.endsWith('/messages')) {
+      if (++sends === 1) return response({detail: 'Assistant unavailable.'}, 503);
+      return response({event: event(1, request.body.text, {data: request.body})});
+    }
+  }});
+  await h.app.start(); h.input('messageInput', 'My draft stays here.'); h.click('openCamera'); h.click('describeCamera');
+  await until(() => h.node('cameraStatus').dataset.error === 'true');
+  assert.equal(h.node('cameraDialog').open, true); assert.equal(h.node('describeCamera').disabled, true);
+  h.click('closeCamera'); h.click('retryMessage');
+  await until(() => sends === 2);
+  const messages = h.requests.filter(request => request.url.endsWith('/messages'));
+  assert.deepEqual(messages[0].body, messages[1].body);
+  assert.equal(h.camera.captures, 1); assert.equal(h.requests.filter(request => request.url.endsWith('/attachments')).length, 1);
+  assert.equal(h.node('messageInput').value, 'My draft stays here.');
+  h.app.destroy();
+});
+
+test('a local camera preview remains usable when the model is unavailable and logout stops it before the server responds', async () => {
+  const logout = pending();
+  const h = harness({handle: (request, {response, profile}) => {
+    if (request.url === '/api/team') return response({...profile, capabilities: {...profile.capabilities, assistant: false, vision: false}});
+    if (request.url === '/logout') return logout.promise;
+  }});
+  await h.app.start(); h.click('openCamera');
+  assert.ok(h.node('cameraPreview').srcObject); assert.equal(h.node('describeCamera').disabled, true);
+  assert.match(h.node('cameraAvailability').textContent, /vision connection is unavailable/);
+  const ending = h.app.logout();
+  assert.equal(h.node('cameraPreview').srcObject, null); assert.equal(h.node('cameraDialog').open, false);
+  logout.resolve(h.response({ok: true})); await ending;
+  assert.equal(h.camera.disposed, 1);
+});
+
+test('existing group camera stills send an ISO capture timestamp through the same protected attachment route', async () => {
+  const h = harness({handle: (request, {response}) => request.url.endsWith('/attachments')
+    ? response({attachment: {id: 'shared-call-receipt', source: 'camera'}}) : undefined});
+  await h.app.start();
+  h.callOptions.onState({active: true, phase: 'active', camera: true, connectionId: 'call-owned'});
+  h.callOptions.onStreams({local: {camera: {}}, remote: []});
+  h.click('shareWithReign'); h.node('shareSource').value = 'camera'; h.click('captureShare');
+  await until(() => h.node('confirmShare').disabled === false); h.click('confirmShare');
+  await until(() => h.requests.some(request => request.url.endsWith('/attachments')));
+  const request = h.requests.find(request => request.url.endsWith('/attachments'));
+  assert.equal(request.body.source, 'camera'); assert.equal(request.body.connection_id, 'call-owned');
+  assert.equal(typeof request.body.captured_at, 'string'); assert.ok(Number.isFinite(Date.parse(request.body.captured_at)));
+  assert.equal(h.camera.started, 0, 'shared-call capture does not start a second camera');
+  h.app.destroy();
 });

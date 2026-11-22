@@ -140,6 +140,21 @@ def media(request):
     return value
 
 
+def attachment_connection(runtime, actor, room_id, connection_id, source):
+    if source == "camera_preview":
+        # A local preview is not a call or a broadcast to other participants.
+        # Its explicit still upload must belong to this actor's live room page.
+        identifier(connection_id); runtime._prune()
+        connection = runtime.presence.get(connection_id)
+        if (not connection or connection["user_id"] != actor["id"]
+                or connection["room_id"] != room_id or connection["in_call"]):
+            raise TeamError("team_connection_required")
+    else:
+        connection = runtime._connection(actor, room_id, connection_id)
+        if not connection[source]: raise TeamMediaError("invalid_media")
+    return connection
+
+
 def install(app):
     app.add_exception_handler(TeamMediaError, media_error_response)
 
@@ -151,9 +166,8 @@ def install(app):
         data = await body(request, {"data_url", "source", "connection_id", "captured_at"},
                           {"data_url", "source", "connection_id", "captured_at"}, maximum=750000)
         source = data["source"]
-        if not isinstance(source, str) or source not in {"camera", "screen"}: raise TeamMediaError("invalid_media")
-        connection = runtime._connection(actor, room_id, data["connection_id"])
-        if not connection[source]: raise TeamMediaError("invalid_media")
+        if not isinstance(source, str) or source not in {"camera", "screen", "camera_preview"}: raise TeamMediaError("invalid_media")
+        attachment_connection(runtime, actor, room_id, data["connection_id"], source)
         try:
             captured = datetime.fromisoformat(data["captured_at"].replace("Z", "+00:00"))
             if captured.tzinfo is None or not -10 <= time.time() - captured.timestamp() <= 60: raise ValueError()
@@ -175,8 +189,7 @@ def install(app):
         finally:
             if reserved: cache.pending_images -= 1
         await runtime.authorize_room(actor, room_id)
-        connection = runtime._connection(actor, room_id, data["connection_id"])
-        if not connection[source]: raise TeamMediaError("invalid_media")
+        attachment_connection(runtime, actor, room_id, data["connection_id"], source)
         metadata = {"source": source, "participant_id": actor["id"], "captured_at": captured.isoformat()}
         key = cache.put(room_id, actor["id"], clean, "image", metadata)
         return JSONResponse({"attachment": {"id": key, **metadata,

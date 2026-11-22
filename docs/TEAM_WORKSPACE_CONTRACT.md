@@ -79,11 +79,25 @@ receipt. Sharing a video with humans does not grant image-input permission to
 REIGN. User media never starts automatically after restoring a saved session.
 
 `POST /api/team/rooms/{room_id}/attachments` accepts a JPEG/PNG data URL (at most
-512 KiB), `source` (`camera` or `screen`), the caller's current call connection ID,
-and an ISO capture timestamp. The server verifies that source is active, decodes
+512 KiB), `source`, the caller's current connection ID, and an ISO capture timestamp.
+Sources `camera` and `screen` require the caller's active call and enabled source.
+Source `camera_preview` requires the caller's active, same-room viewer connection
+with `in_call: false`; it neither creates a call nor changes media-sharing flags.
+Both paths recheck membership and the owned connection after decoding. The server decodes
 and strips metadata, scales to at most 960×540, and returns a room/user-bound
 receipt that expires after five minutes. Only explicitly shared stills enter the
 model input. Human video sharing does not automatically enable AI vision.
+
+The direct Camera control requests video only from a user gesture and displays a
+local muted preview. Describe captures and shares one bounded JPEG, then submits
+an explicit image-description question with speech enabled. The ordinary typed
+draft and its attachments are retained. A confirmed send closes the preview and
+stops its owned camera; an uncertain send keeps one stable message ID for the
+visible Retry action. No repeated frame capture or automatic resubmission runs.
+Stop, close, room changes, logout and page exit stop owned tracks, including
+tracks that arrive after a late permission result. Description uses actual image
+bytes through the existing vision model. The submitter's account identity does
+not establish who is pictured, and presence flags do not establish image content.
 
 `POST /api/team/rooms/{room_id}/transcriptions` accepts a bounded recording made
 by an explicit Dictate or Talk to REIGN action. Dictate puts text into the composer
@@ -95,8 +109,10 @@ Public STUN helps discover direct network routes. No TURN relay or SFU is
 provisioned. Four human call connections are supported; restricted networks can
 still prevent calls. See [Cloudflare's public STUN documentation](https://developers.cloudflare.com/realtime/turn/faq/).
 
-REIGN audio has a single authoritative room response. Each human hears that
-response and sees the same avatar state. Audio playback must not wait on slow
+REIGN audio has a single authoritative room response. Each human plays that
+response with expressions synchronized to their local audio output. Different
+devices are not assumed to have identical network or output latency. Audio
+playback must not wait on slow
 portrait inference. A fixed precomputed neural portrait can keep model weights
 out of the team page; this must be labeled separately from live neural rendering
 and from phoneme-accurate lip sync.
@@ -115,8 +131,20 @@ each returned sentence. Narration has no tools, is checked against the requested
 sentence's transcript, and is stored only in a bounded ten-minute audio cache.
 Audio failure preserves the successful text/document result with an explicit
 unavailable status. This is bounded turn-based speech, not streaming duplex
-conversation or phoneme prediction. The browser follows actual audio energy and
-blends expression/pose frames; it does not delay speech for neural inference.
+conversation or phoneme prediction. The browser samples the decoded PCM envelope
+at its audio output position and advances sentence expressions on the same
+clock. Where available, Web Audio output timestamps account for device latency;
+the fallback is bounded by the context's reported time and latency. A suspended
+context freezes the cues and closes the mouth. No timer may silently advance to
+the next sentence while output is stopped. Room changes and interruptions stop
+and disconnect the current source immediately. Portrait loading never delays
+speech or starts neural inference.
+
+Typed Ask REIGN defaults to requesting speech when that capability is available,
+and calls audio resume directly from the submit gesture before network work.
+Checking Voice reply is another explicit audio-enabling gesture. An explicit
+unchecked choice survives room switching; archived replies never autoplay.
+Playback failures retain the written answer and expose the audio retry control.
 
 ## Shared browser and private owner isolation
 

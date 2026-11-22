@@ -16,6 +16,7 @@ from temporalio.client import Client
 from temporalio.api.enums.v1 import EventType
 from accounts_ui_smoke import accounts_ui_smoke
 from portrait_ui_smoke import portrait_ui_smoke
+from speech_ui_smoke import simulated_team_speech_ui
 
 TARGET = "https://alambda-forge.onrender.com/"
 AX = "https://ax:10000"
@@ -72,14 +73,17 @@ SIMULATED_VOICE_BOOTSTRAP = r"""
         queueMicrotask(() => this.delegate('Synthetic voice connection check. Do not run workspace actions.', value.response.metadata));
       } else if (value.response.tool_choice === 'none') {
         const result = JSON.parse(fixture.outputs.at(-1).output);
-        fixture.narrations.push(result);
+        const marker = 'VERIFIED_SENTENCE_JSON: ';
+        const instruction = value.response.instructions || '';
+        const text = instruction.includes(marker) ? JSON.parse(instruction.split(marker).at(-1)) : result.answer;
+        fixture.narrations.push({...result, answer: text, metadata: value.response.metadata});
         queueMicrotask(() => {
           const id = 'simulated-narration-' + ++fixture.sequence;
           fixture.peers.at(-1).outputGain.gain.value = .24;
           this.emit({type:'response.created',response:{id,metadata:value.response.metadata}});
           this.emit({type:'output_audio_buffer.started',response_id:id});
-          this.emit({type:'response.output_audio_transcript.delta',response_id:id,delta:result.answer});
-          this.emit({type:'response.output_audio_transcript.done',response_id:id,transcript:result.answer});
+          this.emit({type:'response.output_audio_transcript.delta',response_id:id,delta:text});
+          this.emit({type:'response.output_audio_transcript.done',response_id:id,transcript:text});
           this.emit({type:'response.done',response:{id,status:'completed'}});
           fixture.finishOutput = () => {
             fixture.peers.at(-1).outputGain.gain.value = 0;
@@ -157,8 +161,8 @@ async def simulated_voice_ui(browser, storage_state, origin=AX):
         def graph_state():
             turn = len(state["posts"])
             completed = state["released"] >= turn
-            answer = "Synthetic verified greeting." if turn == 1 else "Synthetic verified workspace answer."
-            return {"thread_id": thread, "run_id": "simulated-run-" + str(turn),
+            answer = "Synthetic verified greeting. Synthetic verified follow-up." if turn == 1 else "Synthetic verified workspace answer."
+            return {"thread_id": thread, "run_id": f"00000000-0000-4000-8000-{100 + turn:012d}",
                     "status": "completed" if completed else "running", "session_id": None,
                     "events": [{"sequence": 1, "kind": "completed"}] if completed else [],
                     "answer": answer if completed else "", "error": None,
@@ -182,6 +186,16 @@ async def simulated_voice_ui(browser, storage_state, origin=AX):
                           "model": "simulated-realtime-model", "max_duration_seconds": 900}
             elif path == "/api/agent":
                 result = {"configured": True, "model": "simulated-langgraph-model", "max_turns": 24}
+            elif path == "/api/chat/" + thread + "/speech":
+                current = graph_state()
+                assert request.method == "POST" and current["status"] == "completed"
+                assert request.post_data_json == {"run_id": current["run_id"]}
+                segments = ([{"text": "Synthetic verified greeting.", "expression": "warm"},
+                             {"text": "Synthetic verified follow-up.", "expression": "thoughtful"}]
+                            if len(state["posts"]) == 1 else
+                            [{"text": current["answer"], "expression": "concerned"}])
+                result = {"thread_id": thread, "run_id": current["run_id"], "status": "completed",
+                          "text": current["answer"], "segments": segments, "speech_status": "ready"}
             elif path == "/api/chat" and request.method == "POST":
                 payload = request.post_data_json
                 assert payload["thread_id"] == (thread if state["posts"] else None)
@@ -242,10 +256,26 @@ async def simulated_voice_ui(browser, storage_state, origin=AX):
                 await expect(page.locator("#voiceCaption")).to_contain_text("Synthetic verified greeting.")
                 await page.wait_for_function("""() => {
                     const canvas = document.querySelector('#reignAvatar');
-                    return canvas.dataset.speaking === 'true' && Number(canvas.dataset.mouth) > .05;
+                    return canvas.dataset.speaking === 'true' && Number(canvas.dataset.mouth) > .05 &&
+                        canvas.dataset.expression === 'warm';
                 }""")
+                # A mouth meter alone does not prove that the native audio sink
+                # is playing. Verify the real element independently of it.
+                playback_time = await page.locator('#voiceAudio').evaluate("""audio => {
+                    if (audio.paused || audio.muted || !audio.srcObject?.active) throw Error('Native output is not playing');
+                    return audio.currentTime;
+                }""")
+                await page.wait_for_function("time => document.querySelector('#voiceAudio').currentTime > time + .05",
+                                             arg=playback_time)
                 await page.screenshot(path=str(EVIDENCE / "workspace-reign-speaking.png"))
                 await page.evaluate("window.__reignVoiceSimulation.finishOutput()")
+                await expect(page.locator('#voiceCaption')).to_contain_text('Synthetic verified follow-up.')
+                await page.wait_for_function("""() => {
+                    const canvas = document.querySelector('#reignAvatar');
+                    return canvas.dataset.expression === 'thoughtful' && Number(canvas.dataset.mouth) > .05;
+                }""")
+                assert await page.evaluate('window.__reignVoiceSimulation.narrations.length') == 2
+                await page.evaluate('window.__reignVoiceSimulation.finishOutput()')
                 await page.wait_for_function("""() => {
                     const canvas = document.querySelector('#reignAvatar');
                     return canvas.dataset.speaking === 'false' && Number(canvas.dataset.mouth) < .001;
@@ -265,7 +295,8 @@ async def simulated_voice_ui(browser, storage_state, origin=AX):
                 state["released"] = 2
                 await expect(page.locator("#voiceCaption")).to_contain_text("Synthetic verified workspace answer.")
                 await page.wait_for_function(
-                    "() => Number(document.querySelector('#reignAvatar').dataset.mouth) > .05")
+                    """() => Number(document.querySelector('#reignAvatar').dataset.mouth) > .05 &&
+                        document.querySelector('#reignAvatar').dataset.expression === 'concerned'""")
                 await expect(page.locator("#sendCommand")).to_be_enabled()
                 await page.locator("#voiceEnd").click()
                 await expect(page.locator("#voiceStart")).to_be_enabled()
@@ -308,6 +339,8 @@ async def simulated_voice_ui(browser, storage_state, origin=AX):
     return {"status": "passed", "mode": "simulated_provider_graph_and_microphone",
             "checks": ["graph_completion_before_narration", "shared_graph_lock_and_thread",
                        "automatic_saved_reign_portrait", "mouth_follows_verified_output_stream",
+                       "native_audio_unmuted_playing_and_advancing", "existing_expression_plan_per_spoken_sentence",
+                       "next_expression_waits_for_previous_audio_tail",
                        "microphone_does_not_animate_reign", "mouth_stops_after_output_and_call",
                        "portrait_restored_without_setup_after_reload",
                        "start_mute_end_and_track_cleanup", "configured_reload", "owned_graph_cancellation",
@@ -566,6 +599,8 @@ async def main():
             # Separate authenticated context with no real browser to recover;
             # only this scenario uses synthetic media/provider/graph responses.
             simulated_voice = await simulated_voice_ui(browser, await context.storage_state())
+            simulated_team_speech = await simulated_team_speech_ui(
+                browser, await context.storage_state(), AX, EVIDENCE)
             accounts_ui = await accounts_ui_smoke(
                 browser, await context.storage_state(), voice_bootstrap=SIMULATED_VOICE_BOOTSTRAP)
             # Leave a session open to check honest expiry after Computer restarts.
@@ -585,6 +620,7 @@ async def main():
                 "voice_config_unavailable_ui": "passed", "voice_auth_and_csrf": "passed",
                 "live_voice_audio": "not_run_no_provider_key",
                 "simulated_voice_ui": simulated_voice,
+                "simulated_team_speech_ui": simulated_team_speech,
                 "accounts_ui": accounts_ui,
                 "target": TARGET,
             }

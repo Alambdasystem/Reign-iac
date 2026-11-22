@@ -13,6 +13,7 @@ const SESSION = '00000000-0000-4000-8000-000000000001';
 const OLD_SESSION = '00000000-0000-4000-8000-000000000002';
 const THREAD = '00000000-0000-4000-8000-000000000003';
 const NEW_THREAD = '00000000-0000-4000-8000-000000000004';
+const RUN = '00000000-0000-4000-8000-000000000101';
 
 class Element {
   constructor() {
@@ -43,7 +44,7 @@ async function eventually(check) {
 
 function harness({threadStatus = 404, oldBrowser = false, search = '', initiallyAuthenticated = true,
   role = 'owner', cleanupStatus = 200, logoutFailures = 0, voiceFailure = false, holdVoiceCleanup = false,
-  portraitMode = 'ready', voiceConfigured = false} = {}) {
+  portraitMode = 'ready', voiceConfigured = false, speechStatus = 200} = {}) {
   const nodes = new Map(), calls = [], timers = new Map(), navigations = [], windowEvents = new Map(), announcements = [];
   const portraits = [];
   let voiceOptions, voiceStarts = 0;
@@ -61,7 +62,7 @@ function harness({threadStatus = 404, oldBrowser = false, search = '', initially
   };
   const session = {id: SESSION, url: 'https://alambda-forge.onrender.com/', title: 'Recovered browser', mode: 'human', epoch: 7};
   const snapshot = (id, status, sessionId = SESSION) => ({
-    thread_id: id, run_id: 'synthetic-run', status, session_id: sessionId,
+    thread_id: id, run_id: RUN, status, session_id: sessionId,
     events: status === 'completed' ? [{sequence: 1, kind: 'completed'}] : [],
     answer: status === 'completed' ? 'Browser status checked.' : '', error: null,
     usage: {input_tokens: 1, output_tokens: 1}, turns: 1, max_turns: 12,
@@ -99,6 +100,10 @@ function harness({threadStatus = 404, oldBrowser = false, search = '', initially
       ? json({}, threadStatus) : json(snapshot(THREAD, threadStatus, oldBrowser ? OLD_SESSION : SESSION));
     if (url === '/api/chat' && options.method === 'POST') return json(snapshot(NEW_THREAD, 'completed'));
     if (url === '/api/chat/' + NEW_THREAD && options.method === 'GET') return json(snapshot(NEW_THREAD, 'completed'));
+    if (url === '/api/chat/' + NEW_THREAD + '/speech' && options.method === 'POST') return speechStatus === 200
+      ? json({thread_id:NEW_THREAD,run_id:RUN,status:'completed',text:'Browser status checked.',
+        segments:[{text:'Browser status checked.',expression:'thoughtful'}],speech_status:'ready'})
+      : json({detail:'Synthetic unavailable annotation'},speechStatus);
     throw new Error('Unexpected simulated request: ' + options.method + ' ' + url);
   };
   class TestURL extends URL {
@@ -110,7 +115,10 @@ function harness({threadStatus = 404, oldBrowser = false, search = '', initially
       REIGNAvatar: portraitMode === 'missing' ? undefined : {createReignAvatar(options) {
         const value = {visibleWhenMounted: !node('console').hidden, speaking: false, level: 0, destroyed: false,
           setSpeaking(active) { this.speaking = active; if (!active) this.level = 0; },
-          setSpeechLevel(level) { this.level = level; }, stop() { this.speaking = false; this.level = 0; },
+          setSpeechLevel(level) { this.level = level; },
+          setPlaybackState(playback) { this.playback=playback; this.speaking=playback.active;
+            this.level=playback.active?playback.level:0; this.expression=playback.active?playback.expression:'neutral'; },
+          stop() { this.speaking = false; this.level = 0; this.expression='neutral'; },
           destroy() { this.stop(); this.destroyed = true; }};
         value.ready = Promise.resolve().then(() => {
           if (!value.destroyed) options.onStatus({state: portraitMode === 'error' ? 'error' : 'ready',
@@ -174,6 +182,43 @@ test('portrait failure or unavailable module does not disable an otherwise avail
     assert.equal(h.node('voiceStart').disabled, false);
     h.node('voiceStart').onclick(); assert.equal(h.voiceStarts, 1);
     if (portraitMode === 'error') assert.match(h.node('portraitStatus').textContent, /face could not load/);
+  }
+});
+
+test('private portrait receives playback clocks and model cues while silent samples keep the active speech gate', async () => {
+  const h = harness({voiceConfigured:true}); await h.ready();
+  const portrait = h.portraits[0];
+  const playback = {active:true,outputActive:true,verified:true,paused:false,muted:false,advancing:true,
+    mediaTime:1.25,cueMs:1000,expression:'warm',expressionSource:'model',segmentIndex:1,segmentCount:2,
+    meterState:'running',meterAvailable:true,outputLevel:.4};
+  h.voiceOptions.onState({active:true,phase:'speaking',muted:false,speakerBlocked:false,status:'Speaking',playback});
+  h.voiceOptions.onOutputLevel(.4,playback);
+  assert.equal(portrait.playback.clockMs,1250); assert.equal(portrait.playback.cueMs,1000);
+  assert.equal(portrait.expression,'warm'); assert.equal(portrait.playback.expressionSource,'response-segment');
+  h.voiceOptions.onOutputLevel(0,{...playback,mediaTime:1.3,outputLevel:0});
+  assert.equal(portrait.speaking,true); assert.equal(portrait.level,0);
+  assert.equal(h.node('voiceDiagnostics').dataset.mediaTime,'1.3');
+  assert.equal(h.node('voiceDiagnostics').dataset.expressionSource,'model');
+  h.voiceOptions.onState({active:true,phase:'speaking',speakerBlocked:false,status:'Playback active',
+    playback:{...playback,meterState:'suspended',meterAvailable:false,needsGesture:true}});
+  assert.equal(h.node('voiceSpeaker').hidden,false);
+  assert.match(h.node('voiceDiagnostics').textContent,/face meter unavailable/);
+  h.voiceOptions.onOutputLevel(0,{...playback,active:false,outputActive:false,expression:'neutral',expressionSource:'neutral'});
+  assert.equal(portrait.speaking,false); assert.equal(portrait.expression,'neutral');
+});
+
+test('private speech requests are bound to the exact graph run and annotation failure preserves its verified answer', async () => {
+  for (const speechStatus of [200,503]) {
+    const h=harness({voiceConfigured:true,speechStatus}); await h.ready();
+    const result=await h.voiceOptions.runTurn('Check the workspace.',{voiceCallId:'synthetic-voice-call',signal:new AbortController().signal});
+    const requests=h.calls.filter(call=>call.path.endsWith('/speech'));
+    assert.equal(requests.length,1);
+    assert.deepEqual(requests[0].body,{run_id:RUN});
+    assert.equal(requests[0].path,'/api/chat/'+NEW_THREAD+'/speech');
+    assert.equal(h.calls.filter(call=>call.path==='/api/chat'&&call.method==='POST').length,1);
+    assert.equal(result.answer,'Browser status checked.');
+    if(speechStatus===200)assert.equal(result.speech.segments[0].expression,'thoughtful');
+    else assert.equal(result.speech,undefined,'optional annotations cannot replace or discard the verified answer');
   }
 });
 

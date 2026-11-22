@@ -20,6 +20,10 @@ from PIL import Image, ImageDraw
 from reign.team_assistant import TeamAssistant
 from reign.team_media import TeamMedia
 from reign.team_store import WORKSPACE_ID, WORKSPACE_NAME
+from reign.speech import ANNOTATION_TIMEOUT, ExpressionPlan, PrivateSpeech
+
+
+EXPRESSION_FIXTURE = "The draft is saved. Please review it before sharing."
 
 
 async def run_acceptance():
@@ -61,8 +65,18 @@ async def run_acceptance():
                 rms = math.sqrt(sum(value * value for value in samples) / len(samples)) / 32768
                 duration = len(samples) / 24000
             if rms < .002 or not .25 < duration < 30: raise ValueError("silent_probe_audio")
+            # Exercise the same no-tool expression model as private narration.
+            # This fixed synthetic answer requires no graph or archive action.
+            receipt["stage"] = "expressions"
+            async with asyncio.timeout(ANNOTATION_TIMEOUT):
+                async with httpx.AsyncClient(trust_env=False, timeout=ANNOTATION_TIMEOUT) as http:
+                    expression_segments = await PrivateSpeech(http).annotate(EXPRESSION_FIXTURE)
+            plan = ExpressionPlan.model_validate({"segments": expression_segments})
+            if " ".join(segment.text for segment in plan.segments) != EXPRESSION_FIXTURE:
+                raise ValueError("invalid_expression_probe")
             receipt.update(status="passed", stage="complete", image_interpreted=True,
                            structured_expression=True, document_draft=True,
+                           private_expression_annotation=True,
                            audio={"duration_seconds": round(duration, 3), "rms_normalized": round(rms, 6)},
                            transcript_matched_sentence=True, archive_writes=0)
     except asyncio.CancelledError:

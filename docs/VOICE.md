@@ -28,6 +28,33 @@ require delegation. The startup connection check follows the same phase rules.
 Spoken narration is model-generated; the on-screen LangGraph result remains the
 authoritative record of actual tool actions.
 
+After a graph run finishes, the private interface can request sentence expression
+cues through owner-only `POST /api/chat/{thread_id}/speech` with exactly
+`{"run_id":"<current graph run UUID>"}`. AX requires its current owner session,
+same-origin CSRF and a second session check after the model call. Core requires
+its service bearer token and resolves the current graph result itself; the
+client cannot supply answer text, a model name or an expression. Nonterminal,
+deleted and superseded runs cannot obtain a plan, including from the cache.
+
+The annotation uses the same configured Responses model and sentence schema as
+team replies: up to four segments of 400 characters, each labeled `neutral`,
+`warm`, `thoughtful` or `concerned`. Its tools are disabled. The server requires
+complete, ordered agreement with the verified answer after whitespace-only
+normalization, preserving words, numbers and punctuation. Failed or paused runs
+use their current failure/status text rather than an earlier successful answer.
+Successful responses contain `thread_id`, `run_id`, `status`, `text`, `segments`
+and `speech_status: "ready"`. Overlong answers or unavailable, invalid or slow
+annotations return `speech_status: "unavailable"`, empty text and no segments;
+the existing verified voice narration remains available with a neutral face.
+
+Expression preparation has a twelve-second model deadline, at most two pending
+requests and 64 process-local plans retained for five minutes. It is separate
+from executing the graph and never retries an action. Private narration binds
+each segment to its own verified audio response; expression changes follow
+playback, not the arrival of model text. The segment schema has no phoneme or
+word timestamps. Output-energy mouth motion is not a claim of phoneme-accurate
+lip synchronization.
+
 Typed and spoken requests share thread ID, browser session, process-local
 checkpoints, trace events, and usage. Requests are serialized to protect the
 graph. The existing twelve-turn conversation limit is exposed explicitly so
@@ -78,6 +105,20 @@ echo cancellation, noise suppression, and automatic gain control. The incoming
 audio track is attached to an inline audio element. If the browser blocks
 playback, Enable speaker retries from a fresh user gesture.
 
+The native audio element is the only audible sink. Its playback recovery starts
+directly from that gesture and never waits for the separate metering context to
+resume. If a verified sentence streamed while native playback was blocked, the
+same gesture can request that sentence again; it does not rerun the graph or any
+workspace action. Waiting/stalled playback and a frozen media clock close the
+mouth instead of allowing the independent analyser to imply audible output.
+
+Private sentence cues begin with verified output energy and use native media
+time. The next segment waits for the matching provider response to finish and
+its audio buffer to stop, then for the observed tail to drain. Without a working
+meter, the conservative fallback requires native player advancement and reports
+that weaker evidence. A mismatched completed sentence transcript stops further
+narration; this check cannot retroactively validate audio already streamed.
+
 Mute disables the actual microphone track. End call stops tracks, closes the
 peer/data channel, aborts negotiation, clears timers, and cancels only the
 unfinished graph work owned by that call. Completed external actions are not
@@ -107,6 +148,11 @@ are diagnostics; none independently proves a physical speaker was audible.
    WebSocket/manual-commit transport is explicitly distinct from browser WebRTC.
    Audio emitted before the graph result fails the gate; that check is retained
    even though delegation now explicitly disables audio output.
+   The existing `python -m reign.team_acceptance` release gate also annotates a
+   fixed synthetic two-sentence answer with the private expression model. It
+   requires exact text coverage and the bounded expression schema within twelve
+   seconds, returning only a sanitized boolean receipt. Failure blocks that
+   gate; no user conversation or archive is read or written by this fixture.
 5. Live UltraView acceptance must verify WebRTC connection, greeting/audio
    delivery, shared text/voice conversation, mute, interruption, and cleanup.
    Android microphone/speaker acceptance is a separate physical-device check.

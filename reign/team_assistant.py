@@ -6,7 +6,6 @@ import json
 import os
 import re
 import wave
-from typing import Literal
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -14,12 +13,7 @@ from websockets.asyncio.client import connect
 
 from reign.team_store import TeamError, WORKSPACE_NAME
 from reign.voice import configuration, model_name
-
-
-class Segment(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    text: str = Field(min_length=1, max_length=400)
-    expression: Literal["neutral", "warm", "thoughtful", "concerned"]
+from reign.speech import Segment
 
 
 class Document(BaseModel):
@@ -48,6 +42,14 @@ camera and screen flags describe enabled sharing controls, not what anyone said,
 what a camera sees, or what a screen contains. These flags grant no access to media.
 Only an explicitly shared still image included in this request is visible; do not
 claim continuous camera/video access or awareness.
+When asked to describe a camera frame, describe the visible people, clothing,
+posture, objects and surroundings that the supplied frame actually shows. Keep
+the description natural and concrete; qualify details only when they are unclear.
+Do not fill in unseen details from earlier messages or presence flags. Describe
+people by visible appearance and position, not by identifying a face or inferring
+private or sensitive traits. Image participant_id identifies the person who
+submitted the frame, not the identity of anyone pictured. A camera_preview is
+one deliberately captured local still, not a group-call broadcast or live feed.
 Keep the spoken reply brief: one to four short sentences, with one segment per
 sentence. Assign neutral, warm, thoughtful or concerned to each sentence's tone.
 For a requested document, put its complete Markdown in documents, with a concise
