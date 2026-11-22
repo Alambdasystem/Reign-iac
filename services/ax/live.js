@@ -345,7 +345,7 @@ async function signedIn(profile){
   if(!profile?.authenticated||!['owner','avatar','employee'].includes(profile.role))throw Error('Your account could not be verified. Reload and sign in again.');
   accountRole=profile.role;logoutFailed=false;
   consoleGranted=accountRole==='employee'&&profile.landing_path==='/'&&profile.capabilities?.ai_chat===true;
-  browserAllowed=accountRole==='owner'&&profile.capabilities?.managed_browser===true;
+  browserAllowed=accountRole==='owner';
   // Unprivileged employees stay in Team. A server-verified grant permits the
   // console but never changes their account into the owner identity.
   const destination=accountRole==='avatar'?'/avatar-lab':accountRole==='employee'&&!consoleGranted?'/team':avatarReturnPath(window.location?.search||'');
