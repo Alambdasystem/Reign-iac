@@ -66,17 +66,20 @@ def check_daemon(instance, first_start):
         time.sleep(0.1)
     else:
         raise SmokeError("real userspace daemon did not become ready offline")
-    if first_start:
-        flags = ["--" + name + "=" + (str(value).lower() if isinstance(value, bool) else value)
-                 for name, value in PREFERENCES.items()]
-        if command([*cli, "set", *flags], environment).returncode:
-            raise SmokeError("real CLI rejected outbound-only client preferences")
+    # Production reapplies this policy on every start. An unauthenticated profile
+    # does not establish enrolled-identity or preference persistence.
+    flags = ["--" + name + "=" + (str(value).lower() if isinstance(value, bool) else value)
+             for name, value in PREFERENCES.items()]
+    if command([*cli, "set", *flags], environment).returncode:
+        raise SmokeError("real CLI rejected outbound-only client preferences")
     result = command([*cli, "get", "--json"], environment)
     if result.returncode:
         raise SmokeError("real CLI could not read client preferences")
     preferences = json.loads(result.stdout)
-    if any(preferences.get(name) != value for name, value in PREFERENCES.items()):
-        raise SmokeError("client preferences did not persist across daemon startup")
+    mismatches = [name for name, value in PREFERENCES.items() if preferences.get(name) != value]
+    if mismatches:
+        raise SmokeError("client policy differs at startup " + ("1" if first_start else "2")
+                         + ": " + ",".join(mismatches))
     result = command([*cli, "status", "--json", "--peers=false"], environment)
     if result.returncode:
         raise SmokeError("real LocalAPI stopped responding after preference check")

@@ -98,9 +98,9 @@ CI, logs, release artifacts or a URL.
 4. Run the repository's required validation. The container check reproduces
    setgid inheritance with primary UID/GID 10001 and supplementary group 1000.
    It starts the actual pinned daemon twice with Docker networking disabled,
-   checks private log placement and retained CLI preferences, and never enrolls
-   a device. The release workflow repeats this check on the exact image it
-   publishes. These checks do not establish internet reachability,
+   checks private log placement and reapplies/verifies the safe CLI preferences
+   on each start, and never enrolls a device. The release workflow repeats this
+   check on the exact image it publishes. These checks do not establish internet reachability,
    authentication, retained node identity or backend SSH.
 5. Publish the tested Core image through the existing release workflow. Promote
    its immutable digest through the existing Blueprint
@@ -121,8 +121,8 @@ Run diagnostics as the `reign` account (or an authorized root administrator)
 in the deployed Core container. The private socket is not reachable from other
 Render services or from this coding workspace.
 Storage-validator diagnostics must run as the dedicated service account. A
-temporary Render Docker command must explicitly invoke `python -m
-reign.core_entrypoint` before its diagnostic command; the live custom-command
+temporary Render Docker command must explicitly invoke
+`python -m reign.core_entrypoint` before its diagnostic command; the live custom-command
 path bypassed the image entrypoint. Remove the override when promoting the
 repaired image so normal startup uses its image entrypoint and CMD.
 
