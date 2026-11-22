@@ -570,8 +570,3 @@ export function createCallspaceWorkspace(deps = {}) {
   updateComposerForLayout();
   return controller;
 }
-
-if (typeof document !== 'undefined') {
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => createCallspaceWorkspace(), { once: true });
-  else createCallspaceWorkspace();
-}
