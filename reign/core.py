@@ -1,5 +1,6 @@
 """Private REIGN Core gateway for Temporal workflows and Computer sessions."""
 import os
+import asyncio
 import secrets
 import uuid
 from typing import Literal
@@ -72,6 +73,10 @@ async def lifespan(app: FastAPI):
             team.assistant = TeamAssistant(app.state.http, team_media, browser=team_browser)
             team.features.update(speech=True, vision=True, transcription=True, camera_to_ai=True,
                                  screen_to_ai=True, voice_output=True, live_voice=True)
+    # Optional diagnostic uses the already-running private Tailscale socket.
+    # It never changes the active LangGraph, team, speech or voice providers.
+    from reign.ollama_tailnet_probe import schedule_startup_probe
+    ollama_probe_task = schedule_startup_probe()
     try:
         async with WorkspaceMCP().connect() as connection:
             app.state.agent = AgentRuntime(adapter=MCPTools(connection), archive=archive)
@@ -102,6 +107,9 @@ async def lifespan(app: FastAPI):
                     await team_media.aclose()
                 await app.state.agent.shutdown()
     finally:
+        if ollama_probe_task is not None:
+            ollama_probe_task.cancel()
+            await asyncio.gather(ollama_probe_task, return_exceptions=True)
         await app.state.http.aclose()
 
 
