@@ -347,3 +347,40 @@ body.callspace-ready {
 @media (prefers-reduced-motion: reduce) {
   .callspace-ready *, .callspace-ready *::before, .callspace-ready *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
 }
+
+/* Existing participant <video> nodes become the group stage; no duplicate MediaStreams. */
+.callspace-ready #callParticipants .media-tile { cursor: pointer; transition: box-shadow .18s ease, transform .18s ease; }
+.callspace-ready #callParticipants .media-tile:focus-visible { outline: 3px solid #7390a5; outline-offset: 2px; }
+.callspace-shell[data-group-view="true"] .callspace-face {
+  left: 3% !important; right: auto !important; top: max(92px, calc(env(safe-area-inset-top) + 82px)) !important;
+  width: 30% !important; height: min(51vh, 470px) !important; border-radius: 25px !important;
+}
+.callspace-shell[data-group-view="true"] #callParticipants {
+  position: absolute; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  left: 35% !important; right: 3% !important; top: max(92px, calc(env(safe-area-inset-top) + 82px)) !important;
+  width: 62% !important; max-height: min(51vh,470px) !important; gap: 9px; overflow: auto;
+}
+.callspace-shell[data-group-view="true"] #callParticipants .media-tile {
+  min-width: 0; width: 100%; max-width: none; border-radius: 22px; overflow: hidden;
+}
+.callspace-shell[data-group-view="true"] #callParticipants .media-tile video {
+  width: 100%; height: min(34vh,360px); object-fit: cover;
+}
+.callspace-shell[data-group-view="true"] .reign-name {bottom: 16px;left: 16px;font-size:14px}
+.callspace-shell[data-group-view="true"] #callParticipants .media-tile[data-featured="true"] {
+  position:fixed; inset: 0; width:100%;height:100%; z-index: 12; border-radius:0; max-width:none;
+}
+.callspace-shell[data-group-view="true"] #callParticipants .media-tile[data-featured="true"] video { height:100%; }
+.callspace-shell[data-group-view="true"]:has(.media-tile[data-featured="true"]) .callspace-dock,
+.callspace-shell[data-group-view="true"]:has(.media-tile[data-featured="true"]) .callspace-topbar { z-index: 20; }
+@media(max-width:600px) {
+ .callspace-shell[data-group-view="true"] .callspace-face {
+    top: max(90px,calc(env(safe-area-inset-top) + 80px)) !important;
+    left: 3% !important;width: 30% !important;height: 28vh !important;
+ }
+ .callspace-shell[data-group-view="true"] #callParticipants {
+    top: max(90px,calc(env(safe-area-inset-top) + 80px)) !important;
+    left:35% !important;right:3% !important;width:62% !important;max-height:40vh !important;
+ }
+ .callspace-shell[data-group-view="true"] #callParticipants .media-tile video {height: 23vh;}
+}

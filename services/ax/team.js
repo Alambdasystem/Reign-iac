@@ -29,7 +29,8 @@ export function createTeamWorkspace(deps = {}) {
     audioEnabled: false, avatarState: 'loading', avatarMessage: '', logoutFailed: false,
     dictation: 'idle', dictationGeneration: 0, dictationAbort: null,
     liveVoice: {active: false, phase: 'idle', muted: false, uncertain: false},
-    camera: {phase: 'idle', active: false}, cameraBusy: false, cameraRevision: 0, cameraAbort: null};
+    camera: {phase: 'idle', active: false}, cameraBusy: false, cameraRevision: 0, cameraAbort: null,
+    includeCameraInAsk: false, visionCaptureBusy: false};
   const callMe = {};
   let call, layout = null;
   call = (deps.createCall || createTeamCall)({api: request, me: callMe, onState: renderCall,
@@ -459,11 +460,40 @@ export function createTeamWorkspace(deps = {}) {
   async function sendMessage(askReign = false, retry = false, prepared = null) {
     if (!usable()) return;
     const roomId = state.roomId, generation = state.roomGeneration;
+    if (state.visionCaptureBusy) return;
     let pending = outgoing.get(roomId);
     if (pending && !retry) { notice('messageStatus', 'Confirm the previous send with Retry before sending another message.', true); return; }
     if (!pending && prepared) { pending = prepared; outgoing.set(roomId, pending); }
     if (!pending) {
       const text = $('messageInput').value.trim(); if (!text) return;
+      // This is one explicitly opted-in frame per Ask, never an unattended camera feed.
+      // The existing room-bound attachment endpoint validates camera ownership.
+      if (askReign && state.includeCameraInAsk && state.call.active && state.call.camera
+          && state.streams.local.camera && !state.attachments.length) {
+        state.visionCaptureBusy = true;
+        const visionRoom = roomId, visionGeneration = generation;
+        try {
+          notice('messageStatus', 'Capturing your shared camera for this question…');
+          const frame = await call.captureFrame({connectionId: state.call.connectionId, source:'camera'});
+          if (!usable() || state.roomId !== visionRoom || state.roomGeneration !== visionGeneration
+              || !state.includeCameraInAsk || !state.call.camera || $('messageInput').value.trim() !== text) return;
+          const data_url = await blobDataUrl(frame.blob);
+          if (!usable() || state.roomId !== visionRoom || state.roomGeneration !== visionGeneration
+              || !state.includeCameraInAsk || !state.call.camera) return;
+          const uploaded = await request(roomPath(visionRoom) + '/attachments', 'POST', {
+            data_url, source:'camera', connection_id: state.call.connectionId, captured_at: frame.capturedAt
+          });
+          if (!usable() || state.roomId !== visionRoom || state.roomGeneration !== visionGeneration
+              || !state.includeCameraInAsk || $('messageInput').value.trim() !== text) return;
+          if (!uploaded.attachment?.id) throw Error('Camera frame was not confirmed.');
+          state.attachments.push(uploaded.attachment); renderAttachments();
+        } catch (error) {
+          notice('messageStatus', 'The camera frame could not be shared. Your question is kept. ' + (error.message || ''), true);
+          return; // Fail closed: don't silently send a question without the selected frame.
+        } finally {
+          state.visionCaptureBusy = false;
+        }
+      }
       if (state.attachments.length && !askReign) { notice('messageStatus', 'Choose Ask REIGN to send this question with the images you selected, or remove the images to send a room message.', true); return; }
       if (text.length > 4000 || new TextEncoder().encode(text).length > 16384) { notice('messageStatus', 'This message is too long. Split it into smaller messages before sending.', true); return; }
       pending = {phase: 'sending', payload: {client_message_id: uuid(), text, ask_reign: !!askReign,
@@ -913,6 +943,7 @@ export function createTeamWorkspace(deps = {}) {
     const roomId = state.roomId, connectionId = state.connectionId;
     state.connectionId = null;
     releasePresence(roomId, connectionId);
+    state.includeCameraInAsk = false; state.visionCaptureBusy = false;
     clearCapture(); stopCamera(); clearCredential(); cancelDictation(); sharedBrowser.setRoom(null);
     for (const id of ['shareDialog', 'cameraDialog', 'credentialDialog', 'membersDialog']) closeDialog(id);
     // Media shutdown is immediate. Its best-effort presence DELETE must never
@@ -1035,6 +1066,9 @@ export function createTeamWorkspace(deps = {}) {
   listen($('closeShare'), 'click', () => closeDialog('shareDialog'));
   listen($('shareDialog'), 'close', clearCapture);
   listen(win, 'beforeunload', event => { if (!state.closed && !state.loggingOut && [...drafts.values()].some(draft => draft.dirty)) { event.preventDefault(); event.returnValue = ''; } });
+  listen(win, 'reign:team-vision-consent', event => {
+    state.includeCameraInAsk = event.detail?.enabled === true;
+  });
   listen(win, 'storage', event => { if (event.key === 'reign:ax:signed-out' && event.newValue) { destroy(); win.location.replace('/?next=%2Fteam'); } });
   // A page restored from the back/forward cache has deliberately disposed all
   // media and leases. Re-enter through authenticated boot, never auto-rejoin.

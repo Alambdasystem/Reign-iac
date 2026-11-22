@@ -485,3 +485,54 @@ test('existing group camera stills send an ISO capture timestamp through the sam
   assert.equal(h.camera.started, 0, 'shared-call capture does not start a second camera');
   h.app.destroy();
 });
+
+test('opt-in camera Ask attaches one authorized local frame and retains the draft until the send is accepted', async () => {
+  const h = harness({handle: (request, {response}) => {
+    if (request.url.endsWith('/attachments')) return response({attachment: {id:'consented-frame',source:'camera'}});
+    if (request.url.endsWith('/messages')) return response({event:event(1,request.body.text,{data:request.body})});
+  }});
+  await h.app.start();
+  h.callOptions.onState({active:true, phase:'active',camera:true,connectionId:'call-owned'});
+  h.callOptions.onStreams({local:{camera:{}},remote:[]});
+  h.win.emit('reign:team-vision-consent',{detail:{enabled:true}});
+  h.input('messageInput','Explain what you can see alongside my proposal.');
+  h.submit('chatForm','askReign');
+  await until(() => h.requests.some(request=>request.url.endsWith('/messages')));
+  const attachment=h.requests.find(request=>request.url.endsWith('/attachments'));
+  const sent=h.requests.find(request=>request.url.endsWith('/messages'));
+  assert.equal(attachment.body.source,'camera');
+  assert.equal(attachment.body.connection_id,'call-owned');
+  assert.deepEqual(sent.body.attachment_ids,['consented-frame']);
+  assert.equal(sent.body.ask_reign,true);
+  h.app.destroy();
+});
+
+test('without camera consent Ask sends text only and never captures or uploads video', async () => {
+  const h=harness({handle:(request,{response})=>request.url.endsWith('/messages')?
+    response({event:event(1,request.body.text,{data:request.body})}):undefined});
+  await h.app.start();
+  h.callOptions.onState({active:true,phase:'active',camera:true,connectionId:'call-owned'});
+  h.callOptions.onStreams({local:{camera:{}},remote:[]});
+  h.input('messageInput','Normal request');
+  h.submit('chatForm','askReign');
+  await until(()=>h.requests.some(request=>request.url.endsWith('/messages')));
+  assert.equal(h.requests.filter(request=>request.url.endsWith('/attachments')).length,0);
+  assert.deepEqual(h.requests.find(request=>request.url.endsWith('/messages')).body.attachment_ids,[]);
+  h.app.destroy();
+});
+
+test('camera capture refusal never silently sends the Ask without its selected frame', async () => {
+  const h=harness({handle:(request,{response})=>request.url.endsWith('/attachments')?
+    response({detail:'No camera authorization'},403):undefined});
+  await h.app.start();
+  h.callOptions.onState({active:true,phase:'active',camera:true,connectionId:'call-owned'});
+  h.callOptions.onStreams({local:{camera:{}},remote:[]});
+  h.win.emit('reign:team-vision-consent',{detail:{enabled:true}});
+  h.input('messageInput','Keep this question.');
+  h.submit('chatForm','askReign');
+  await until(()=>h.requests.some(request=>request.url.endsWith('/attachments')));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(h.requests.filter(request=>request.url.endsWith('/messages')).length,0);
+  assert.equal(h.node('messageInput').value,'Keep this question.');
+  h.app.destroy();
+});

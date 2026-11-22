@@ -224,6 +224,69 @@ export function createCallspaceWorkspace(deps = {}) {
 
   // The optional live camera retains the same video and MediaStream when views change.
   move($('liveCameraView'), roomView);
+  // Existing WebRTC participant tiles retain their video elements and streams.
+  const participantRail = $('callParticipants');
+  if (participantRail) {
+    participantRail.setAttribute('aria-label', 'People in this call. Select a video to feature it.');
+    participantRail.dataset.groupReady = 'true';
+  }
+  let groupView = false;
+  let featuredTile = null;
+  const groupButton = textButton('callspaceModeGroup', 'Everyone', () => {
+    groupView = true; featuredTile = null; setMode('call'); updateGroupStage();
+    closePanel();
+  });
+  groupButton.setAttribute('aria-pressed', 'false');
+  modeControls.append(groupButton);
+  const groupHint = element('p', 'callspace-panel-note', '', 'Human camera tiles use the existing room call. Camera sharing and REIGN vision remain opt-in.');
+  viewSettings.append(groupHint);
+  const visionToggle = element('button', 'callspace-text-button', 'callspaceVisionToggle', 'Include my camera with my next Ask REIGN: off');
+  visionToggle.type = 'button';
+  visionToggle.setAttribute('aria-pressed', 'false');
+  visionToggle.setAttribute('aria-label', 'Include one frame from my shared camera when I next ask REIGN');
+  panels.settings.body.append(visionToggle);
+  listen(visionToggle, 'click', () => {
+    const enabled = visionToggle.getAttribute('aria-pressed') !== 'true';
+    visionToggle.setAttribute('aria-pressed', String(enabled));
+    visionToggle.textContent = `Include my camera with my next Ask REIGN: ${enabled ? 'on' : 'off'}`;
+    win.dispatchEvent(new CustomEvent('reign:team-vision-consent', {detail:{enabled}}));
+  });
+  function updateGroupStage() {
+    const active = groupView && mode === 'call';
+    shell.dataset.groupView = String(active);
+    shell.dataset.featured = active && featuredTile?.isConnected ? 'human' : '';
+    groupButton.setAttribute('aria-pressed', String(active && !featuredTile));
+    if (participantRail) {
+      for (const tile of participantRail.querySelectorAll('.media-tile')) {
+        const selected = active && featuredTile === tile;
+        tile.dataset.featured = String(selected);
+        tile.setAttribute('aria-pressed', String(selected));
+        const caption = tile.querySelector('figcaption')?.innerText?.trim() || 'Participant';
+        tile.setAttribute('aria-label', `Feature ${caption}`);
+        tile.setAttribute('role', 'button');
+        tile.tabIndex = 0;
+      }
+    }
+  }
+  if (participantRail) {
+    const selectParticipant = event => {
+      const tile = event.target.closest?.('.media-tile');
+      if (!tile || !participantRail.contains(tile) || event.target.closest('button')) return;
+      featuredTile = featuredTile === tile ? null : tile;
+      groupView = true; setMode('call'); updateGroupStage();
+    };
+    listen(participantRail, 'click', selectParticipant);
+    listen(participantRail, 'keydown', event => {
+      if (!['Enter',' '].includes(event.key) || !event.target.classList.contains('media-tile')) return;
+      event.preventDefault(); selectParticipant(event);
+    });
+  }
+  const groupObserver = (deps.MutationObserver || win.MutationObserver) && participantRail
+    ? new (deps.MutationObserver || win.MutationObserver)(() => {
+        if (featuredTile && !featuredTile.isConnected) featuredTile = null;
+        updateGroupStage();
+      }) : null;
+  groupObserver?.observe(participantRail, {childList:true,subtree:false});
   move(doc.querySelector('.dictation-tools'), panels.actions.body);
   move(doc.querySelector('.share-actions'), panels.actions.body);
   const actionNav = element('div', 'callspace-action-links');
@@ -337,6 +400,8 @@ export function createCallspaceWorkspace(deps = {}) {
     if (previousMode === 'call' && mode !== 'call') {
       savedFeedScroll = null;
     }
+    if (mode !== 'call') { groupView = false; featuredTile = null; }
+    updateGroupStage();
     renderGeometry();
     if (mode !== 'call' && feed && Number.isFinite(retainedScroll)) {
       feed.scrollTop = retainedScroll;
@@ -535,6 +600,8 @@ export function createCallspaceWorkspace(deps = {}) {
   function destroy() {
     if (destroyed) return;
     closePanel(false);
+    groupObserver?.disconnect();
+    win.dispatchEvent(new CustomEvent('reign:team-vision-consent', {detail:{enabled:false}}));
     if (drag) releaseDrag(true);
     destroyed = true;
     observer?.disconnect();
