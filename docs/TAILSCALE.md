@@ -8,12 +8,15 @@ has a dedicated 1 GB disk at `/var/data/reign-vault`. This integration adds no
 Render service, disk or compute-plan upgrade. It does add runtime CPU/memory
 usage, which must be measured during rollout on the existing 512 MB instance.
 
-The code remains **disabled by default**. The Blueprint temporarily keeps the
-client disabled while a runtime-directory repair passes release and promotion
-checks. It uses a diagnostic command that explicitly invokes the nonroot Core
-entrypoint. [TAILSCALE_PROMOTION_RECEIPT.md](TAILSCALE_PROMOTION_RECEIPT.md) records
-the earlier prepared rollout checkpoint. Enrollment, backend SSH and retained
-identity after restart still need live verification. Keep Blueprint auto-sync off.
+The code remains **disabled by default**. The Blueprint now pins the repaired
+Core image from [tested release 44984079753](https://github.com/Alambdasystem/Reign-iac/actions/runs/44984079753)
+(source `294087d5f006f410b3e8928a7d37f2849e92511d`) and prepares the requested
+enrollment with the normal image entrypoint and CMD. **Manual Blueprint apply,
+live enrollment, backend SSH and retained identity after restart are pending at
+this promotion checkpoint.** Keep Blueprint auto-sync off.
+[TAILSCALE_PROMOTION_RECEIPT.md](TAILSCALE_PROMOTION_RECEIPT.md) remains the
+historical checkpoint for the earlier image. The current promotion's PR records
+the repair release artifact, digest and validation evidence.
 
 Core is an outbound Tailscale client. It runs neither an SSH server nor a subnet
 router, exit node or publicly reachable proxy. This does not add model-call
