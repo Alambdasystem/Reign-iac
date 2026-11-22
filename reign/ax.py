@@ -1029,7 +1029,7 @@ async def avatar_scope(request: Request, call_next):
         if session is not None and session.identity.role != "owner":
             path = request.url.path
             # Public assets and ordinary page redirects must not hit Core.
-            sensitive = path in {"/", "/genesis", "/guardrails", "/nodes", "/api/me"} or path == "/api" or path.startswith("/api/")
+            sensitive = path in {"/", "/genesis", "/guardrails", "/nodes", "/connect/openstl", "/api/me"} or path == "/api" or path.startswith("/api/")
             if not sensitive:
                 return await call_next(request)
             team_allowed = (session.identity.role == "employee"

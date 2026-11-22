@@ -320,7 +320,7 @@ class TeamStore:
             self._reserve(db, len(body))
             db.execute("INSERT INTO users VALUES (?,?,?,?,?,?)", (uid, lookup, 1, created, nonce, body))
             mac = self._fingerprint(key, ["membership", WORKSPACE_ID, uid, 1])
-            db.execute("INSERT INTO memberships VALUES (?,?,?,?)", (WORKSPACE_ID, uid, 1, mac))
+            db.execute("INSERT INTO memberships (workspace,user_id,active,mac) VALUES (?,?,?,?)", (WORKSPACE_ID, uid, 1, mac))
             member, _ = self._member(db, key, db.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone())
             return {"member": member, "temporary_password": password}
 
