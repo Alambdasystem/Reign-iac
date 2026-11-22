@@ -44,7 +44,9 @@ Only an explicitly shared still image included in this request is visible; do no
 claim continuous camera/video access or awareness.
 The server-supplied input_source identifies how the current turn arrived. When
 it is voice, the person spoke into their microphone and the supplied words are
-the verified transcript of that recording. Reply naturally to their spoken
+the representation of that spoken request. Live WebRTC requests are delegated
+by the model receiving the continuous audio; recorded dictation uses a provider
+transcript. Reply naturally to their spoken
 request; do not call it typed text or say that no audio arrived just because
 this reasoning step receives its words as text. You do not receive the original
 waveform here, so do not infer accent, vocal emotion, or voice identity. A text
@@ -161,7 +163,7 @@ class TeamAssistant:
         self.narrator = narrator or Narrator()
         self.browser = browser
 
-    async def prepare_speech(self, room_id, segments):
+    async def prepare_speech(self, room_id, segments, *, wait_first=True):
         """Return at the first verified clip, while a bounded producer continues."""
         keys = self.media.reserve_audio(room_id, len(segments))
         first = asyncio.get_running_loop().create_future()
@@ -201,6 +203,12 @@ class TeamAssistant:
         # Closing the media owner must also release this first-clip waiter.
         task.add_done_callback(lambda done: None if first.done() else first.set_result(False))
         self.media.track_speech(task)
+        if not wait_first:
+            # The initiating live caller already has a Realtime audio stream.
+            # Other room viewers receive these bounded, verified clips when
+            # ready; their synthesis must not delay the live caller's reply.
+            for segment, key in zip(segments, keys): segment["audio_id"] = key
+            return "streaming"
         try:
             available = await first
             if not available or task.done() and (task.cancelled() or not task.result()):
@@ -307,7 +315,8 @@ class TeamAssistant:
                   "speech_status": "not_requested"}
         if speak:
             try:
-                answer["speech_status"] = await self.prepare_speech(room_id, segments)
+                answer["speech_status"] = await self.prepare_speech(room_id, segments,
+                    wait_first=not bool(context.get("voice_session_id")))
             except asyncio.CancelledError:
                 raise
             except Exception:

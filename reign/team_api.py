@@ -79,6 +79,8 @@ class TeamRuntime:
         self.store, self.assistant = store, assistant
         self.attachment_validator = None
         self.transcription_validator = None
+        self.live_voice_validator = None
+        self.voice_sessions = None
         self.clock = clock or time.time
         self.features = {"group_chat": True, "documents": True, "calls": True,
                          "shared_browser": False, "remote_desktop": False,
@@ -192,6 +194,8 @@ class TeamRuntime:
         if connection_id in self.tombstones or len(self.tombstones) < MAX_TOMBSTONES:
             self.tombstones[connection_id] = {"room_id": room_id, "user_id": actor["id"], "expires": self.clock() + 60}
         self.signals = [signal for signal in self.signals if connection_id not in (signal["from"], signal["to"])]
+        if self.voice_sessions is not None:
+            await self.voice_sessions.close_connection(actor, room_id, connection_id)
         return {"presence": self.presence_rows(room_id)}
 
     def _connection(self, actor, room_id, connection_id):
@@ -253,7 +257,7 @@ class TeamRuntime:
 
     @staticmethod
     def message_data(data):
-        fields(data, {"client_message_id", "text", "ask_reign", "speak", "attachment_ids", "input_source", "transcription_id"}, {"client_message_id", "text"})
+        fields(data, {"client_message_id", "text", "ask_reign", "speak", "attachment_ids", "input_source", "transcription_id", "voice_session_id"}, {"client_message_id", "text"})
         result = {"client_message_id": identifier(data["client_message_id"]), "text": text(data["text"], 4000, bytes_max=16000),
                   "ask_reign": boolean(data.get("ask_reign", False)), "speak": boolean(data.get("speak", False)),
                   "attachment_ids": data.get("attachment_ids", [])}
@@ -265,8 +269,11 @@ class TeamRuntime:
         if not isinstance(source, str) or source not in {"text", "voice"}:
             raise TeamError("invalid_team_request")
         if source == "voice":
-            result.update(input_source="voice", transcription_id=identifier(data.get("transcription_id")))
-        elif "transcription_id" in data:
+            if ("transcription_id" in data) == ("voice_session_id" in data):
+                raise TeamError("invalid_team_request")
+            origin = "voice_session_id" if "voice_session_id" in data else "transcription_id"
+            result.update(input_source="voice", **{origin: identifier(data[origin])})
+        elif "transcription_id" in data or "voice_session_id" in data:
             raise TeamError("invalid_team_request")
         return result
 
@@ -289,12 +296,16 @@ class TeamRuntime:
             if self.closed: raise TeamError("team_unavailable")
             found = await asyncio.to_thread(self.store.message_receipt, actor, room_id, data)
             if found: return {key: found[key] for key in ("event", "run_id")}
-            # A durable retry is resolved before checking an expired ephemeral
-            # recording receipt. New voice-labelled messages must still match
-            # this actor's actual provider transcript in this room exactly.
+            # A durable retry is resolved before checking expired media/call
+            # state. New recorded messages require an exact provider transcript;
+            # live requests require this actor's active room-bound voice lease.
             if data.get("input_source") == "voice":
-                if self.transcription_validator is None: raise TeamError("assistant_unavailable")
-                self.transcription_validator(actor, room_id, data["transcription_id"], data["text"])
+                if "voice_session_id" in data:
+                    if self.live_voice_validator is None: raise TeamError("assistant_unavailable")
+                    self.live_voice_validator(actor, room_id, data["voice_session_id"])
+                else:
+                    if self.transcription_validator is None: raise TeamError("assistant_unavailable")
+                    self.transcription_validator(actor, room_id, data["transcription_id"], data["text"])
             if data["attachment_ids"]:
                 if self.attachment_validator is None: raise TeamError("assistant_unavailable")
                 await self.attachment_validator(actor, room_id, data["attachment_ids"])
@@ -305,7 +316,8 @@ class TeamRuntime:
             receipt = await asyncio.to_thread(self.store.append_message, actor, room_id, data)
             if receipt["run_id"] and not receipt["duplicate"]:
                 task = asyncio.create_task(self._run(actor, room_id, receipt["run_id"], data))
-                self.active[room_id] = {"task": task, "actor": actor["id"], "run_id": receipt["run_id"]}
+                self.active[room_id] = {"task": task, "actor": actor["id"], "run_id": receipt["run_id"],
+                                        "voice_session_id": data.get("voice_session_id")}
             return {key: receipt[key] for key in ("event", "run_id")}
 
     @staticmethod
@@ -344,8 +356,11 @@ class TeamRuntime:
             async with asyncio.timeout(ASSISTANT_TIMEOUT):
                 context["current_participants"] = await self.assistant_participants(actor, room_id)
                 context["input_source"] = data.get("input_source", "text")
+                if data.get("voice_session_id"): context["voice_session_id"] = data["voice_session_id"]
                 result = await self.assistant(context, actor, data["text"], data["attachment_ids"], data["speak"])
-            await asyncio.to_thread(self.store.finish_run, actor, room_id, run_id, self.assistant_result(result))
+            result = self.assistant_result(result)
+            if data.get("voice_session_id"): result["voice_session_id"] = data["voice_session_id"]
+            await asyncio.to_thread(self.store.finish_run, actor, room_id, run_id, result)
         except asyncio.CancelledError:
             with suppress(Exception): await asyncio.to_thread(self.store.fail_run, room_id, run_id, "assistant_interrupted" if self.closed else "assistant_failed")
         except Exception:
@@ -355,6 +370,7 @@ class TeamRuntime:
 
     def revoke_member(self, user_id):
         self.revoked_members.add(user_id)
+        if self.voice_sessions is not None: self.voice_sessions.revoke_member(user_id)
         removed = {cid for cid, row in self.presence.items() if row["user_id"] == user_id}
         self.presence = {cid: row for cid, row in self.presence.items() if cid not in removed}
         self.signals = [row for row in self.signals if row["from"] not in removed and row["to"] not in removed]

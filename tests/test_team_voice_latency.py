@@ -162,6 +162,23 @@ class ProgressiveSpeechTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.media.allocated_bytes(), 2 * len(clip()))
         self.assertEqual([part["expression"] for part in answer["segments"]], ["warm", "thoughtful"])
 
+    async def test_live_voice_returns_verified_text_before_other_viewer_audio_is_ready(self):
+        self.narrator.first_gate.clear()
+        self.context["voice_session_id"] = str(uuid.uuid4())
+        answer = await self.reply()
+        self.assertEqual(answer["speech_status"], "streaming")
+        self.assertEqual(answer["text"], "I heard your question. Let's work on it together.")
+        keys = [part["audio_id"] for part in answer["segments"]]
+        self.assertEqual(len(keys), 2)
+        self.assertEqual(self.media.allocated_bytes(), 2 * MAX_AUDIO_BYTES)
+        waiting = asyncio.create_task(self.media.audio_bytes(keys[0], self.room))
+        await asyncio.sleep(0)
+        self.assertFalse(waiting.done())
+        self.narrator.first_gate.set()
+        self.assertEqual(await asyncio.wait_for(waiting, 1), clip())
+        self.narrator.next_gate.set()
+        await self.narrator.closed.wait()
+
     async def test_later_failure_is_explicit_and_preserves_only_verified_audio(self):
         answer = await self.reply()
         first, second = [part["audio_id"] for part in answer["segments"]]

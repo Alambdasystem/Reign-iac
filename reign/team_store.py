@@ -49,6 +49,8 @@ ERRORS = {
     "assistant_busy": (409, "REIGN is already working in this room. Wait for its reply."),
     "team_call_full": (409, "This room already has four call connections."),
     "team_connection_required": (403, "Join the room call before using this connection."),
+    "team_voice_closed": (410, "Live voice is no longer connected. Turn the microphone on to reconnect."),
+    "team_voice_closing": (409, "Your previous voice connection is still closing. Try Microphone on again in a moment."),
     "team_browser_conflict": (409, "The room browser changed. Refresh the room before trying again."),
     "team_limit": (429, "A workspace limit was reached. Try again later or contact the owner."),
     "assistant_unavailable": (503, "The room assistant is not available."),
@@ -572,7 +574,7 @@ class TeamStore:
             if row is None or row[0] != "running": raise TeamError("team_not_found")
             assistant = {"id": "reign", "display_name": "REIGN"}
             data = {"run_id": run_id, "text": result["text"]}
-            for field in ("segments", "audio_id", "speech_status"):
+            for field in ("segments", "audio_id", "speech_status", "voice_session_id"):
                 if field in result: data[field] = result[field]
             documents = []
             for document in result.get("documents", []):

@@ -28,7 +28,7 @@ EXPRESSION_FIXTURE = "The draft is saved. Please review it before sharing."
 
 async def run_acceptance():
     receipt = {"verification": "reign_team_provider", "status": "failed",
-               "input": "synthetic_image_and_text", "physical_device": "not_run",
+               "input": "synthetic_image_text_and_spoken_request_metadata", "physical_device": "not_run",
                "stage": "model"}
     cache = TeamMedia()
     try:
@@ -65,6 +65,17 @@ async def run_acceptance():
                 rms = math.sqrt(sum(value * value for value in samples) / len(samples)) / 32768
                 duration = len(samples) / 24000
             if rms < .002 or not .25 < duration < 30: raise ValueError("silent_probe_audio")
+            # Verify the room model preserves the voice origin independently
+            # of the transport's transcription. This sends metadata and a
+            # synthetic question, not microphone samples or an archived turn.
+            receipt["stage"] = "voice_provenance"
+            spoken_context = {**context, "input_source": "voice", "run_id": str(uuid.uuid4())}
+            async with httpx.AsyncClient(trust_env=False, timeout=45) as http:
+                spoken = await TeamAssistant(http, cache)(spoken_context, actor,
+                    "Was this current request spoken or typed? Answer with only the single word Spoken or Typed and no documents. Use the current request's input source; do not infer anything about a voice or person.",
+                    [], False)
+            if spoken["text"].strip().rstrip(".!?").lower() != "spoken" or spoken.get("documents"):
+                raise ValueError("invalid_voice_provenance")
             # Exercise the same no-tool expression model as private narration.
             # This fixed synthetic answer requires no graph or archive action.
             receipt["stage"] = "expressions"
@@ -77,6 +88,7 @@ async def run_acceptance():
             receipt.update(status="passed", stage="complete", image_interpreted=True,
                            structured_expression=True, document_draft=True,
                            private_expression_annotation=True,
+                           spoken_input_provenance=True,
                            audio={"duration_seconds": round(duration, 3), "rms_normalized": round(rms, 6)},
                            transcript_matched_sentence=True, archive_writes=0)
     except asyncio.CancelledError:

@@ -3,6 +3,7 @@ import { createTeamAvatar } from '/assets/team-avatar.js';
 import { createTeamRecorder } from '/assets/team-recorder.js';
 import { createTeamBrowser } from '/assets/team-browser.js';
 import { createTeamCamera } from '/assets/team-camera.js';
+import { createTeamVoice } from '/assets/team-voice.js';
 
 // The shared workspace uses only room-scoped endpoints. Owner tools and private
 // browser/conversation recovery intentionally have no dependency in this page.
@@ -25,7 +26,8 @@ export function createTeamWorkspace(deps = {}) {
     call: {active: false, phase: 'idle', microphone: false, camera: false, screen: false},
     streams: {local: {}, remote: []}, attachments: [], capture: null, captureUrl: null, captureRevision: 0,
     audioEnabled: false, avatarState: 'loading', avatarMessage: '', logoutFailed: false,
-    dictation: 'idle', dictationGeneration: 0, dictationAbort: null, talkToReign: false,
+    dictation: 'idle', dictationGeneration: 0, dictationAbort: null,
+    liveVoice: {active: false, phase: 'idle', muted: false, uncertain: false},
     camera: {phase: 'idle', active: false}, cameraBusy: false, cameraRevision: 0, cameraAbort: null};
   const callMe = {};
   let call;
@@ -43,6 +45,41 @@ export function createTeamWorkspace(deps = {}) {
   const recorder = (deps.createRecorder || createTeamRecorder)({onState: value => {
     state.dictation = value.state; notice('dictationStatus', value.message || '', value.state === 'error'); refreshControls();
   }});
+  const liveVoice = (deps.createLiveVoice || createTeamVoice)({api: request, audio: $('reignLiveAudio'), uuid, timers: clock,
+    onState(value) {
+      const wasActive = state.liveVoice.active; state.liveVoice = value;
+      if (!value.active && wasActive) avatar.endLivePlayback?.();
+      notice('liveVoiceStatus', value.status || 'Microphone off. Turn it on to talk naturally with REIGN.', value.phase === 'failed');
+      $('liveVoiceDiagnostics').dataset.phase = value.phase || 'idle';
+      $('liveVoiceDiagnostics').dataset.active = String(!!value.active);
+      $('liveVoiceDiagnostics').dataset.muted = String(!!value.muted);
+      $('liveVoiceDiagnostics').dataset.sessionId = value.voiceSessionId || '';
+      renderAssistant();
+    },
+    onAccepted(result) {
+      if (!usable()) return;
+      if (result.event) applyEvents([result.event], true);
+      if (result.run_id) renderAssistant({status: 'running', run_id: result.run_id});
+    },
+    onCaption(value) {
+      const caption = $('liveVoiceCaption');
+      if (value.final || caption.dataset.role !== value.role) { caption.dataset.role = value.role; caption.dataset.text = value.text || ''; }
+      else caption.dataset.text = (caption.dataset.text || '') + (value.text || '');
+      caption.dataset.text = caption.dataset.text.slice(-8000);
+      caption.textContent = (value.role === 'user' ? 'You said: ' : 'REIGN: ') + caption.dataset.text;
+      caption.hidden = !caption.dataset.text;
+    },
+    onLevel(level) { $('liveVoiceLevel').value = Math.max(0, Math.min(1, level || 0)); },
+    onUserSpeechStart() { avatar.startLivePlayback?.(); },
+    onOutputLevel(level, playback) {
+      const active = usable() && playback?.active === true;
+      avatar.setLivePlayback?.({active, level: active ? level : 0,
+        expression: active && playback.expressionSource === 'model' ? playback.expression : 'neutral',
+        expressionSource: active && playback.expressionSource === 'model' ? 'response-segment' : 'neutral',
+        clockMs: (playback?.mediaTime || 0) * 1000, cueMs: playback?.cueMs || 0,
+        segment: active ? playback.segmentIndex || 0 : 0,
+        audioState: playback?.meterState || 'unavailable'});
+    }});
   const sharedBrowser = (deps.createBrowser || createTeamBrowser)({api: request, document: doc, window: win, timers: clock});
   const camera = (deps.createCamera || createTeamCamera)({video: $('cameraPreview'), document: doc,
     onState: value => {
@@ -114,9 +151,9 @@ export function createTeamWorkspace(deps = {}) {
   function refreshControls() {
     const available = usable(), pending = outgoing.get(state.roomId);
     $('newRoomButton').disabled = !state.profile || state.accessLost || state.loggingOut || state.logoutFailed;
-    $('messageInput').disabled = !available || pending?.phase === 'sending' || state.talkToReign;
-    $('sendMessage').disabled = !available || !!pending || state.talkToReign || state.cameraBusy;
-    $('askReign').disabled = !available || !!pending || state.talkToReign || state.cameraBusy || state.capabilities.assistant === false || state.assistant.status === 'running';
+    $('messageInput').disabled = !available || pending?.phase === 'sending';
+    $('sendMessage').disabled = !available || !!pending || state.cameraBusy;
+    $('askReign').disabled = !available || !!pending || state.cameraBusy || state.liveVoice.delegating || state.capabilities.assistant === false || state.assistant.status === 'running';
     $('retryMessage').hidden = !pending || pending.phase !== 'uncertain';
     $('retryMessage').disabled = !available;
     $('speakReply').disabled = !available || state.capabilities.speech !== true;
@@ -134,9 +171,18 @@ export function createTeamWorkspace(deps = {}) {
     $('shareWithReign').disabled = !available || !!pending || state.capabilities.vision !== true || !state.call.active || (!state.call.camera && !state.call.screen);
     const recording = ['requesting', 'recording', 'processing', 'transcribing'].includes(state.dictation);
     $('dictateMessage').hidden = recording;
-    $('dictateMessage').disabled = !available || !!pending || state.capabilities.transcription !== true;
-    $('talkToReign').hidden = recording;
-    $('talkToReign').disabled = !available || !!pending || state.capabilities.transcription !== true || state.capabilities.assistant !== true || state.capabilities.speech !== true || state.assistant.status === 'running';
+    const voiceActive = state.liveVoice.active, voiceEnding = state.liveVoice.phase === 'ending';
+    $('dictateMessage').disabled = !available || !!pending || state.capabilities.transcription !== true || voiceActive || voiceEnding;
+    $('talkToReign').hidden = voiceActive || voiceEnding;
+    $('talkToReign').disabled = !available || !!pending || recording || voiceEnding || state.capabilities.live_voice !== true;
+    $('muteReignMic').hidden = !voiceActive;
+    $('muteReignMic').disabled = !voiceActive || ['checking', 'microphone'].includes(state.liveVoice.phase);
+    $('muteReignMic').textContent = state.liveVoice.muted ? 'Unmute mic' : 'Mute mic';
+    $('muteReignMic').setAttribute('aria-pressed', String(!!state.liveVoice.muted));
+    $('stopReignMic').hidden = !voiceActive && !voiceEnding; $('stopReignMic').disabled = voiceEnding;
+    $('enableVoiceSpeaker').hidden = !voiceActive || !(state.liveVoice.speakerBlocked || state.liveVoice.playback?.needsGesture || state.liveVoice.playback?.retryAvailable);
+    $('retryVoiceTurn').hidden = !state.liveVoice.uncertain;
+    $('liveVoiceLevel').hidden = !voiceActive;
     $('stopDictation').hidden = !['requesting', 'recording'].includes(state.dictation);
     $('cancelDictation').hidden = !recording;
     $('openCamera').disabled = !available;
@@ -209,8 +255,9 @@ export function createTeamWorkspace(deps = {}) {
     if (value && typeof value === 'object') state.assistant = value;
     const phase = state.assistant.status || 'idle'; $('reignCard').dataset.state = phase;
     const available = state.capabilities.assistant !== false;
-    $('assistantStatus').textContent = state.avatarState === 'speaking' ? 'Speaking with your team' : state.avatarState === 'buffering' ? 'Preparing REIGN’s voice' : !available ? 'REIGN is unavailable' : phase === 'running' ? 'Thinking with your team' : phase === 'failed' ? 'REIGN needs a retry' : 'Ready for this room';
-    $('assistantDetail').textContent = ['speaking', 'buffering', 'paused', 'error'].includes(state.avatarState) && state.avatarMessage ? state.avatarMessage : !available ? 'The assistant connection isn’t configured. Your room conversation and documents still work.' : phase === 'running' ? 'Working from this room’s discussion and explicitly shared views.' : phase === 'failed' ? (state.assistant.error || 'The last response could not finish. You can ask again explicitly.') : 'Ask a question, shape an idea, or bring the discussion together.';
+    const live = state.liveVoice;
+    $('assistantStatus').textContent = state.avatarState === 'speaking' ? 'Speaking with your team' : state.avatarState === 'buffering' ? 'Preparing REIGN’s voice' : live.active ? live.muted ? 'Microphone muted' : live.phase === 'listening' ? 'Listening to you' : live.phase === 'thinking' ? 'Thinking with your team' : 'Connecting live voice' : !available ? 'REIGN is unavailable' : phase === 'running' ? 'Thinking with your team' : phase === 'failed' ? 'REIGN needs a retry' : 'Ready for this room';
+    $('assistantDetail').textContent = ['speaking', 'buffering', 'paused', 'error'].includes(state.avatarState) && state.avatarMessage ? state.avatarMessage : live.active ? live.status || 'Your microphone stays connected until you mute it or turn it off.' : !available ? 'The assistant connection isn’t configured. Your room conversation and documents still work.' : phase === 'running' ? 'Working from this room’s discussion and explicitly shared views.' : phase === 'failed' ? (state.assistant.error || 'The last response could not finish. You can ask again explicitly.') : 'Ask a question, shape an idea, or bring the discussion together.';
     refreshControls();
   }
   function renderEvents(forceBottom = false) {
@@ -230,7 +277,9 @@ export function createTeamWorkspace(deps = {}) {
         if (!assistant && data.input_source === 'voice') meta.append(element('span', 'voice-message-label', 'Spoken message'));
         const text = typeof data.text === 'string' ? data.text : Array.isArray(data.segments) ? data.segments.map(segment => segment.text || '').join('\n') : '';
         content.append(meta, element('div', 'message-content', text));
-        if (assistant && data.speech_status === 'unavailable') content.append(element('p', 'subtle-note', 'The written reply is saved. Voice audio is unavailable for this reply.'));
+        if (assistant && data.speech_status === 'unavailable') content.append(element('p', 'subtle-note', data.voice_session_id
+          ? 'The written reply is saved. Shared audio playback is unavailable for this reply.'
+          : 'The written reply is saved. Voice audio is unavailable for this reply.'));
         if (Array.isArray(data.attachment_ids) && data.attachment_ids.length) content.append(element('p', 'subtle-note', `${data.attachment_ids.length} explicitly shared image${data.attachment_ids.length === 1 ? '' : 's'}`));
         row.append(element('span', 'initials', assistant ? 'R' : initials(event.display_name)), content); feed.append(row);
       } else if (event.type === 'assistant_started') feed.append(element('p', 'room-event', 'REIGN was asked to join the discussion.'));
@@ -248,10 +297,12 @@ export function createTeamWorkspace(deps = {}) {
       state.seq = Math.max(state.seq, event.seq);
       if (state.events.has(event.seq)) continue;
       state.events.set(event.seq, event); changed = true;
+      liveVoice.acceptEvents(state.roomId, [event]);
       const pending = outgoing.get(state.roomId);
       if (event.type === 'message' && pending && event.data?.client_message_id === pending.payload.client_message_id) finishMessage(state.roomId, pending);
       if (live && event.type === 'assistant_message') {
-        if (!['requesting', 'recording'].includes(state.dictation)) void Promise.resolve(avatar.play(state.roomId, event)).catch(error => notice('callStatus', error.message, true));
+        if (liveVoice.suppressPlayback(state.roomId, event)) { /* This tab hears the one native Realtime response. */ }
+        else if (!['requesting', 'recording'].includes(state.dictation)) void Promise.resolve(avatar.play(state.roomId, event)).catch(error => notice('callStatus', error.message, true));
         else notice('callStatus', 'REIGN’s written reply arrived. Its audio stayed off while your microphone was recording.');
         win.dispatchEvent(new CustomEvent('reign:team-assistant', {detail: {roomId: state.roomId, event}}));
       }
@@ -302,6 +353,7 @@ export function createTeamWorkspace(deps = {}) {
     if (state.closed || state.accessLost || state.loggingOut || state.logoutFailed || (!force && roomId === state.roomId)) return;
     if (!state.rooms.some(room => room.id === roomId)) return;
     rememberComposer(); clearCapture(); closeDialog('shareDialog'); stopCamera(); closeDialog('cameraDialog'); cancelDictation(); sharedBrowser.setRoom(null);
+    void liveVoice.stop({reason: 'Microphone off. You changed rooms.'});
     avatar.stop();
     const previousRoom = state.roomId, previousConnection = state.connectionId;
     const generation = ++state.roomGeneration; state.editorGeneration++;
@@ -363,7 +415,9 @@ export function createTeamWorkspace(deps = {}) {
     const abort = new AbortController(); state.pollAbort = abort;
     let delay = 120;
     try {
-      const result = await request(roomPath(roomId) + '/events?after=' + state.seq + '&wait=20', 'GET', undefined,
+      // Presence may change between successive polls, before the server takes
+      // its next wait baseline. Bound that idle refresh independently of chat.
+      const result = await request(roomPath(roomId) + '/events?after=' + state.seq + '&wait=5', 'GET', undefined,
         {signal: abort.signal, timeout: 28000});
       if (state.closed || state.accessLost || generation !== state.roomGeneration) return;
       applyEvents(result.events, true); applyPresence(result.presence || []); renderAssistant(result.assistant);
@@ -809,24 +863,21 @@ export function createTeamWorkspace(deps = {}) {
 
   function cancelDictation() {
     ++state.dictationGeneration; state.dictationAbort?.abort(); state.dictationAbort = null;
-    recorder.cancel(); state.dictation = 'idle'; state.talkToReign = false;
+    recorder.cancel(); state.dictation = 'idle';
     $('dictationTranscript').value = ''; $('dictationTranscript').hidden = true;
     notice('dictationStatus'); refreshControls();
   }
-  async function dictateMessage(talk = false) {
-    if (!usable() || state.capabilities.transcription !== true || outgoing.has(state.roomId)) return;
-    if (talk && (state.capabilities.assistant !== true || state.capabilities.speech !== true || state.assistant.status === 'running')) return;
-    if (talk && ($('messageInput').value.trim() || state.attachments.length)) { notice('dictationStatus', 'Send or clear your current draft before talking to REIGN. Your draft is kept.', true); return; }
+  async function dictateMessage() {
+    if (!usable() || state.capabilities.transcription !== true || outgoing.has(state.roomId) || state.liveVoice.active || state.liveVoice.phase === 'ending') return;
     if (['requesting', 'recording', 'processing', 'transcribing'].includes(state.dictation)) return;
     const roomId = state.roomId, generation = ++state.dictationGeneration;
     const abort = new AbortController(); state.dictationAbort = abort;
     let recording = null;
-    state.talkToReign = talk;
     $('dictationTranscript').value = ''; $('dictationTranscript').hidden = true;
     try {
       avatar.stop(); // Stop speaker output before opening this microphone capture.
       // start() requests the user's own microphone directly from this gesture.
-      recording = await recorder.start({stream: state.streams.local.microphone, autoStop: talk});
+      recording = await recorder.start({stream: state.streams.local.microphone, autoStop: false});
       if (generation !== state.dictationGeneration || roomId !== state.roomId || !usable()) return;
       state.dictation = 'transcribing'; notice('dictationStatus', 'Understanding your spoken words…'); refreshControls();
       const result = await request(roomPath(roomId) + '/transcriptions', 'POST', recording, {timeout: 30000, signal: abort.signal});
@@ -834,7 +885,6 @@ export function createTeamWorkspace(deps = {}) {
       if (generation !== state.dictationGeneration || roomId !== state.roomId || !usable()) return;
       if (typeof result.text !== 'string' || !result.text.trim()) throw Error('No speech was found. Try again or type your message.');
       const existing = $('messageInput').value;
-      if (talk && existing.trim()) throw Error('A typed draft appeared while recording. It was kept; no voice turn was sent.');
       const combined = (existing ? existing + '\n' : '') + result.text.trim();
       if (combined.length > 4000 || new TextEncoder().encode(combined).length > 16384) {
         // Keep all of the transcript available without replacing the existing
@@ -843,30 +893,22 @@ export function createTeamWorkspace(deps = {}) {
         notice('dictationStatus', 'The transcript is too long to add to this draft. Copy it below and send it in smaller parts.', true);
       } else {
         $('messageInput').value = combined; rememberComposer();
-        if (talk) {
-          $('speakReply').checked = true;
-          if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(result.transcription_id || '')) {
-            throw Error('Your words were transcribed, but the voice turn could not be verified. Your transcript is kept above for review.');
-          }
-          notice('dictationStatus', 'Sending your spoken question to REIGN…');
-          await sendMessage(true, false, {phase: 'sending', origin: 'voice', payload: {
-            client_message_id: uuid(), text: result.text.trim(), ask_reign: true, speak: true, attachment_ids: [],
-            input_source: 'voice', transcription_id: result.transcription_id}});
-          if (generation === state.dictationGeneration) notice('dictationStatus', outgoing.has(roomId) ? 'Your spoken question needs confirmation. Retry this message to confirm the same turn.' : $('messageInput').value ? 'Your spoken question wasn’t accepted. Review the message above before trying again.' : 'Your spoken question was sent. REIGN’s reply will appear in this room.');
-        } else { notice('dictationStatus', 'Transcript added. Review it, then choose Send or Ask REIGN.'); $('messageInput').focus(); }
+        notice('dictationStatus', 'Transcript added. Review it, then choose Send or Ask REIGN.'); $('messageInput').focus();
       }
     } catch (error) {
       if (generation === state.dictationGeneration && error.name !== 'AbortError') notice('dictationStatus', error.message || 'Transcription failed. Your message draft is kept.', true);
     } finally {
       if (recording) recording.audio_base64 = '';
       if (state.dictationAbort === abort) state.dictationAbort = null;
-      if (generation === state.dictationGeneration) { state.dictation = 'idle'; state.talkToReign = false; refreshControls(); }
+      if (generation === state.dictationGeneration) { state.dictation = 'idle'; refreshControls(); }
     }
   }
 
   function stopSession(reason) {
     ++state.roomGeneration; ++state.editorGeneration;
     stopRoomPolling();
+    try { void liveVoice.stop({reason}).catch(() => {}); } catch {}
+    $('liveVoiceCaption').textContent = ''; $('liveVoiceCaption').dataset.text = ''; $('liveVoiceCaption').hidden = true;
     const roomId = state.roomId, connectionId = state.connectionId;
     state.connectionId = null;
     releasePresence(roomId, connectionId);
@@ -917,6 +959,7 @@ export function createTeamWorkspace(deps = {}) {
     try { Promise.resolve(call.dispose?.()).catch(() => {}); } catch {}
     try { avatar.destroy(); } catch {}
     try { recorder.dispose(); } catch {}
+    try { void Promise.resolve(liveVoice.dispose()).catch(() => {}); } catch {}
     try { sharedBrowser.dispose(); } catch {}
     try { camera.dispose(); } catch {}
     for (const remove of listeners.splice(0)) remove();
@@ -939,7 +982,15 @@ export function createTeamWorkspace(deps = {}) {
     if ($('speakReply').checked && usable() && state.capabilities.speech === true) void enableReignAudio();
   });
   listen($('dictateMessage'), 'click', () => void dictateMessage());
-  listen($('talkToReign'), 'click', () => { void enableReignAudio(); void dictateMessage(true); });
+  listen($('talkToReign'), 'click', () => {
+    if (!usable() || state.capabilities.live_voice !== true || state.liveVoice.active || ['requesting', 'recording', 'processing', 'transcribing'].includes(state.dictation)) return;
+    avatar.startLivePlayback?.(); $('liveVoiceCaption').hidden = true; $('liveVoiceCaption').dataset.text = '';
+    void liveVoice.start({roomId: state.roomId, connectionId: state.connectionId});
+  });
+  listen($('muteReignMic'), 'click', () => liveVoice.mute());
+  listen($('stopReignMic'), 'click', () => void liveVoice.stop({reason: 'Microphone off. Your room conversation is saved.'}));
+  listen($('enableVoiceSpeaker'), 'click', () => void liveVoice.enableSpeaker());
+  listen($('retryVoiceTurn'), 'click', () => void liveVoice.retry());
   listen($('stopDictation'), 'click', () => { void recorder.stop().catch(() => {}); });
   listen($('cancelDictation'), 'click', cancelDictation);
   listen($('retryMessage'), 'click', () => {
@@ -968,7 +1019,7 @@ export function createTeamWorkspace(deps = {}) {
   listen($('toggleMicrophone'), 'click', () => mediaAction(() => call.setMicrophone(!state.call.microphone)));
   listen($('toggleCamera'), 'click', () => mediaAction(() => call.setCamera(!state.call.camera)));
   listen($('toggleScreen'), 'click', () => mediaAction(() => call.setScreen(!state.call.screen)));
-  listen($('listenReign'), 'click', () => void enableReignAudio());
+  listen($('listenReign'), 'click', () => { void enableReignAudio(); if (state.liveVoice.active) void liveVoice.enableSpeaker(); });
   listen($('openCamera'), 'click', openCamera);
   listen($('restartCamera'), 'click', () => { if (usable() && $('cameraDialog').open) void camera.start(); });
   listen($('describeCamera'), 'click', () => void describeCamera());

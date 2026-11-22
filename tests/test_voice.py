@@ -11,7 +11,7 @@ import httpx
 from fastapi.testclient import TestClient
 
 from reign.voice import (DEFAULT_MODEL, MAX_OFFERS_PER_MINUTE, MAX_REQUEST_BYTES,
-                         MAX_SDP_BYTES, VoiceBroker, VoiceError, capabilities)
+                         MAX_SDP_BYTES, VoiceBroker, VoiceError, capabilities, voice_error_response)
 
 SDP = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
 KEY = "unit-test-provider-key-never-live"
@@ -20,6 +20,88 @@ SETTINGS = {"OPENAI_API_KEY": KEY, "OPENAI_BASE_URL": "https://voice.example.tes
 
 
 class BrokerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_team_scope_uses_room_delegation_and_keeps_call_id_internal(self):
+        async def provider(request):
+            raw = await request.aread()
+            mime = BytesParser(policy=policy.default).parsebytes(
+                ("Content-Type: " + request.headers["content-type"] + "\r\n\r\n").encode() + raw)
+            fields = {part.get_param("name", header="content-disposition"): part.get_payload(decode=True)
+                      for part in mime.iter_parts()}
+            session = json.loads(fields["session"])
+            self.assertIn("authorized shared Workspace room assistant", session["instructions"])
+            self.assertIn("continuous microphone", session["instructions"])
+            self.assertEqual(session["output_modalities"], ["text"])
+            self.assertEqual(session["tool_choice"], {"type":"function", "name":"delegate_to_reign"})
+            self.assertTrue(session["audio"]["input"]["turn_detection"]["create_response"])
+            self.assertTrue(session["audio"]["input"]["turn_detection"]["interrupt_response"])
+            return httpx.Response(201, text=SDP, headers={"location":"/v1/realtime/calls/rtc_test-room-123"})
+        with patch.dict(os.environ, SETTINGS):
+            async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http:
+                result=await VoiceBroker(http).offer(SDP,scope="team",include_call_id=True)
+        self.assertEqual(result["max_duration_seconds"],3600)
+        self.assertEqual(result["call_id"],"rtc_test-room-123")
+        self.assertNotIn(KEY,json.dumps(result))
+
+    async def test_team_offer_requires_an_exact_same_host_call_location(self):
+        for location in (None,"https://other-provider.test/v1/realtime/calls/rtc_test", "/v1/realtime/calls/../secret",
+                         "/v1/realtime/calls/rtc_test?secret=value", "/v1/realtime/calls/rtc_test/hangup",
+                         "/v1/realtime/calls/rtc%2Ftest", "//voice.example.test/v1/realtime/calls/rtc_test"):
+            with self.subTest(location=location),patch.dict(os.environ,SETTINGS):
+                calls=[]
+                def provider(request):
+                    calls.append(str(request.url))
+                    return httpx.Response(201,text=SDP,headers={"location":location} if location else {})
+                async with httpx.AsyncClient(transport=httpx.MockTransport(provider),follow_redirects=True) as http:
+                    with self.assertRaises(VoiceError) as caught:
+                        await VoiceBroker(http).offer(SDP,scope="team",include_call_id=True)
+                self.assertEqual(caught.exception.code,"voice_invalid_answer")
+                self.assertEqual(calls,["https://voice.example.test/v1/realtime/calls"])
+
+    async def test_hangup_is_bounded_idempotent_and_never_follows_a_provider_redirect(self):
+        for status in (200,204,404,410,307,401,429):
+            calls=[]
+            def provider(request):
+                calls.append(str(request.url))
+                self.assertEqual(request.method,"POST")
+                self.assertEqual(request.headers["authorization"],"Bearer "+KEY)
+                self.assertEqual(request.extensions["timeout"]["read"],8)
+                return httpx.Response(status,text="private upstream data "+KEY,headers={"location":"https://other-provider.test/steal"})
+            with self.subTest(status=status),patch.dict(os.environ,SETTINGS):
+                async with httpx.AsyncClient(transport=httpx.MockTransport(provider),follow_redirects=True) as http:
+                    if status in (200,204,404,410): self.assertTrue(await VoiceBroker(http).hangup("rtc_test"))
+                    else:
+                        with self.assertRaises(VoiceError) as caught: await VoiceBroker(http).hangup("rtc_test")
+                        self.assertNotIn(KEY,str(caught.exception));self.assertNotIn("private upstream data",str(caught.exception))
+                self.assertEqual(calls,["https://voice.example.test/v1/realtime/calls/rtc_test/hangup"])
+
+    async def test_invalid_sdp_after_provider_call_creation_is_hung_up(self):
+        calls=[]
+        def provider(request):
+            calls.append(str(request.url))
+            if request.url.path.endswith("/hangup"): return httpx.Response(200)
+            return httpx.Response(201,text="invalid SDP",headers={"location":"https://voice.example.test/v1/realtime/calls/rtc_cleanup"})
+        with patch.dict(os.environ,SETTINGS):
+            async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http:
+                with self.assertRaises(VoiceError) as caught:
+                    await VoiceBroker(http).offer(SDP,scope="team",include_call_id=True)
+        self.assertEqual(caught.exception.code,"voice_invalid_answer")
+        self.assertEqual(calls,["https://voice.example.test/v1/realtime/calls","https://voice.example.test/v1/realtime/calls/rtc_cleanup/hangup"])
+
+    async def test_failed_orphan_cleanup_preserves_private_call_id_without_exposing_it_in_error_response(self):
+        def provider(request):
+            if request.url.path.endswith("/hangup"): return httpx.Response(503,text="private upstream body "+KEY)
+            return httpx.Response(201,text="invalid SDP",headers={"location":"/v1/realtime/calls/rtc_retained_cleanup"})
+        with patch.dict(os.environ,SETTINGS):
+            async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http:
+                with self.assertRaises(VoiceError) as caught:
+                    await VoiceBroker(http).offer(SDP,scope="team",include_call_id=True)
+        self.assertEqual(caught.exception.code,"voice_invalid_answer")
+        self.assertEqual(caught.exception.provider_call_id,"rtc_retained_cleanup")
+        response=await voice_error_response(None,caught.exception)
+        self.assertNotIn(b"rtc_retained_cleanup",response.body)
+        self.assertNotIn(KEY.encode(),response.body)
+        self.assertNotIn(b"private upstream body",response.body)
+
     def test_capabilities_are_safe_and_unconfigured_without_key(self):
         with patch.dict(os.environ, {**SETTINGS, "OPENAI_API_KEY": ""}):
             result = capabilities()

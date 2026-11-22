@@ -121,7 +121,7 @@ function harness(t, options = {}) {
   const clock = fakeClock(), microphone = track(), microphoneStream = stream(microphone);
   const peers = [], apiCalls = [], turnCalls = [], cancelled = [], states = [], captions = [], levels = [], outputLevels = [], outputStates = [];
   const audio = new FakeAudio(clock);
-  let microphoneRequests = 0;
+  let microphoneRequests = 0, speechStarts = 0;
   class FakePeer extends Events {
     constructor() {
       super(); this.connectionState = 'new'; this.iceConnectionState = 'new';
@@ -140,6 +140,8 @@ function harness(t, options = {}) {
   }
   const config = {configured: true, model: 'test-realtime-model', voice: 'marin', max_duration_seconds: 900};
   const controller = createVoiceController({
+    connectionCheck: options.connectionCheck,
+    onUserSpeechStart: () => { speechStarts++; options.onUserSpeechStart?.(); },
     api: async (path, method = 'GET', body, extra = {}) => {
       apiCalls.push({path, method, body, signal: extra.signal});
       if (options.api) return options.api(path, method, body, extra);
@@ -173,6 +175,7 @@ function harness(t, options = {}) {
     controller, microphone, microphoneStream, peers, audio, apiCalls, turnCalls,
     cancelled, states, captions, clock, levels, outputLevels, outputStates,
     get microphoneRequests() { return microphoneRequests; },
+    get speechStarts() { return speechStarts; },
     get peer() { return peers.at(-1); },
     get channel() { return peers.at(-1)?.channel; },
     async connect() {
@@ -183,8 +186,10 @@ function harness(t, options = {}) {
       h.channel.readyState = 'open'; h.channel.emit('open');
       h.channel.receive({type: 'session.created', session: {id: 'test-session'}});
       await pending;
-      h.channel.receive({type: 'response.created', response: {id: 'setup-response'}});
-      h.channel.receive({type: 'response.done', response: {id: 'setup-response', status: 'completed', output: []}});
+      if(options.connectionCheck!==false){
+        h.channel.receive({type: 'response.created', response: {id: 'setup-response'}});
+        h.channel.receive({type: 'response.done', response: {id: 'setup-response', status: 'completed', output: []}});
+      }
       await settle();
       return h;
     },
@@ -220,6 +225,44 @@ test('connects microphone and negotiates audio without exposing provider credent
   const offer = h.apiCalls.find(call => call.path === '/api/voice/offer');
   assert.deepEqual(Object.keys(offer.body), ['sdp']);
   assert.ok(offer.signal instanceof AbortSignal);
+});
+
+test('continuous room mode skips the generated greeting and keeps one microphone stream across speech turns', async t => {
+  const h=await harness(t,{connectionCheck:false,config:{max_duration_seconds:3600}}).connect();
+  assert.equal(h.channel.sent.some(event=>event.type==='conversation.item.create'||event.type==='response.create'),false);
+  assert.equal(h.controller.snapshot().phase,'listening');
+  h.clock.advance(21000);await settle();
+  assert.equal(h.controller.snapshot().active,true,'there is no 20-second recording limit');
+  assert.equal(h.microphone.stops,0);assert.equal(h.microphoneRequests,1);
+  h.channel.receive({type:'input_audio_buffer.speech_started'});
+  h.channel.receive({type:'input_audio_buffer.speech_stopped'});
+  h.functionCall('continuous-first','First spoken question.');
+  await eventually(()=>h.turnCalls.length===1&&narrations(h).length===1);
+  const first=narrations(h)[0];
+  h.channel.receive({type:'response.created',response:{id:'continuous-narration',metadata:first.response.metadata}});
+  h.channel.receive({type:'input_audio_buffer.speech_started'});
+  assert.equal(h.speechStarts,2,'real provider speech-start also stops any competing shared-room playback');
+  assert.equal(h.audio.muted,true,'barge-in immediately closes REIGN output');
+  h.channel.receive({type:'response.done',response:{id:'continuous-narration',status:'cancelled',output:[]}});
+  h.channel.receive({type:'input_audio_buffer.speech_stopped'});
+  h.functionCall('continuous-second','Second spoken question.');
+  await eventually(()=>h.turnCalls.length===2);
+  assert.equal(h.microphoneRequests,1);assert.equal(h.peers.length,1);
+  assert.equal(h.peer.tracks[0].track,h.microphone);
+  assert.equal(h.microphone.enabled,true);assert.equal(h.microphone.stops,0);
+  assert.equal(h.turnCalls.every(item=>item.context.connectionCheck===false),true);
+});
+
+test('capability call duration honors the shared one-hour limit and reports its actual expiration', async t => {
+  for(const configured of [3600,7200]){
+    const h=await harness(t,{connectionCheck:false,config:{max_duration_seconds:configured}}).connect();
+    const duration=[...h.clock.scheduled.values()].find(item=>!item.repeat&&item.delay===3600000);
+    assert.ok(duration,'shared continuous voice must not inherit the private 15-minute timer');
+    await duration.fn();
+    assert.equal(h.controller.snapshot().active,false);
+    assert.match(h.controller.snapshot().status,/60-minute voice session ended/);
+    assert.equal(h.microphone.stops,1);
+  }
 });
 
 test('the connection greeting must finish the REIGN graph before requesting speech', async t => {

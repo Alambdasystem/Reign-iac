@@ -1,6 +1,6 @@
 # REIGN live voice
 
-## Application flow
+## Private workspace flow
 
 UltraView keeps its existing design and adds Start voice, microphone mute,
 End call, speaker-unlock recovery, and live captions. A call uses browser WebRTC
@@ -80,6 +80,58 @@ the UI can start a new conversation without retrying an action ambiguously.
 Human takeover still pauses browser actions until control is returned and the
 user resumes the run.
 
+## Continuous shared Workspace voice
+
+In `/team`, **Talk with REIGN → Microphone on** starts a persistent WebRTC
+microphone connection to the Realtime model. Audio streams while the microphone
+track is enabled, across pauses and successive turns. Server VAD identifies
+speech boundaries and interruptions; it does not end or reacquire the input
+track after each sentence. **Mute mic** disables that track while preserving
+the connection, and **Microphone off** stops capture and closes the owned call.
+This live path has no 20-second recording or utterance timer.
+
+The shared adapter reuses the private voice controller with
+`connectionCheck: false`, so it listens immediately without submitting a
+generated greeting. Each provider request still requires `delegate_to_reign`.
+The adapter routes that request to the authenticated room assistant, preserving
+its member, room, viewer connection, and stable message ID. Private owner-chat
+routes are not used. The room's saved answer and expression segments return
+through the existing room event stream before verified Realtime narration
+begins. Text passed to the room model is the representation of a spoken request;
+it does not itself prove waveform contents or grant additional tool authority.
+
+The same native output clock and output-only meter synchronize REIGN's face.
+Real provider speech-start clears current narration and calls
+`onUserSpeechStart()` so the room can also stop separate cached-clip playback.
+The microphone remains connected during this interruption. The initiating
+caller suppresses duplicate cached playback for its own voice session; other
+room viewers may receive independently verified sentence clips as they become
+available. Later requests remain serialized with the room's actual work.
+
+Room endpoints are `GET /api/team/rooms/{room_id}/voice`, `POST .../voice/offer`,
+`POST .../voice/sessions/{session_id}/turns`, and
+`DELETE .../voice/sessions/{session_id}`. Core validates the actor and room before
+negotiation and again after the provider response. Its provider call ID stays
+inside Core; the browser receives a separate room session ID. The broker
+accepts only the configured provider's exact call resource from `Location` and
+constructs hangup requests from the validated opaque ID. Failed cleanup keeps
+that ID in internal exception metadata for the owning room service to retain
+capacity and retry; it never enters public error bodies.
+
+One active shared call per member and four total calls are allowed. Presence
+expiry, room leave, revocation, explicit Off and shutdown close the owned
+provider call. An Off request can retire a session before its in-flight offer
+finishes; a late provider result is closed rather than reviving capture. Missing
+or uncertain task receipts require an explicit retry with the same message ID.
+
+Shared sessions use the provider's documented **60-minute maximum**. The
+controller honors the server capability up to 3600 seconds and reports the
+actual expired duration; reconnecting requires another Microphone on action.
+The existing private workspace default remains 900 seconds. These are whole
+connection limits, not per-utterance recording windows. See the official
+[Realtime session lifecycle](https://developers.openai.com/api/docs/guides/realtime-conversations)
+and [WebRTC hangup API](https://developers.openai.com/api/reference/resources/realtime/subresources/calls/methods/hangup).
+
 ## Configuration and endpoints
 
 No new service or permanent credential is needed. Core already inherits the
@@ -93,7 +145,8 @@ Workmates `OPENAI_API_KEY` through the existing Render service reference.
 | `REALTIME_TRANSCRIPTION_MODEL` | `gpt-4o-mini-transcribe`, configurable for provider compatibility |
 | Output voice | `marin` |
 | Server VAD | 450 ms silence, 300 ms pre-roll; interrupts output on new speech |
-| Call duration | Fifteen minutes, enforced by the browser lifecycle |
+| Private call duration | 900 seconds, enforced by the browser lifecycle |
+| Shared call duration | Up to 3600 seconds; explicit reconnect after expiry |
 | Offer limits | 64 KiB SDP; 96 KiB JSON body; two pending offers; six starts per minute |
 
 `GET /api/me` advertises implementation support. Authenticated `GET /api/voice`

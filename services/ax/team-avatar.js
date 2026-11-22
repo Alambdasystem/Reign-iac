@@ -35,12 +35,14 @@ export function createTeamAvatar({canvas, api, onStatus = () => {}}) {
   let ready = false, dead = false, unlocked = false, revision = 0, pending = null;
   let audioContext = null, source = null, clip = null, finishAudio = null, drainTimer = null, playbackTimer = null, requestAbort = null;
   let speaking = false, loadingAudio = false;
+  let livePlayback = null;
   const resumeWaiters = new Set();
   function status(state, message) {
     if (!dead) onStatus({state, message, audioEnabled: !!(unlocked && audioContext?.state === 'running'),
       retryAvailable: !!(pending && unlocked && audioContext?.state === 'running')});
   }
   function playbackState() {
+    if (livePlayback) { canvas.dataset.audioState = livePlayback.audioState || 'running'; return livePlayback; }
     canvas.dataset.audioState = audioContext?.state || 'locked';
     if (!clip) return {active: false};
     if (audioContext?.state !== 'running') return {active: false, clockMs: clip.position * 1000, segment: clip.segment};
@@ -74,10 +76,26 @@ export function createTeamAvatar({canvas, api, onStatus = () => {}}) {
   }
   function stop() {
     revision++; pending = null; loadingAudio = false;
+    livePlayback = null;
     requestAbort?.abort(); requestAbort = null;
     endAudio(); wakeResumeWaiters(); portrait.stop();
     if (ready) status('ready', 'REIGN is ready.');
   }
+  function startLivePlayback() {
+    stop(); livePlayback = {active: false, audioState: 'connecting'};
+    portrait.setPlaybackState(livePlayback);
+  }
+  function setLivePlayback(value = {}) {
+    // Incoming native WebRTC audio owns the same prepared portrait. An idle
+    // live microphone must not erase another participant's cached room speech.
+    if (!livePlayback && !value.active) return;
+    if (!livePlayback) startLivePlayback();
+    livePlayback = {...value, active: value.active === true};
+    portrait.setPlaybackState(livePlayback);
+    if (livePlayback.active && !speaking) { speaking = true; status('speaking', 'REIGN is speaking live.'); }
+    else if (!livePlayback.active && speaking) { speaking = false; status('ready', 'REIGN is listening.'); }
+  }
+  function endLivePlayback() { if (livePlayback) stop(); }
   function finishWhenHeard() {
     if (drainTimer !== null) clearTimeout(drainTimer); drainTimer = null;
     if (!clip?.ended || !finishAudio || audioContext?.state !== 'running') return;
@@ -237,5 +255,5 @@ export function createTeamAvatar({canvas, api, onStatus = () => {}}) {
     }
     audioContext = null; ready = false;
   }
-  return {play, stop, unlock, destroy};
+  return {play, stop, unlock, destroy, startLivePlayback, setLivePlayback, endLivePlayback};
 }

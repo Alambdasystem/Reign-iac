@@ -25,13 +25,14 @@ class Element {
   get options() { return this.children; }
 }
 const profile = (role = 'owner') => ({workspace: {id: 'rain', name: 'Workspace', durable: true}, me: {id: 'user-1', role, username: 'tester', display_name: 'CI Teammate'}, members: [],
-  rooms: [{id: 'room-a', title: 'Planning'}, {id: 'room-b', title: 'Research'}], capabilities: {assistant: true, speech: true, calls: true, documents: true, manage_members: role === 'owner', vision: true, transcription: true}});
+  rooms: [{id: 'room-a', title: 'Planning'}, {id: 'room-b', title: 'Research'}], capabilities: {assistant: true, speech: true, calls: true, documents: true, manage_members: role === 'owner', vision: true, transcription: true, live_voice: true}});
 const event = (seq, text, extra = {}) => ({id: 'event-' + seq, seq, type: 'message', user_id: 'user-1', display_name: 'CI Teammate', created_at: 1700000000, data: {text}, ...extra});
 const snapshot = id => ({room: {id, title: id === 'room-a' ? 'Planning' : 'Research'}, events: [], documents: [{id: 'document-1', title: 'Shared plan', version: 1}], presence: [], assistant: {status: 'idle'}, last_seq: 0});
 function harness({handle, role, leaveThrows = false, cameraCapture} = {}) {
   const nodes = new Map(), requests = [], timers = new Map(), polls = [], recordings = [], redirects = [], stored = [], media = {joins: 0, leaves: 0, disposed: 0}, avatar = {played: [], stopped: 0, destroyed: 0, unlocked: 0};
   let timer = 0, id = 0, options;
   const camera = {started: 0, stopped: 0, captures: 0, disposed: 0};
+  const voice = {starts: [], stops: [], disposed: 0, muted: false, active: false, own: new Set(), accepted: []}; let voiceOptions;
   const picture = () => ({blob: new Blob([new Uint8Array([255, 216, 255, 217])], {type: 'image/jpeg'}), capturedAt: '2026-11-22T12:00:00.000Z'});
   for (const match of html.matchAll(/id="([^"]+)"/g)) nodes.set(match[1], new Element());
   const node = name => { assert.ok(nodes.has(name), 'unknown DOM ID ' + name); return nodes.get(name); };
@@ -55,7 +56,14 @@ function harness({handle, role, leaveThrows = false, cameraCapture} = {}) {
       readAsDataURL(blob) { void blob.arrayBuffer().then(data => { this.result = 'data:' + blob.type + ';base64,' + Buffer.from(data).toString('base64'); this.onload?.(); }); }
     },
     createTeamCall: config => { options = config; return {join() { media.joins++; return Promise.resolve(); }, leave() { media.leaves++; if (leaveThrows) throw Error('cleanup failed'); return Promise.resolve(); }, syncPresence() {}, dispose() { media.disposed++; }, setMicrophone() {}, setCamera() {}, setScreen() {}, captureFrame: async () => picture()}; },
-    createTeamAvatar: config => { config.onStatus({state: 'ready', message: 'Ready'}); return {play(room, value) { avatar.played.push({room, value}); }, unlock: async () => { avatar.unlocked++; return true; }, stop() { avatar.stopped++; }, destroy() { avatar.destroyed++; }}; },
+    createTeamAvatar: config => { config.onStatus({state: 'ready', message: 'Ready'}); return {play(room, value) { avatar.played.push({room, value}); }, unlock: async () => { avatar.unlocked++; return true; }, stop() { avatar.stopped++; }, destroy() { avatar.destroyed++; }, startLivePlayback() { avatar.stopped++; }, endLivePlayback() {}, setLivePlayback(value) { avatar.livePlayback = value; }}; },
+    createTeamVoice: config => { voiceOptions = config; return {
+      start(value) { voice.starts.push(value); voice.active = true; voice.own.add('voice-session-1'); config.onState({active: true, phase: 'listening', muted: false, voiceSessionId: 'voice-session-1', status: 'Microphone on. Speak naturally.'}); return Promise.resolve(); },
+      stop(value) { voice.stops.push(value); voice.active = false; config.onState({active: false, phase: 'ended', muted: false, status: value?.reason || 'Microphone off.'}); return Promise.resolve(); },
+      mute() { voice.muted = !voice.muted; config.onState({active: true, phase: 'listening', muted: voice.muted, status: voice.muted ? 'Microphone muted.' : 'Microphone on.'}); return voice.muted; },
+      acceptEvents(room, events) { voice.accepted.push({room, events}); }, suppressPlayback(room, event) { return voice.own.has(event.data?.voice_session_id); },
+      enableSpeaker() { return Promise.resolve(); }, retry() {}, dispose() { voice.disposed++; return Promise.resolve(); },
+    }; },
     createTeamRecorder: config => ({start(options) { const value = {...pending(), options}; recordings.push(value); config.onState({state: 'recording', message: 'Recording'}); return value.promise; },
       cancel() { recordings.at(-1)?.reject(Object.assign(Error('cancelled'), {name: 'AbortError'})); config.onState({state: 'idle'}); },
       stop() { const value = recordings.at(-1); value?.resolve({audio_base64: 'c3ludGhldGlj', mime_type: 'audio/webm'}); config.onState({state: 'idle'}); return value?.promise || Promise.resolve(); }, dispose() {}}),
@@ -69,7 +77,7 @@ function harness({handle, role, leaveThrows = false, cameraCapture} = {}) {
   vm.runInContext(source, context);
   const app = context.createTeamWorkspace({document: doc, window: win, fetch: fetcher, uuid: () => 'test-id-' + ++id,
     timers: {setTimeout(fn, delay) { const key = ++timer; timers.set(key, {fn, delay}); return key; }, clearTimeout(key) { timers.delete(key); }}});
-  return {app, node, doc, win, requests, polls, recordings, redirects, media, avatar, camera, stored, timers, get callOptions() { return options; }, response,
+  return {app, node, doc, win, requests, polls, recordings, redirects, media, avatar, camera, voice, stored, timers, get voiceOptions() { return voiceOptions; }, get callOptions() { return options; }, response,
     click: name => node(name).emit('click'), submit(name, submitter) { node(name).emit('submit', {submitter: submitter ? node(submitter) : undefined}); },
     input(name, value) { node(name).value = value; node(name).emit('input'); },
     run(delay) { const task = [...timers.entries()].find(([, value]) => value.delay === delay); assert.ok(task, 'missing timer ' + delay); timers.delete(task[0]); task[1].fn(); }};
@@ -165,26 +173,29 @@ test('disabled remote camera and screen tracks never leave stale visible tiles',
   assert.equal(h.node('callParticipants').children.length, 0); h.app.destroy();
 });
 
-test('Talk to REIGN stops playback and explicitly sends one transcribed question with a spoken reply', async () => {
-  const h = harness({handle: (request, {response}) => {
-    if (request.url.endsWith('/transcriptions')) return response({text: 'What should our team do next?', transcription_id: '123e4567-e89b-42d3-a456-426614174010'});
-    if (request.url.endsWith('/messages')) return response({event: event(1, request.body.text, {data: {...request.body}}), run_id: 'run-1'});
-  }}); await h.app.start(); const stopped = h.avatar.stopped;
-  h.click('talkToReign'); assert.ok(h.avatar.stopped > stopped); assert.equal(h.recordings.length, 1); assert.equal(h.recordings[0].options.autoStop, true); assert.equal(h.avatar.unlocked, 1); assert.equal(h.node('messageInput').disabled, true);
-  assert.equal(h.requests.filter(item => item.url.endsWith('/messages')).length, 0);
-  h.click('stopDictation'); await until(() => h.requests.some(item => item.url.endsWith('/messages')));
-  const request = h.requests.find(item => item.url.endsWith('/messages'));
-  assert.equal(request.body.text, 'What should our team do next?'); assert.equal(request.body.ask_reign, true); assert.equal(request.body.speak, true);
-  assert.equal(request.body.input_source, 'voice'); assert.equal(request.body.transcription_id, '123e4567-e89b-42d3-a456-426614174010');
-  await until(() => h.node('messageInput').value === ''); h.app.destroy();
+test('Microphone on starts one persistent live session, keeps the draft, and never records a question', async () => {
+  const h = harness(); await h.app.start(); h.input('messageInput', 'Keep my draft while I talk.');
+  const stopped = h.avatar.stopped; h.click('talkToReign');
+  assert.equal(h.voice.starts.length, 1); assert.equal(h.voice.starts[0].roomId, 'room-a'); assert.equal(h.voice.starts[0].connectionId, 'test-id-1');
+  assert.equal(h.recordings.length, 0); assert.ok(h.avatar.stopped > stopped);
+  assert.equal(h.node('messageInput').value, 'Keep my draft while I talk.'); assert.equal(h.node('messageInput').disabled, false);
+  assert.equal(h.node('talkToReign').hidden, true); assert.equal(h.node('stopReignMic').hidden, false);
+  assert.equal(h.node('dictateMessage').disabled, true); h.click('dictateMessage'); assert.equal(h.recordings.length, 0);
+  h.click('muteReignMic'); assert.equal(h.voice.muted, true); assert.equal(h.node('muteReignMic').textContent, 'Unmute mic');
+  h.click('muteReignMic'); assert.equal(h.voice.muted, false); assert.equal(h.voice.starts.length, 1);
+  h.click('stopReignMic'); assert.equal(h.voice.active, false); assert.equal(h.node('talkToReign').hidden, false);
+  assert.equal(h.node('messageInput').value, 'Keep my draft while I talk.');
+  assert.ok(h.requests.every(request => !request.url.endsWith('/transcriptions'))); h.app.destroy();
 });
 
-test('cancelling Talk during transcription cannot submit later or replace an existing typed draft', async () => {
+test('cancelling Dictate during transcription aborts it and cannot overwrite a newer draft', async () => {
   const held = pending(), h = harness({handle: request => request.url.endsWith('/transcriptions') ? held.promise : undefined}); await h.app.start();
-  h.input('messageInput', 'Keep my typed draft'); h.click('talkToReign'); assert.equal(h.recordings.length, 0); assert.equal(h.node('messageInput').value, 'Keep my typed draft');
-  h.input('messageInput', ''); h.click('talkToReign'); h.click('stopDictation'); await until(() => h.requests.some(item => item.url.endsWith('/transcriptions')));
-  h.click('cancelDictation'); assert.equal(h.requests.find(item => item.url.endsWith('/transcriptions')).init.signal.aborted, true); h.input('messageInput', 'A new typed draft'); held.resolve(h.response({text: 'This cancelled voice turn must not send'}));
-  await new Promise(resolve => setImmediate(resolve)); assert.equal(h.requests.filter(item => item.url.endsWith('/messages')).length, 0); assert.equal(h.node('messageInput').value, 'A new typed draft'); h.app.destroy();
+  h.input('messageInput', 'Keep my typed draft'); h.click('dictateMessage'); h.click('stopDictation');
+  await until(() => h.requests.some(item => item.url.endsWith('/transcriptions')));
+  h.click('cancelDictation'); assert.equal(h.requests.find(item => item.url.endsWith('/transcriptions')).init.signal.aborted, true);
+  h.input('messageInput', 'A new typed draft'); held.resolve(h.response({text: 'This cancelled dictation must not send'}));
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(h.requests.filter(item => item.url.endsWith('/messages')).length, 0);
+  assert.equal(h.node('messageInput').value, 'A new typed draft'); h.app.destroy();
 });
 
 test('Dictate adds a reviewed transcript without sending a room or assistant message', async () => {
@@ -193,33 +204,38 @@ test('Dictate adds a reviewed transcript without sending a room or assistant mes
   assert.equal(h.node('messageInput').value, 'Existing notes\nA reviewed idea'); assert.equal(h.requests.filter(item => item.url.endsWith('/messages')).length, 0); h.app.destroy();
 });
 
-test('a spoken question missing its server receipt stays as a reviewable draft and is never silently typed to REIGN', async () => {
-  const h = harness({handle: (request, {response}) => request.url.endsWith('/transcriptions') ? response({text: 'An unverified voice transcript'}) : undefined});
-  await h.app.start(); h.click('talkToReign'); h.click('stopDictation');
-  await until(() => h.node('dictationStatus').textContent.includes('could not be verified'));
-  assert.equal(h.node('messageInput').value, 'An unverified voice transcript');
-  assert.equal(h.requests.filter(request => request.url.endsWith('/messages')).length, 0); h.app.destroy();
+test('native live replies are archived once without duplicate cached audio, including late replies after off', async () => {
+  const h = harness(); await h.app.start(); h.click('talkToReign'); await until(() => h.polls.length === 1);
+  const own = event(2, 'Live answer', {type: 'assistant_message', data: {text: 'Live answer', voice_session_id: 'voice-session-1'}});
+  const other = event(3, 'Another teammate’s answer', {type: 'assistant_message', data: {text: 'Another teammate’s answer', voice_session_id: 'other-session'}});
+  h.click('stopReignMic');
+  h.polls[0].resolve(h.response({events: [own, other], presence: [], assistant: {status: 'completed'}}));
+  await until(() => h.avatar.played.length === 1);
+  assert.equal(h.avatar.played[0].value.id, other.id);
+  assert.equal(h.node('eventFeed').children.filter(node => node.dataset.eventId).length, 2);
+  assert.ok(h.voice.accepted.some(item => item.events[0]?.id === own.id)); h.app.destroy();
 });
 
-test('an uncertain spoken question reuses its exact message and transcription receipt on explicit retry', async () => {
-  let sends = 0;
-  const h = harness({handle: (request, {response}) => {
-    if (request.url.endsWith('/transcriptions')) return response({text: 'Keep this a spoken turn.', transcription_id: '123e4567-e89b-42d3-a456-426614174011'});
-    if (request.url.endsWith('/messages')) {
-      if (++sends === 1) throw Error('Response lost');
-      return response({event: event(1, request.body.text, {data: request.body}), run_id: 'run-1'});
-    }
-  }});
-  await h.app.start(); h.click('talkToReign'); h.click('stopDictation');
-  await until(() => !h.node('retryMessage').hidden); h.click('retryMessage');
-  await until(() => h.node('messageInput').value === '');
-  const requests = h.requests.filter(request => request.url.endsWith('/messages'));
-  assert.equal(requests.length, 2); assert.deepEqual(requests[0].body, requests[1].body);
-  assert.equal(requests[0].body.input_source, 'voice');
-  assert.equal(h.requests.filter(request => request.url.endsWith('/transcriptions')).length, 1);
-  const row = h.node('eventFeed').children.find(node => node.dataset.eventId === 'event-1');
-  assert.ok(row.children[1].children[0].children.some(node => node.textContent === 'Spoken message'));
-  h.app.destroy();
+test('shared clip failure copy does not label the initiating live narration unavailable', async () => {
+  const h = harness(); await h.app.start(); h.click('talkToReign'); await until(() => h.polls.length === 1);
+  const own = event(2, 'Live answer', {type: 'assistant_message', data: {
+    text: 'Live answer', voice_session_id: 'voice-session-1', speech_status: 'unavailable'}});
+  h.polls[0].resolve(h.response({events: [own], presence: [], assistant: {status: 'completed'}}));
+  await until(() => h.node('eventFeed').children.some(node => node.dataset.eventId === own.id));
+  const row = h.node('eventFeed').children.find(node => node.dataset.eventId === own.id);
+  assert.match(row.children[1].children.at(-1).textContent, /Shared audio playback is unavailable/);
+  assert.equal(h.voice.active, true); assert.equal(h.avatar.played.length, 0); h.app.destroy();
+});
+
+test('room changes and logout stop live microphone ownership without closing another human call track', async () => {
+  const held = pending(), h = harness({handle: request => request.url === '/logout' ? held.promise : undefined}); await h.app.start();
+  h.click('talkToReign'); await h.app.selectRoom('room-b');
+  assert.equal(h.voice.active, false); assert.equal(h.node('talkToReign').hidden, false);
+  assert.equal(h.voice.starts.length, 1); h.click('talkToReign');
+  const logout = h.app.logout(); await until(() => h.requests.some(request => request.url === '/logout'));
+  assert.equal(h.voice.active, false, 'mic cleanup begins before logout acknowledgement');
+  assert.equal(h.voice.starts.length, 2); held.resolve(h.response({ok: true})); await logout;
+  assert.equal(h.voice.disposed, 1);
 });
 
 test('a departed call connection stops that operation without treating room membership as revoked', async () => {
@@ -251,6 +267,24 @@ test('the confirmed leave response replaces remote flags with the current room p
   h.callOptions.onPresence([viewer, {...remoteViewer, connection_id: 'call-remote', in_call: true, microphone: true, camera: true}]);
   await h.callOptions.api('/api/team/rooms/room-a/presence/call-local', 'DELETE');
   assert.deepEqual(h.node('presenceList').children.map(node => node.textContent), ['CI Teammate', 'Other teammate']); h.app.destroy();
+});
+
+test('a remote leave between room polls receives a bounded idle presence refresh without a chat event', async () => {
+  const h = harness(); await h.app.start(); await until(() => h.polls.length === 1);
+  const viewer = {connection_id: 'viewer-remote', user_id: 'user-2', display_name: 'Other teammate', in_call: false};
+  const call = {...viewer, connection_id: 'call-remote', in_call: true, microphone: true, camera: true};
+  h.polls[0].resolve(h.response({events: [], presence: [viewer, call], assistant: {status: 'idle'}}));
+  await until(() => [...h.timers.values()].some(timer => timer.delay === 120));
+  assert.match(h.node('presenceList').children[0].textContent, /mic on, camera/);
+  // The remote connection disappears during this gap. The next server wait
+  // sees only its new baseline, so no presence-change wakeup is guaranteed.
+  h.run(120); await until(() => h.polls.length === 2);
+  const wait = Number(new URL(h.polls[1].url, 'https://ax.test').searchParams.get('wait'));
+  assert.ok(wait > 0 && wait <= 5, 'idle room polling must refresh presence within five seconds');
+  h.polls[1].resolve(h.response({events: [], presence: [viewer], assistant: {status: 'idle'}}));
+  await until(() => h.node('presenceList').children[0].textContent === 'Other teammate');
+  assert.equal(h.node('eventFeed').children.filter(node => node.dataset.sequence).length, 0);
+  h.app.destroy();
 });
 
 test('typed Ask requests voice by default and unlocks output synchronously within its submit gesture', async () => {

@@ -279,3 +279,47 @@ test('a long suspension does not consume the bounded output-tail drain interval'
   assert.equal(h.sources.length, 2);
   h.player.stop(); await play; h.player.destroy();
 });
+
+test('native live output drives the prepared portrait from its media clock without fetching shared clips', async () => {
+  const h = harness(); await flush();
+  h.player.startLivePlayback();
+  const native = {active: true, level: .7, expression: 'thoughtful', expressionSource: 'response-segment',
+    clockMs: 1000, cueMs: 1000, segment: 1, audioState: 'running'};
+  h.player.setLivePlayback(native); h.advance(100);
+  h.player.setLivePlayback({...native, clockMs: 1300}); h.advance(300);
+  assert.equal(h.canvas.dataset.speaking, 'true'); assert.equal(h.canvas.dataset.expression, 'thoughtful');
+  assert.equal(h.canvas.dataset.expressionSource, 'response-segment'); assert.equal(h.canvas.dataset.segment, '1');
+  assert.ok(Number(h.canvas.dataset.mouth) > .4);
+  const mouth = h.canvas.dataset.mouth, progress = h.canvas.dataset.expressionProgress;
+  h.advance(1000);
+  assert.equal(h.canvas.dataset.mouth, mouth, 'render time cannot move a stopped native audio clock');
+  assert.equal(h.canvas.dataset.expressionProgress, progress);
+  assert.equal(h.calls.length, 0); assert.equal(h.sources.length, 0); assert.equal(h.contexts.length, 0);
+  h.player.setLivePlayback({active: false, expression: 'neutral', audioState: 'suspended'});
+  assert.equal(h.canvas.dataset.speaking, 'false'); assert.equal(h.canvas.dataset.mouth, '0.000');
+  assert.equal(h.canvas.dataset.expression, 'neutral');
+  h.player.endLivePlayback(); h.player.destroy();
+});
+
+test('idle live microphone updates and mic off leave another participant\'s cached reply playing', async () => {
+  const h = harness(); await h.player.unlock();
+  h.player.startLivePlayback();
+  const play = h.player.play('room', event); await flush(); h.advance(50); h.advance(300);
+  assert.equal(h.canvas.dataset.speaking, 'true'); assert.ok(Number(h.canvas.dataset.mouth) > .4);
+  h.player.setLivePlayback({active: false, expression: 'neutral'}); h.player.endLivePlayback(); h.advance(100);
+  assert.equal(h.sources[0].stopped, false); assert.equal(h.canvas.dataset.expression, 'warm');
+  assert.equal(h.canvas.dataset.speaking, 'true'); assert.equal(h.calls.length, 1);
+  h.player.stop(); await play; h.player.destroy();
+});
+
+test('native speech or user interruption cancels competing cached audio and fences a late clip', async () => {
+  const h = harness({hold: true}); await h.player.unlock();
+  const play = h.player.play('room', event); await flush();
+  h.player.startLivePlayback(); assert.equal(h.calls[0][3].signal.aborted, true);
+  h.pending.resolve(); await play; assert.equal(h.sources.length, 0);
+  h.player.setLivePlayback({active: true, level: .5, expression: 'warm', expressionSource: 'response-segment', clockMs: 2000, cueMs: 2000, segment: 1});
+  assert.equal(h.canvas.dataset.speaking, 'true');
+  h.player.startLivePlayback();
+  assert.equal(h.canvas.dataset.speaking, 'false'); assert.equal(h.canvas.dataset.mouth, '0.000');
+  assert.equal(h.canvas.dataset.expression, 'neutral'); h.player.destroy();
+});

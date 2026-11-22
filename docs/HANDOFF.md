@@ -1,4 +1,37 @@
-## Current implementation: faster microphone turns and progressive speech (2026-11-21)
+## Current implementation: continuous live microphone in Workspace (2026-11-21)
+
+James explicitly rejected the bounded Talk recording flow. Workspace's primary
+voice control now starts a continuous WebRTC microphone connection to the
+Realtime model. Pauses trigger responses without closing the microphone; the
+same connection handles successive spoken requests and interruptions. Mute and
+Mic off are explicit controls. Dictate remains a separate reviewed recording
+workflow. The live path does not use MediaRecorder, a twenty-second upload, or
+the recording transcription endpoint. The provider's session lifetime is a
+separate connection constraint, never an utterance cutoff.
+
+Each live call belongs to the authenticated member, room and current viewer
+connection. Provider call IDs and credentials stay in Core. A pending offer has
+a client-known UUID, so Off can retire it before negotiation finishes. Leaving
+the room, revoking a member, losing its presence lease, shutdown or Mic off
+closes the associated provider call and cancels only that call's unfinished
+room request. Durable duplicate receipts still confirm previously accepted
+work without replaying actions. Live requests carry voice origin; their text
+is the live model's delegated representation, not an independently verified
+recording and not an authorization upgrade.
+
+The existing room assistant remains the source of answers, expressions,
+documents and authorized tools. The initiating caller receives verified-answer
+narration over the same WebRTC connection. The portrait follows that output
+clock. Other room viewers receive the existing bounded speech clips, generated
+in the background without delaying the caller or causing duplicate playback.
+Private voice keeps its existing authorization boundary and startup behavior.
+
+These are implementation notes. CI/browser, actual provider and deployed-device
+receipts must be reported separately. The earlier audio release was held when
+James clarified the required streaming interaction; it must not be promoted as
+the completed solution without this follow-up.
+
+## Superseded Talk design: bounded microphone turns and progressive speech (2026-11-21)
 
 Talk to REIGN now starts an explicit microphone capture and automatically finishes
 after about 750 ms of quiet following sustained speech. Manual Finish and the

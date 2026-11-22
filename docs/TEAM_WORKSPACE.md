@@ -15,23 +15,38 @@ membership, presence, signaling, media access, and shared-browser control.
 
 Choose a saved room or create one. Room messages and Markdown documents are
 shared with current workspace members. **Ask REIGN** requests one assistant turn
-in the room; **Talk to REIGN** starts the caller's own microphone and sends one
-question after about 750 milliseconds of quiet following speech. **Finish
-recording** ends capture immediately, and the recording still has a twenty-second cap.
-Short pauses and quieter syllables keep the same capture open. This lightweight
-local sound detector is not semantic turn prediction; a longer pause can finish
-the question, and background noise can require the manual Finish control. If
-audio analysis is unavailable, Finish and the time limit remain available.
-**Dictate** keeps manual completion and only puts the transcript in the composer
-for review. Cancelling, changing rooms, or signing out stops owned microphone
-tracks and cancels an unfinished transcription. The microphone never reopens
-automatically.
+in the room. Under **Talk with REIGN**, **Microphone on** starts a continuous
+WebRTC audio connection from the caller's microphone to the Realtime model.
+The connection stays open across questions and replies. Pauses identify turns
+without stopping, uploading or reopening a recording, and speaking while REIGN
+answers interrupts her output. **Mute mic** pauses input while keeping the
+connection; **Microphone off** ends it. Typed drafts stay in the composer.
+The live microphone is separate from the human group call and does not turn on
+a camera, screen or another participant's media.
 
-Talk's transcript carries a server-issued, room- and member-bound receipt. REIGN
-is told that this is a spoken question, and the saved message is labeled **Spoken
-message**. Transcripts still appear in the conversation so the team can review
-them. An edited Dictate draft is sent as ordinary text. A failed send retains
-the same message and receipt for an explicit retry, without recording again.
+The live model delegates each request to the authorized room assistant, which
+uses the room's discussion and tools. Saved requests are labeled **Spoken
+message**. The text in the archive is the model's representation of the spoken
+request; live captions also show the provider's transcription. Seeing text in
+the conversation does not mean the user typed it. An uncertain submission offers
+**Retry voice request**, which confirms the same request ID without automatically
+repeating room actions. The caller's reply streams over the existing audio
+connection, while other room viewers receive the same answer through the shared
+audio player.
+
+**Dictate** is a separate, bounded recording for a text draft. **Finish dictation**
+puts its transcript in the composer for review, and **Cancel dictation** discards
+unfinished capture. It does not send a question automatically and is disabled
+while the live microphone is connected. A draft sent from the composer is
+ordinary text. The transcription API also supports an exact-text, room- and
+member-bound receipt for clients that explicitly submit a recorded spoken
+message; that receipt is separate from a live voice session.
+
+Changing rooms, signing out or leaving the page stops owned microphone tracks
+and closes the associated live connection. The server also closes a call when
+its viewer lease expires or membership is revoked. Calls last at most one hour;
+this is a connection lifetime, not a limit on individual spoken questions.
+Reconnecting always requires another **Microphone on** action.
 
 Each assistant turn includes a current, membership-checked presence snapshot for
 that room. Multiple tabs belonging to one person count as one participant. REIGN
@@ -64,15 +79,31 @@ player blends pre-rendered neural frames and samples mouth opening from the
 spoken PCM at the audio output position. Sentence expressions use that same
 playback clock. Suspending playback stops facial speech; resuming continues the
 current segment. It does not perform phoneme alignment or live neural inference.
-The first sentence becomes available as soon as its generated audio and exact
-transcript have been checked; later sentences can finish generating while it
-plays. The browser loads only the next sentence ahead, reducing network pauses
-without preloading an entire conversation. Waiting audio is labeled **Preparing
-REIGN's voice**, and **Speaking** begins only when audio reaches the playback
-clock. If a later clip fails, the face stops and **Retry REIGN audio** retries the
-unheard part without repeating the assistant's room actions or the earlier audio.
-Audio generation, transcription, image understanding, and assistant work run
-through Core; the team page does not download an ONNX model. The compressed
+For live conversation, the initiating caller hears the room's answer narrated
+over the existing WebRTC connection. The portrait uses that output's measured
+level and media position, never the user's microphone level, to animate its
+mouth and sentence expressions. The requested narration text is checked against
+the authoritative room answer. Streaming audio is heard before its final
+transcript is available; if that transcript differs, playback stops instead of
+continuing an unverified answer. **Enable REIGN audio** recovers browser-blocked
+playback. Starting a microphone connection does not produce a greeting or
+execute a room request by itself.
+
+For other viewers and typed requests, the shared clip player exposes each
+sentence only after its audio and exact transcript have been checked. Later
+sentences can finish generating while the first plays. The browser loads only
+the next sentence ahead, reducing network pauses without preloading an entire
+conversation. Waiting audio is labeled **Preparing REIGN's voice**, and
+**Speaking** begins only when audio reaches the playback clock. If a later clip
+fails, the face stops and **Retry REIGN audio** retries the unheard part without
+repeating the assistant's room actions or the earlier audio. A live caller skips
+their own cached reply so they do not hear it twice, including a delayed reply
+after turning the microphone off. Shared clip generation does not delay that
+caller's live narration.
+
+Core authorizes and coordinates provider audio, transcription, image
+understanding and room work; live microphone media travels over WebRTC directly
+to the provider. The team page does not download an ONNX model. The compressed
 portrait atlas is approximately 320 KB and decodes to approximately 12 MiB.
 The separate Avatar Lab remains a device-local neural experiment.
 
@@ -99,8 +130,9 @@ not migrate or recreate records, change encryption associations, or rename saved
 rooms and documents. Room titles are supplied by members; no default room is
 created or renamed.
 Rooms, text events, document versions, and employee verifiers survive a process
-restart. Presence, WebRTC signals, uploaded images, and generated audio are
-ephemeral; call recordings and browser profiles are not archived.
+restart. Presence, live voice leases, WebRTC signals, uploaded images, and
+generated audio are ephemeral; raw call recordings and browser profiles are
+not archived.
 
 The pilot permits 32 member records, 100 rooms, 20,000 events and 100 documents
 per room, 100 versions per document, and a 96 MiB team storage budget. Calls permit four
