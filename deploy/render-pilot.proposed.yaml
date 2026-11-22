@@ -64,7 +64,7 @@ services:
   region: oregon
   numInstances: 1
   image:
-    url: ghcr.io/alambdasystem/reign-core@sha256:9ea055bea221c946c613535ce7f5630c5d14ea35cf4bd40ebd0148eb0078bc60
+    url: ghcr.io/alambdasystem/reign-core@sha256:c5471a63e16902ee261df0bddcdf308a6399bef1dd996cf6b9e00a08bbe85bfc
   envVars:
   - key: PORT
     value: '10000'
@@ -109,9 +109,11 @@ services:
   # Optional outbound tailnet client. Enable only with the tested Core image,
   # verified tailnet policy and a privately configured enrollment key.
   - key: REIGN_TAILSCALE_ENABLED
-    value: '0'
+    value: '1'
   - key: REIGN_TAILSCALE_HOSTNAME
     value: render-reign-core
+  - key: REIGN_TAILSCALE_TAGS
+    value: tag:reign-render-core
   - key: REIGN_TAILSCALE_AUTHKEY
     sync: false
   # Existing private Core mount stores encrypted transcript records. The
