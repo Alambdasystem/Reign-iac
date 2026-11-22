@@ -1,3 +1,18 @@
+## Prepared follow-up: Render to Tailscale SSH (2026-11-21)
+
+James requested joining his existing Render service to his existing tailnet to
+reach backend computers over SSH. The optional Core userspace client uses the
+existing mounted disk for device identity. Enrollment is disabled in the
+Blueprint until the actual tailnet, destination devices and access policy are
+verified. The account sign-in did not complete during preparation; no tailnet
+device, policy, key, service environment or live image was changed.
+
+See [the deployment and acceptance procedure](TAILSCALE.md). The candidate adds
+process supervision, a pinned Tailscale client, OpenSSH, local lifecycle tests
+and a network-disabled real-daemon CI check. Source and test fixtures do not
+establish live enrollment or SSH access. Preserve the existing manual tested-image
+promotion flow and the current application functionality.
+
 ## Current implementation: speech timing and camera descriptions (2026-11-21)
 
 The shared composer now requests speech by default when available and unlocks
