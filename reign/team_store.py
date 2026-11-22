@@ -219,6 +219,10 @@ class TeamStore:
         # This additive table is part of the initial, still-unreleased schema.
         # Existing test/dev stores retain their records when the surface grows.
         db.execute("CREATE TABLE IF NOT EXISTS browser_bindings (room TEXT PRIMARY KEY REFERENCES rooms(id), session_id TEXT UNIQUE NOT NULL, generation INTEGER NOT NULL, nonce BLOB NOT NULL, body BLOB NOT NULL)")
+        # A durable per-member console grant, not a new owner identity. The
+        # original membership MAC remains valid for ungranted members.
+        if "console_access" not in {row[1] for row in db.execute("PRAGMA table_info(memberships)")}: 
+            db.execute("ALTER TABLE memberships ADD COLUMN console_access INTEGER NOT NULL DEFAULT 0")
 
     @staticmethod
     def _seal(key, value, *binding):
@@ -243,13 +247,20 @@ class TeamStore:
         membership = db.execute("SELECT * FROM memberships WHERE workspace=? AND user_id=?", (WORKSPACE_ID, row["id"])).fetchone()
         if membership is None:
             raise TeamError("team_identity_required")
-        expected = self._fingerprint(key, ["membership", WORKSPACE_ID, row["id"], membership["active"]])
+        console_access = membership["console_access"]
+        if console_access not in (0, 1):
+            raise TeamError("team_unavailable")
+        proof = ["membership", WORKSPACE_ID, row["id"], membership["active"]]
+        if console_access:
+            proof.append(1)
+        expected = self._fingerprint(key, proof)
         if not hmac.compare_digest(membership["mac"], expected):
             raise TeamError("team_unavailable")
         value = self._open(key, row["nonce"], row["body"], "user", row["id"], row["revision"])
         return {"id": row["id"], "username": value["username"], "display_name": value["display_name"],
                 "role": "employee", "credential_revision": row["revision"],
-                "active": bool(membership["active"]), "created_at": row["created"]}, value["password_hash"]
+                "console_access": bool(console_access), "active": bool(membership["active"]),
+                "created_at": row["created"]}, value["password_hash"]
 
     def _principal(self, db, key, actor):
         if type(actor) is not dict:
@@ -313,6 +324,39 @@ class TeamStore:
             member, _ = self._member(db, key, db.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone())
             return {"member": member, "temporary_password": password}
 
+    def console_access(self, user_id, revision):
+        """Authorize an existing employee identity, then read its MAC-bound grant."""
+        identifier(user_id)
+        with self._connection() as (db, key):
+            row = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+            if row is None:
+                raise TeamError("team_identity_required")
+            member, _ = self._member(db, key, row)
+            if not member["active"] or member["credential_revision"] != revision:
+                raise TeamError("team_identity_required")
+            return member["console_access"]
+
+    def set_console_access(self, actor, user_id, enabled):
+        """Owner-only, individual, revocable REIGN/Genesis work-surface grant."""
+        identifier(user_id)
+        boolean(enabled)
+        with self._connection() as (db, key):
+            if self._principal(db, key, actor)["role"] != "owner":
+                raise TeamError("team_owner_required")
+            row = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+            if row is None:
+                raise TeamError("team_not_found")
+            member, _ = self._member(db, key, row)
+            if not member["active"]:
+                raise TeamError("team_identity_required")
+            proof = ["membership", WORKSPACE_ID, user_id, 1]
+            if enabled:
+                proof.append(1)
+            mac = self._fingerprint(key, proof)
+            db.execute("UPDATE memberships SET console_access=?, mac=? WHERE workspace=? AND user_id=?",
+                       (int(enabled), mac, WORKSPACE_ID, user_id))
+            return {"member": self._member(db, key, row)[0]}
+
     def disable_member(self, actor, user_id):
         identifier(user_id)
         with self._connection() as (db, key):
@@ -320,7 +364,7 @@ class TeamStore:
             row = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
             if row is None: raise TeamError("team_not_found")
             mac = self._fingerprint(key, ["membership", WORKSPACE_ID, user_id, 0])
-            db.execute("UPDATE memberships SET active=0,mac=? WHERE workspace=? AND user_id=?", (mac, WORKSPACE_ID, user_id))
+            db.execute("UPDATE memberships SET active=0,console_access=0,mac=? WHERE workspace=? AND user_id=?", (mac, WORKSPACE_ID, user_id))
             member, _ = self._member(db, key, row)
             return {"member": member}
 
