@@ -63,7 +63,9 @@ class WorkspaceMCP:
         names = {"PATH", "LANG", "PYTHONPATH", "PYTHONDONTWRITEBYTECODE",
                  "TEMPORAL_ADDRESS", "TEMPORAL_HOST", "TEMPORAL_NAMESPACE",
                  "TEMPORAL_TASK_QUEUE", "COMPUTER_URL", "COMPUTER_HOST",
-                 "COMPUTER_TOKEN", "ALLOWED_HOSTS", "REIGN_VAULT_DIR", "REIGN_VAULT_KEY"}
+                 "COMPUTER_TOKEN", "ALLOWED_HOSTS", "REIGN_VAULT_DIR", "REIGN_VAULT_KEY",
+                 "REIGN_LINKEDIN_ACCESS_TOKEN", "REIGN_LINKEDIN_AUTHOR_URN",
+                 "REIGN_LINKEDIN_PUBLISH_ENABLED", "REIGN_LINKEDIN_VERSION"}
         env = {name: value for name, value in os.environ.items() if name in names}
         env["REIGN_MCP_OWNER_ID"] = "admin"
         params = StdioServerParameters(command=sys.executable,
