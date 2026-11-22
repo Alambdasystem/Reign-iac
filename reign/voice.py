@@ -233,13 +233,15 @@ class VoiceBroker:
     async def hangup(self, call_id):
         return await self._hangup(call_id, configuration())
 
-    async def offer(self, sdp, *, scope="private", include_call_id=False):
+    async def offer(self, sdp, *, scope="private", include_call_id=False, on_call_id=None):
         if not valid_sdp(sdp):
             raise VoiceError("voice_invalid_offer")
+        if on_call_id is not None and (not include_call_id or not callable(on_call_id)):
+            raise VoiceError("voice_invalid_configuration")
         settings = configuration()
         session = session_config(settings, scope=scope)
         self.admit()
-        call_id, delivered, failure = None, False, None
+        call_id, delivered, owned, failure = None, False, False, None
         try:
             async with asyncio.timeout(OFFER_TIMEOUT_SECONDS):
                 # Keep key and explicitly configured base paired. Never retry on
@@ -264,6 +266,12 @@ class VoiceBroker:
                         raise VoiceError("voice_provider_unavailable")
                     if include_call_id:
                         call_id = self.call_id_from_location(response.headers.get("location"), settings)
+                        if on_call_id is not None:
+                            # Transfer cleanup ownership before waiting for the
+                            # SDP body. This synchronous, Core-only callback must
+                            # retain the validated ID even if negotiation fails.
+                            on_call_id(call_id)
+                            owned = True
                     answer = bytearray()
                     async for part in response.aiter_bytes():
                         if len(answer) + len(part) > MAX_SDP_BYTES:
@@ -293,7 +301,7 @@ class VoiceBroker:
             self.pending -= 1
             # A valid provider call can exist even when its SDP body is invalid
             # or times out. Close it here if it never reached the room owner.
-            if include_call_id and call_id and not delivered:
+            if include_call_id and call_id and not delivered and not owned:
                 try:
                     await self._hangup(call_id, settings)
                 except BaseException as cleanup_error:

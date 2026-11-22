@@ -114,15 +114,35 @@ Room endpoints are `GET /api/team/rooms/{room_id}/voice`, `POST .../voice/offer`
 negotiation and again after the provider response. Its provider call ID stays
 inside Core; the browser receives a separate room session ID. The broker
 accepts only the configured provider's exact call resource from `Location` and
-constructs hangup requests from the validated opaque ID. Failed cleanup keeps
-that ID in internal exception metadata for the owning room service to retain
-capacity and retry; it never enters public error bodies.
+constructs hangup requests from the validated opaque ID. The broker transfers
+that ID to the owning room service as soon as response headers arrive, before
+waiting for the SDP body. The owner retains capacity and retries failed cleanup.
+If no owner accepted the allocation, the broker closes it or preserves the ID in
+internal exception metadata for recovery. Neither path exposes it in public
+error bodies. A confirmed provider close releases its reservation only after the
+room's cancellation and durable run settlement also succeed; failed settlement
+remains retryable without repeating a confirmed hangup.
 
 One active shared call per member and four total calls are allowed. Presence
-expiry, room leave, revocation, explicit Off and shutdown close the owned
+expiry, room leave, revocation, explicit Off and shutdown initiate closure of the owned
 provider call. An Off request can retire a session before its in-flight offer
 finishes; a late provider result is closed rather than reviving capture. Missing
 or uncertain task receipts require an explicit retry with the same message ID.
+
+Graceful shutdown is bounded and best effort. Render gives this disk-backed Core
+a 30-second shutdown window and does not allow extending it. The Core image sets
+`UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN=2`, honored by both its normal and diagnostic
+Uvicorn CLI startup, so in-flight HTTP requests cannot consume that whole window
+before lifespan cleanup begins. TeamVoice then uses one 18-second deadline:
+it retires calls immediately, starts known provider hangups alongside room
+cancellation, reserves time to close pending allocations, and permits at most one
+hangup retry within the remaining budget. Successful closes are not repeated.
+The optional Tailscale supervisor shares a 25-second child-process grace. These
+are process-shutdown budgets, not microphone or utterance time limits. A failed
+hangup or a request that ends before a validated allocation ID arrives remains
+unconfirmed; shutdown never claims that it proved the remote call ended. The
+Tailscale feature flag and separate activation rollout remain unchanged. See
+[Render's graceful shutdown rules](https://render.com/docs/deploys#graceful-shutdown).
 
 Shared sessions use the provider's documented **60-minute maximum**. The
 controller honors the server capability up to 3600 seconds and reports the

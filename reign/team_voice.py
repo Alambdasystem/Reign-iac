@@ -14,12 +14,13 @@ from fastapi import Request
 
 from reign.team_api import body, get_runtime, reply, require_actor
 from reign.team_store import TeamError, identifier, text
-from reign.voice import VoiceError, capabilities, valid_sdp
+from reign.voice import HANGUP_TIMEOUT_SECONDS, VoiceError, capabilities, valid_sdp
 
 MAX_CALLS = 4
 MAX_RETIRED = 512
 MAX_CALL_SECONDS = 3600
 RETIRED_SECONDS = 3600
+SHUTDOWN_TIMEOUT_SECONDS = 18
 
 
 class TeamVoice:
@@ -31,6 +32,9 @@ class TeamVoice:
         self.jobs = set()
         self.reaper = None
         self.closed = False
+        self.shutdown_task = None
+        self.shutdown_deadline = None
+        self.shutdown_expired = False
         runtime.voice_sessions = self
         runtime.live_voice_validator = self.validate
 
@@ -96,6 +100,8 @@ class TeamVoice:
             row = {"id": session_id, "actor": dict(actor), "room_id": room_id,
                    "connection_id": connection_id, "fingerprint": fingerprint,
                    "state": "opening", "call_id": None, "closing_task": None,
+                   "cancel_task": None, "cancel_run": None, "hangup_confirmed": False, "shutdown_attempts": 0,
+                   "unknown_allocation": False, "offer_started": False,
                    "deadline": self.clock() + MAX_CALL_SECONDS}
             self.calls[session_id] = row
             row["task"] = self._track(asyncio.create_task(self._open(row, sdp)))
@@ -109,7 +115,9 @@ class TeamVoice:
         try:
             if self.closed or row["state"] == "closing": raise TeamError("team_voice_closed")
             self._connection(row["actor"], row["room_id"], row["connection_id"])
-            answer = await self.broker.offer(sdp, scope="team", include_call_id=True)
+            row["offer_started"] = True
+            answer = await self.broker.offer(sdp, scope="team", include_call_id=True,
+                                            on_call_id=lambda call_id: self._allocated(row, call_id))
             row["call_id"] = answer.pop("call_id")
             await self.runtime.authorize_room(row["actor"], row["room_id"])
             self._connection(row["actor"], row["room_id"], row["connection_id"])
@@ -122,12 +130,27 @@ class TeamVoice:
             # timeout is detected. If the broker could not close it, retain
             # the internal ID and capacity reservation for the lease reaper.
             if not row["call_id"]: row["call_id"] = getattr(error, "provider_call_id", None)
+            if (self.closed and row["offer_started"] and not row["call_id"]
+                    and (isinstance(error, asyncio.CancelledError) or
+                         isinstance(error, VoiceError) and error.code in {
+                             "voice_provider_timeout", "voice_provider_unavailable", "voice_invalid_answer"})):
+                row["unknown_allocation"] = True
             self._retire(row)
             if row["call_id"]:
                 with suppress(Exception): await self._hangup(row)
-            else:
+            elif not row["unknown_allocation"]:
                 self.calls.pop(row["id"], None)
             raise
+
+    def _allocated(self, row, call_id):
+        # Never serialized: the browser knows only its own session UUID. The
+        # ID must be retained as soon as headers arrive, even if the SDP stalls.
+        row["call_id"] = call_id
+        row["unknown_allocation"] = False
+        if row["state"] == "closing" and not self.shutdown_expired:
+            self._track(asyncio.create_task(self._hangup(row)))
+        if self.closed and not row["task"].done():
+            row["task"].cancel()
 
     def _retire(self, row):
         row["state"] = "closing"
@@ -135,12 +158,28 @@ class TeamVoice:
                                     "expires": self.clock() + RETIRED_SECONDS}
 
     async def _hangup(self, row):
-        if not row["call_id"]: return
+        if self.shutdown_expired: return row["hangup_confirmed"]
+        if row["cancel_task"] is None: self._cancel_task(row)
+        if row["hangup_confirmed"]: return True
+        if not row["call_id"]: return False
         task = row["closing_task"]
         if task is None or task.done():
-            task = row["closing_task"] = self._track(asyncio.create_task(self.broker.hangup(row["call_id"])))
-        await asyncio.shield(task)
-        if self.calls.get(row["id"]) is row: self.calls.pop(row["id"], None)
+            if self.closed:
+                if row["shutdown_attempts"] >= 2: return False
+                remaining = self.shutdown_deadline - asyncio.get_running_loop().time()
+                if remaining <= 0: return False
+                row["shutdown_attempts"] += 1
+            async def finish():
+                if self.closed:
+                    async with asyncio.timeout_at(self.shutdown_deadline):
+                        await self.broker.hangup(row["call_id"])
+                else:
+                    await self.broker.hangup(row["call_id"])
+                row["hangup_confirmed"] = True
+                self._release(row)
+                return True
+            task = row["closing_task"] = self._track(asyncio.create_task(finish()))
+        return await asyncio.shield(task)
 
     async def _cancel_turn(self, row):
         # Acceptance owns this lock through the durable commit and dispatch.
@@ -148,23 +187,45 @@ class TeamVoice:
         # racing Off from starting after this cancellation check.
         async with self.runtime.lock:
             active = self.runtime.active.get(row["room_id"])
-            task = active["task"] if (active and active.get("voice_session_id") == row["id"]
-                    and active["actor"] == row["actor"]["id"]) else None
+            if (active and active.get("voice_session_id") == row["id"]
+                    and active["actor"] == row["actor"]["id"]):
+                row["cancel_run"] = active
+            active = row["cancel_run"]
+            task = active["task"] if active else None
             if task: task.cancel()
         if task: await asyncio.gather(task, return_exceptions=True)
         if task:
-            # A task cancelled before its first instruction never enters the
-            # runtime coroutine's finally block. Settle that durable run too.
+            # Verify durable settlement even if the worker already removed its
+            # in-memory row. fail_run is idempotent for completed/failed runs.
+            # Retain this exact run on transient storage failure for a retry.
             async with self.runtime.lock:
+                await asyncio.to_thread(self.runtime.store.fail_run, row["room_id"], active["run_id"],
+                    "assistant_interrupted" if self.closed or self.runtime.closed else "assistant_failed")
                 if self.runtime.active.get(row["room_id"]) is active:
-                    await asyncio.to_thread(self.runtime.store.fail_run, row["room_id"], active["run_id"],
-                        "assistant_interrupted" if self.runtime.closed else "assistant_failed")
                     self.runtime.active.pop(row["room_id"], None)
+
+    def _release(self, row):
+        task = row["cancel_task"]
+        if (row["hangup_confirmed"] and task is not None and task.done()
+                and not task.cancelled() and task.exception() is None
+                and self.calls.get(row["id"]) is row):
+            self.calls.pop(row["id"], None)
+
+    def _cancel_task(self, row):
+        task = row["cancel_task"]
+        if task is None or task.done() and (task.cancelled() or task.exception() is not None):
+            task = row["cancel_task"] = self._track(asyncio.create_task(self._cancel_turn(row)))
+            task.add_done_callback(lambda done: self._release(row))
+        return task
 
     async def _close(self, row):
         self._retire(row)
-        await self._cancel_turn(row)
-        if row["call_id"]: await self._hangup(row)
+        # Stop the provider even when cancellation or durable run settlement is
+        # slow. Both operations are owned and observed; neither replays work.
+        results = await asyncio.gather(asyncio.shield(self._cancel_task(row)), self._hangup(row),
+                                       return_exceptions=True)
+        for result in results:
+            if isinstance(result, BaseException): raise result
         # A still-opening task owns its eventual hangup; never cancel it just
         # because the initiating HTTP request ended before its answer arrived.
 
@@ -231,18 +292,60 @@ class TeamVoice:
             await self.reap()
 
     async def shutdown(self):
-        self.closed = True
-        if self.reaper:
-            self.reaper.cancel(); await asyncio.gather(self.reaper, return_exceptions=True); self.reaper = None
-        rows = list(self.calls.values())
-        for row in rows: self._retire(row)
-        if rows:
-            await asyncio.gather(*(self._close(row) for row in rows), return_exceptions=True)
-            # Broker negotiation has a 30-second deadline. Let an already sent
-            # offer yield its ID so its owning task can close the provider call.
-            await asyncio.gather(*(row["task"] for row in rows), return_exceptions=True)
-            await asyncio.gather(*(self._hangup(row) for row in rows if row["call_id"]), return_exceptions=True)
-        if self.jobs: await asyncio.gather(*tuple(self.jobs), return_exceptions=True)
+        if self.shutdown_task is None:
+            self.closed = True
+            self.shutdown_deadline = asyncio.get_running_loop().time() + SHUTDOWN_TIMEOUT_SECONDS
+            rows = list(self.calls.values())
+            for row in rows:
+                self._retire(row)
+                row["shutdown_attempts"] = int(row["closing_task"] is not None
+                                                 and not row["closing_task"].done())
+            self.shutdown_task = asyncio.create_task(self._shutdown(rows))
+        await asyncio.shield(self.shutdown_task)
+
+    async def _shutdown(self, rows):
+        # Render's disk-backed Core has a 30s platform window. Uvicorn drains
+        # requests for 2s first; voice uses at most 18s and leaves time for the
+        # remaining Core resources. This is best-effort remote cleanup, never
+        # proof that an unacknowledged allocation or failed hangup ended.
+        loop = asyncio.get_running_loop()
+        margin = min(0.1, SHUTDOWN_TIMEOUT_SECONDS / 10)
+        work_deadline = self.shutdown_deadline - margin
+        allocation_cutoff = work_deadline - min(HANGUP_TIMEOUT_SECONDS, SHUTDOWN_TIMEOUT_SECONDS / 2)
+        reaper, self.reaper = self.reaper, None
+        if reaper: reaper.cancel()
+        try:
+            initial = set()
+            for row in rows:
+                self._cancel_task(row)
+                if row["call_id"]:
+                    initial.add(self._track(asyncio.create_task(self._hangup(row))))
+                    if not row["task"].done(): row["task"].cancel()
+                if not row["task"].done(): initial.add(row["task"])
+            # Give unknown allocations a bounded chance to yield their ID,
+            # reserving one complete provider-close interval afterward.
+            if initial:
+                await asyncio.wait(initial, timeout=max(0, allocation_cutoff - loop.time()))
+            for row in rows:
+                if not row["task"].done():
+                    row["unknown_allocation"] = not bool(row["call_id"])
+                    row["task"].cancel()
+                if row["call_id"] and not row["hangup_confirmed"]:
+                    self._track(asyncio.create_task(self._hangup(row)))
+            # At most one retry per call and all calls share the same deadline.
+            # Re-read the owned set because a cancelled offer may start cleanup.
+            while loop.time() < work_deadline:
+                pending = {task for task in self.jobs if not task.done()}
+                if reaper and not reaper.done(): pending.add(reaper)
+                if not pending: break
+                await asyncio.wait(pending, timeout=max(0, work_deadline - loop.time()))
+        finally:
+            self.shutdown_expired = True
+            pending = {task for task in self.jobs if not task.done()}
+            if reaper and not reaper.done(): pending.add(reaper)
+            for task in pending: task.cancel()
+            if pending:
+                await asyncio.wait(pending, timeout=max(0, self.shutdown_deadline - loop.time()))
 
 
 def service(request):

@@ -25,7 +25,7 @@ TAILSCALE = "/usr/local/bin/tailscale"
 AUTH_ENV = "REIGN_TAILSCALE_AUTHKEY"
 STARTUP_TIMEOUT = 45.0
 COMMAND_TIMEOUT = 5.0
-SHUTDOWN_TIMEOUT = 5.0
+SHUTDOWN_TIMEOUT = 25.0
 POLL_INTERVAL = 0.1
 
 
@@ -49,7 +49,10 @@ def _private_object(info, directory=False):
     if (not correct_type or info.st_uid != os.geteuid()
             or info.st_gid != os.getegid() or stat.S_IMODE(info.st_mode) & 0o077
             or (not directory and info.st_nlink != 1)):
-        raise TailscaleError("Tailscale storage has unsafe ownership, permissions or type")
+        raise TailscaleError(
+            "Tailscale storage has unsafe ownership, permissions or type "
+            f"(uid={info.st_uid} gid={info.st_gid} mode={stat.S_IMODE(info.st_mode):04o} "
+            f"type={stat.S_IFMT(info.st_mode):06o} links={info.st_nlink})")
 
 
 def _check_tree(directory_fd, depth=0):
@@ -104,14 +107,24 @@ def _state_lock():
 
 
 def _runtime_directory():
+    created = False
     try:
         os.mkdir(RUNTIME_DIR, 0o700)
+        created = True
     except FileExistsError:
         pass
     if os.path.realpath(RUNTIME_DIR) != RUNTIME_DIR:
         raise TailscaleError("Tailscale runtime directory must not be a symlink")
     descriptor = os.open(RUNTIME_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
+        if created:
+            # A setgid /tmp can assign its group to a newly created directory.
+            # Normalize only our own new directory, never an existing object.
+            info = os.fstat(descriptor)
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid():
+                raise TailscaleError("New Tailscale runtime directory has unsafe ownership or type")
+            os.fchown(descriptor, -1, os.getegid())
+            os.fchmod(descriptor, 0o700)
         _private_object(os.fstat(descriptor), directory=True)
         # Only a socket from a previous terminated container process is reusable.
         # The persistent state lock has already excluded a concurrent supervisor.
@@ -143,7 +156,7 @@ class _Runtime:
         # Tailscale does not inherit Core's provider, vault or enrollment secrets.
         self.environment = {
             "PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": RUNTIME_DIR,
-            "TMPDIR": RUNTIME_DIR,
+            "TMPDIR": RUNTIME_DIR, "TS_LOGS_DIR": self.state_dir,
         }
         for name in ("SSL_CERT_FILE", "SSL_CERT_DIR", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
                      "http_proxy", "https_proxy", "no_proxy"):
@@ -316,6 +329,8 @@ class _Runtime:
 def run(command, auth_key=None):
     """Return the app's exit code, or fail closed with a sanitized diagnostic."""
     os.environ.pop(AUTH_ENV, None)
+    if auth_key == "":
+        auth_key = None
     if os.geteuid() == 0:
         raise TailscaleError("Tailscale must run as the dedicated non-root Core account")
     hostname = os.environ.get("REIGN_TAILSCALE_HOSTNAME", "")

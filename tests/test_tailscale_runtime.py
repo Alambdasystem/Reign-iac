@@ -95,6 +95,15 @@ class ConfigurationTests(unittest.TestCase):
             with self.assertRaisesRegex(runtime.TailscaleError, "hostname"):
                 runtime.run(["unused"])
 
+    def test_whitespace_and_oversized_keys_still_fail_before_storage(self):
+        with patch.dict(os.environ, {"REIGN_TAILSCALE_HOSTNAME": "render-test"}), \
+                patch.object(runtime, "_state_lock") as storage:
+            for key in (" ", "\t", "value\n", "x" * 4097):
+                with self.subTest(key_length=len(key)):
+                    with self.assertRaisesRegex(runtime.TailscaleError, "auth key configuration"):
+                        runtime.run(["unused"], key)
+            storage.assert_not_called()
+
 
 class StorageTests(unittest.TestCase):
     def setUp(self):
@@ -171,11 +180,58 @@ class StorageTests(unittest.TestCase):
         with patch.object(runtime, "RUNTIME_DIR", str(destination)):
             with self.assertRaises(runtime.TailscaleError):
                 runtime._runtime_directory()
+        self.assertEqual(stat.S_IMODE(destination.stat().st_mode), 0o755)
         destination.rmdir()
         destination.symlink_to(self.mount, target_is_directory=True)
         with patch.object(runtime, "RUNTIME_DIR", str(destination)):
             with self.assertRaises(runtime.TailscaleError):
                 runtime._runtime_directory()
+
+    def test_new_runtime_directory_clears_inherited_setgid(self):
+        parent = self.root / "setgid-parent"
+        parent.mkdir(mode=0o700)
+        parent.chmod(0o2700)
+        destination = parent / "runtime"
+        with patch.object(runtime, "RUNTIME_DIR", str(destination)):
+            runtime._runtime_directory()
+        info = destination.stat()
+        self.assertEqual((info.st_uid, info.st_gid), (os.geteuid(), os.getegid()))
+        self.assertEqual(stat.S_IMODE(info.st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(parent.stat().st_mode), 0o2700)
+
+    def test_new_runtime_directory_wrong_owner_is_not_normalized(self):
+        destination = self.root / "new-runtime"
+        real_fstat = os.fstat
+
+        def wrong_owner(descriptor):
+            info = list(real_fstat(descriptor))
+            info[4] = os.geteuid() + 1
+            return os.stat_result(info)
+
+        with patch.object(runtime, "RUNTIME_DIR", str(destination)), \
+                patch.object(runtime.os, "fstat", side_effect=wrong_owner), \
+                patch.object(runtime.os, "fchown") as chown, \
+                patch.object(runtime.os, "fchmod") as chmod:
+            with self.assertRaisesRegex(runtime.TailscaleError, "unsafe ownership or type"):
+                runtime._runtime_directory()
+            chown.assert_not_called()
+            chmod.assert_not_called()
+
+    def test_existing_runtime_directory_wrong_group_is_not_normalized(self):
+        destination = self.root / "existing-runtime"
+        destination.mkdir(mode=0o700)
+        before = destination.stat()
+        with patch.object(runtime, "RUNTIME_DIR", str(destination)), \
+                patch.object(runtime.os, "getegid", return_value=before.st_gid + 1), \
+                patch.object(runtime.os, "fchown") as chown, \
+                patch.object(runtime.os, "fchmod") as chmod:
+            with self.assertRaisesRegex(runtime.TailscaleError, "unsafe"):
+                runtime._runtime_directory()
+            chown.assert_not_called()
+            chmod.assert_not_called()
+        after = destination.stat()
+        self.assertEqual((after.st_uid, after.st_gid, after.st_mode),
+                         (before.st_uid, before.st_gid, before.st_mode))
 
 
 class ProcessTests(unittest.TestCase):
@@ -216,7 +272,7 @@ class ProcessTests(unittest.TestCase):
         file.chmod(0o700)
         return file
 
-    def _start(self, mode="enroll", app_mode="success", auth=True):
+    def _start(self, mode="enroll", app_mode="success", auth=True, shutdown_timeout=0.2):
         common = "import json,os,pathlib,signal,sys,time\n"
         common += "root=pathlib.Path(" + repr(str(self.root)) + ")\n"
         common += "mode=" + repr(mode) + "\n"
@@ -284,6 +340,9 @@ else:
 (root / "app.env").write_text(json.dumps(dict(os.environ)))
 (root / "app.pid").write_text(str(os.getpid()))
 def stop(signum, frame):
+    if app_mode == "slow_stop":
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        time.sleep(0.2)
     (root / "app.stopped").write_text(str(signum))
     sys.exit(0)
 signal.signal(signal.SIGTERM, stop)
@@ -308,7 +367,7 @@ t.TAILSCALED = %r
 t.TAILSCALE = %r
 t.STARTUP_TIMEOUT = 0.8
 t.COMMAND_TIMEOUT = 0.3
-t.SHUTDOWN_TIMEOUT = 0.2
+t.SHUTDOWN_TIMEOUT = %r
 t.POLL_INTERVAL = 0.01
 t.os.path.ismount = lambda path: path == t.VAULT_MOUNT
 key = os.environ.pop(t.AUTH_ENV, None)
@@ -318,7 +377,7 @@ except t.TailscaleError as error:
     print(str(error), file=sys.stderr)
     code=1
 raise SystemExit(code)
-""" % (str(self.mount), str(self.runtime_dir), str(daemon), str(cli), str(app)))
+""" % (str(self.mount), str(self.runtime_dir), str(daemon), str(cli), shutdown_timeout, str(app)))
         environment = os.environ.copy()
         environment.update({
             "PYTHONPATH": str(self.repo), "REIGN_VAULT_DIR": str(self.mount),
@@ -327,8 +386,8 @@ raise SystemExit(code)
             "OPENAI_API_KEY": "fixture-provider-key-must-not-enter-daemon",
         })
         environment.pop(runtime.AUTH_ENV, None)
-        if auth:
-            environment[runtime.AUTH_ENV] = FIXTURE_KEY
+        if auth is not False:
+            environment[runtime.AUTH_ENV] = FIXTURE_KEY if auth is True else auth
         process = subprocess.Popen([sys.executable, str(runner)], env=environment,
                                    cwd=self.repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.processes.append(process)
@@ -368,6 +427,8 @@ raise SystemExit(code)
             environment = json.loads((self.root / name).read_text())
             self.assertNotIn(runtime.AUTH_ENV, environment)
         self.assertNotIn("OPENAI_API_KEY", json.loads((self.root / "daemon.env").read_text()))
+        self.assertEqual(json.loads((self.root / "daemon.env").read_text())["TS_LOGS_DIR"],
+                         str(self.mount / "tailscale"))
         daemon_args = json.loads((self.root / "daemon.args").read_text())
         self.assertIn("--tun=userspace-networking", daemon_args)
         self.assertFalse(any("socks5" in argument or "http-proxy" in argument for argument in daemon_args))
@@ -381,6 +442,20 @@ raise SystemExit(code)
         self._finished(process, 0)
         self.assertFalse(any(call[0] == "up" for call in self._calls()))
         self.assertFalse((self.root / "auth.observed").exists())
+
+    def test_empty_key_reuses_running_identity_without_enrollment(self):
+        process = self._start(mode="running", auth="")
+        self._finished(process, 0)
+        self.assertFalse(any(call[0] == "up" for call in self._calls()))
+        self.assertFalse((self.root / "auth.observed").exists())
+        self.assertNotIn(runtime.AUTH_ENV, json.loads((self.root / "app.env").read_text()))
+
+    def test_empty_key_with_fresh_state_fails_before_app(self):
+        process = self._start(auth="")
+        _, stderr = self._finished(process, 1)
+        self.assertIn(b"requires a configured auth key", stderr)
+        self.assertFalse((self.root / "app.started").exists())
+        self.assertFalse(any(call[0] == "up" for call in self._calls()))
 
     def test_loading_saved_identity_waits_instead_of_reenrolling(self):
         process = self._start(mode="loading", auth=False)
@@ -426,6 +501,17 @@ raise SystemExit(code)
 
     def test_sigterm_is_forwarded_to_app_and_daemon(self):
         process = self._start(mode="running", app_mode="wait", auth=False)
+        self._wait_marker("app.started", process)
+        process.send_signal(signal.SIGTERM)
+        self._finished(process, 128 + signal.SIGTERM)
+        self.assertTrue((self.root / "app.stopped").exists())
+        self.assertTrue((self.root / "daemon.stopped").exists())
+
+    def test_cooperative_app_can_finish_cleanup_within_shared_grace(self):
+        # Scale production's 25s grace to 0.5s. This 0.2s cleanup would be
+        # killed by the former 5s grace scaled the same way (0.1s).
+        process = self._start(mode="running", app_mode="slow_stop", auth=False,
+                              shutdown_timeout=runtime.SHUTDOWN_TIMEOUT / 50)
         self._wait_marker("app.started", process)
         process.send_signal(signal.SIGTERM)
         self._finished(process, 128 + signal.SIGTERM)

@@ -102,6 +102,43 @@ class BrokerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(KEY.encode(),response.body)
         self.assertNotIn(b"private upstream body",response.body)
 
+    async def test_allocation_callback_owns_cleanup_before_sdp_body_finishes(self):
+        reading = asyncio.Event()
+        allocated, requests = [], []
+        class HeldBody(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                reading.set()
+                await asyncio.Event().wait()
+                yield SDP.encode()
+        def provider(request):
+            requests.append(request.url.path)
+            return httpx.Response(201, headers={"location": "/v1/realtime/calls/rtc_owned"}, stream=HeldBody())
+        with patch.dict(os.environ, SETTINGS):
+            async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http:
+                broker = VoiceBroker(http)
+                opening = asyncio.create_task(broker.offer(SDP, scope="team", include_call_id=True,
+                                                           on_call_id=allocated.append))
+                await asyncio.wait_for(reading.wait(), 0.5)
+                self.assertEqual(allocated, ["rtc_owned"])
+                opening.cancel()
+                with self.assertRaises(asyncio.CancelledError): await opening
+                self.assertEqual(broker.pending, 0)
+        # The owner now closes the call; the broker cannot race a second close.
+        self.assertEqual(requests, ["/v1/realtime/calls"])
+
+    async def test_rejected_allocation_callback_leaves_cleanup_with_broker(self):
+        requests = []
+        def provider(request):
+            requests.append(request.url.path)
+            if request.url.path.endswith("/hangup"): return httpx.Response(204)
+            return httpx.Response(201, text=SDP, headers={"location": "/v1/realtime/calls/rtc_unclaimed"})
+        def reject(call_id): raise RuntimeError("synthetic internal callback failure")
+        with patch.dict(os.environ, SETTINGS):
+            async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http:
+                with self.assertRaises(RuntimeError):
+                    await VoiceBroker(http).offer(SDP, scope="team", include_call_id=True, on_call_id=reject)
+        self.assertEqual(requests, ["/v1/realtime/calls", "/v1/realtime/calls/rtc_unclaimed/hangup"])
+
     def test_capabilities_are_safe_and_unconfigured_without_key(self):
         with patch.dict(os.environ, {**SETTINGS, "OPENAI_API_KEY": ""}):
             result = capabilities()

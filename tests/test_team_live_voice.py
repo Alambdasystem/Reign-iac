@@ -13,7 +13,7 @@ from reign.team_api import TeamRuntime, install as install_team
 from reign.team_identity import ACTOR_HEADER, issue_actor
 from reign.team_store import TeamError, TeamStore, owner_identity
 from reign.team_voice import TeamVoice, install as install_voice
-from reign.voice import VoiceError, voice_error_response
+from reign.voice import VoiceBroker, VoiceError, voice_error_response
 
 SDP = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
 TOKEN = "synthetic-team-live-voice-service-token-12345678"
@@ -70,7 +70,9 @@ class LiveVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["voice_session_id"], self.session)
         self.assertEqual(result["max_duration_seconds"], 3600)
         self.assertNotIn("call_id", result)
-        self.assertEqual(self.broker.offer.await_args.kwargs, {"scope": "team", "include_call_id": True})
+        self.assertEqual(self.broker.offer.await_args.kwargs["scope"], "team")
+        self.assertTrue(self.broker.offer.await_args.kwargs["include_call_id"])
+        self.assertTrue(callable(self.broker.offer.await_args.kwargs["on_call_id"]))
         for message in ("Can you hear me?", "Now help me plan the next step."):
             accepted = await self.voice.turn(self.owner, self.room, self.session, uid(), message)
             self.assertEqual(accepted["event"]["data"]["input_source"], "voice")
@@ -231,6 +233,169 @@ class LiveVoiceTests(unittest.IsolatedAsyncioTestCase):
         await self.voice.reap()
         self.broker.hangup.assert_awaited_with("rtc_failed_negotiation_fixture")
         self.assertNotIn(self.session, self.voice.calls)
+
+    async def test_confirmed_hangup_retains_failed_durable_cancellation_for_reaper_retry(self):
+        await self.open()
+        # Drive acceptance directly so cancellation can occur before the
+        # separately scheduled worker gets its first instruction.
+        payload = self.runtime.message_data({"client_message_id": uid(), "text": "A pending spoken task",
+            "ask_reign": True, "speak": True, "attachment_ids": [],
+            "input_source": "voice", "voice_session_id": self.session})
+        receipt = await self.runtime._accept_message(self.owner, self.room, payload)
+        task = self.runtime.active[self.room]["task"]
+        task.cancel()  # Cancel before its coroutine can enter its own finally.
+        await asyncio.gather(task, return_exceptions=True)
+        self.assertIn(self.room, self.runtime.active)
+        fail_run = self.store.fail_run
+        attempts = 0
+        def transient_failure(*args):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1: raise OSError("synthetic temporary storage failure")
+            return fail_run(*args)
+        with patch.object(self.store, "fail_run", side_effect=transient_failure):
+            with self.assertRaises(OSError):
+                await self.voice.close(self.owner, self.room, self.session)
+            row = self.voice.calls[self.session]
+            self.assertTrue(row["hangup_confirmed"])
+            self.assertIn(self.room, self.runtime.active)
+            self.broker.hangup.assert_awaited_once()
+            await self.voice.reap()
+        self.assertNotIn(self.session, self.voice.calls)
+        self.assertNotIn(self.room, self.runtime.active)
+        self.broker.hangup.assert_awaited_once()
+        errors = [event for event in self.store.events(self.owner, self.room)["events"]
+                  if event["type"] == "assistant_error" and event["data"]["run_id"] == receipt["run_id"]]
+        self.assertEqual(len(errors), 1)
+
+    async def test_shutdown_closes_all_known_calls_without_waiting_for_room_cancellation(self):
+        await self.open()
+        member_connection, member_session = uid(), uid()
+        await self.presence(self.member, connection=member_connection)
+        self.broker.offer.side_effect = lambda *args, **kwargs: {
+            "sdp": SDP, "type": "answer", "model": "synthetic", "call_id": "rtc_member_fixture"}
+        await self.open(self.member, connection=member_connection, session=member_session)
+        all_started, cancellation_release, cancelled = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        started = set()
+        async def hangup(call_id):
+            started.add(call_id)
+            if len(started) == 2: all_started.set()
+            await all_started.wait()
+        async def slow_cancel(row):
+            try: await cancellation_release.wait()
+            finally: cancelled.set()
+        self.broker.hangup.side_effect = hangup
+        loop = asyncio.get_running_loop()
+        begin = loop.time()
+        with patch("reign.team_voice.SHUTDOWN_TIMEOUT_SECONDS", 0.3), \
+                patch.object(self.voice, "_cancel_turn", side_effect=slow_cancel):
+            shutting_down = asyncio.create_task(self.voice.shutdown())
+            await asyncio.wait_for(all_started.wait(), 0.2)
+            self.assertTrue(self.voice.closed)
+            self.assertTrue(all(row["state"] == "closing" for row in self.voice.calls.values()))
+            self.assertEqual(len(self.voice.calls), 2, "Pending room settlement must retain its reservation")
+            cancellation_release.set()
+            await asyncio.wait_for(shutting_down, 0.7)
+        self.assertLess(loop.time() - begin, 0.7)
+        self.assertTrue(cancelled.is_set())
+        self.assertFalse(self.voice.calls)
+        self.assertEqual(self.broker.hangup.await_count, 2)
+        await self.voice.shutdown()
+        self.assertEqual(self.broker.hangup.await_count, 2, "Confirmed closes must not be repeated")
+
+    async def test_shutdown_retries_failed_close_once_and_keeps_failure_unconfirmed(self):
+        await self.open()
+        self.broker.hangup.side_effect = VoiceError("voice_provider_unavailable")
+        with patch("reign.team_voice.SHUTDOWN_TIMEOUT_SECONDS", 0.2):
+            await asyncio.wait_for(self.voice.shutdown(), 0.5)
+        self.assertEqual(self.broker.hangup.await_count, 2)
+        row = self.voice.calls[self.session]
+        self.assertEqual(row["state"], "closing")
+        self.assertFalse(row["hangup_confirmed"])
+
+    async def test_shutdown_retry_can_confirm_close_without_an_extra_successful_hangup(self):
+        await self.open()
+        self.broker.hangup.side_effect = [VoiceError("voice_provider_unavailable"), True]
+        with patch("reign.team_voice.SHUTDOWN_TIMEOUT_SECONDS", 0.2):
+            await asyncio.wait_for(self.voice.shutdown(), 0.5)
+        self.assertFalse(self.voice.calls)
+        self.assertEqual(self.broker.hangup.await_count, 2)
+        await self.voice.shutdown()
+        self.assertEqual(self.broker.hangup.await_count, 2)
+
+    async def test_shutdown_deadline_cancels_unresponsive_provider_without_claiming_success(self):
+        await self.open()
+        started = asyncio.Event()
+        async def unresponsive(call_id):
+            started.set(); await asyncio.Event().wait()
+        self.broker.hangup.side_effect = unresponsive
+        with patch("reign.team_voice.SHUTDOWN_TIMEOUT_SECONDS", 0.12):
+            await asyncio.wait_for(self.voice.shutdown(), 0.5)
+        self.assertTrue(started.is_set())
+        self.assertFalse(self.voice.calls[self.session]["hangup_confirmed"])
+        self.assertTrue(all(task.done() for task in self.voice.jobs))
+
+    async def test_shutdown_bounds_unknown_allocation_and_retains_unconfirmed_reservation(self):
+        started = asyncio.Event()
+        async def no_headers(*args, **kwargs):
+            started.set(); await asyncio.Event().wait()
+        self.broker.offer.side_effect = no_headers
+        opening = asyncio.create_task(self.open())
+        await started.wait()
+        with patch("reign.team_voice.SHUTDOWN_TIMEOUT_SECONDS", 0.12):
+            await asyncio.wait_for(self.voice.shutdown(), 0.5)
+        with self.assertRaises(asyncio.CancelledError): await opening
+        row = self.voice.calls[self.session]
+        self.assertEqual(row["state"], "closing")
+        self.assertTrue(row["unknown_allocation"])
+        self.assertFalse(row["hangup_confirmed"])
+        self.broker.hangup.assert_not_awaited()
+
+    async def test_shutdown_retains_natural_unconfirmed_offer_failure_before_cutoff(self):
+        started, fail = asyncio.Event(), asyncio.Event()
+        async def unknown_failure(*args, **kwargs):
+            started.set(); await fail.wait()
+            raise VoiceError("voice_provider_timeout")
+        self.broker.offer.side_effect = unknown_failure
+        opening = asyncio.create_task(self.open())
+        await started.wait()
+        with patch("reign.team_voice.SHUTDOWN_TIMEOUT_SECONDS", 0.2):
+            shutting_down = asyncio.create_task(self.voice.shutdown())
+            await asyncio.sleep(0)
+            fail.set()
+            with self.assertRaises(VoiceError): await opening
+            await asyncio.wait_for(shutting_down, 0.5)
+        row = self.voice.calls[self.session]
+        self.assertTrue(row["unknown_allocation"])
+        self.assertFalse(row["hangup_confirmed"])
+        self.broker.hangup.assert_not_awaited()
+
+    async def test_provider_location_before_stalled_sdp_is_closed_once_during_shutdown(self):
+        body_started, body_closed = asyncio.Event(), asyncio.Event()
+        requests = []
+        class SlowBody(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                body_started.set()
+                await asyncio.Event().wait()
+                yield SDP.encode()
+            async def aclose(self): body_closed.set()
+        def provider(request):
+            requests.append(request.url.path)
+            if request.url.path.endswith("/hangup"): return httpx.Response(204)
+            return httpx.Response(201, headers={"location": "/v1/realtime/calls/rtc_slow_sdp"}, stream=SlowBody())
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "synthetic-shutdown-provider-key",
+                                     "OPENAI_BASE_URL": "https://voice.example.test/v1"}):
+            async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http:
+                self.voice.broker = VoiceBroker(http)
+                opening = asyncio.create_task(self.open())
+                await asyncio.wait_for(body_started.wait(), 0.5)
+                self.assertEqual(self.voice.calls[self.session]["call_id"], "rtc_slow_sdp")
+                with patch("reign.team_voice.SHUTDOWN_TIMEOUT_SECONDS", 0.3):
+                    await asyncio.wait_for(self.voice.shutdown(), 0.6)
+                with self.assertRaises(asyncio.CancelledError): await opening
+        self.assertTrue(body_closed.is_set())
+        self.assertFalse(self.voice.calls)
+        self.assertEqual(requests, ["/v1/realtime/calls", "/v1/realtime/calls/rtc_slow_sdp/hangup"])
 
     async def test_public_routes_require_identity_and_only_voice_route_supplies_origin(self):
         def authorize(request):
