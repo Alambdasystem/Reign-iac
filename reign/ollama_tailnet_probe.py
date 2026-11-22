@@ -19,7 +19,7 @@ USER = "owner"
 MODEL = "qwen3:4b"
 SOCKET = "/tmp/reign-tailscale/tailscaled.sock"
 HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKgYrB+77QPXhFJVvsFdZNc8QT2s4rk15GMoXh2uHmpQ"
-KEY_NAMES = ("REIGN_BACKEND_SSH_PRIVATE_KEY", "REIGN_SSH_PRIVATE_KEY", "REIGN_OLLAMA_SSH_PRIVATE_KEY")
+KEY_NAMES = ("REIGN_BACKEND_SSH_PRIVATE_KEY", "REIGN_SSH_PRIVATE_KEY", "REIGN_OLLAMA_SSH_PRIVATE_KEY", "REIGN_BACKEND_SSH_KEY", "REIGN_OLLAMA_SSH_KEY")
 MAX_RESPONSE = 32768
 
 
@@ -73,7 +73,8 @@ async def probe():
         ]
         started = time.monotonic()
         process = subprocess.Popen(args, stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+                                   stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                                   env={\"HOME\": str(root), \"PATH\": \"/usr/local/bin:/usr/bin:/bin\", \"LANG\": \"C\"})
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(45.0, connect=3.0),
                                          trust_env=False, follow_redirects=False) as client:
