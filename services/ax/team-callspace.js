@@ -49,6 +49,7 @@ export function createCallspaceWorkspace(deps = {}) {
   let savedFeedScroll = null;
   let roomRevision = 0;
   let menuSection = 'rooms';
+  let composerLayout = null;
   const pendingTimers = new Set();
   const disposers = [];
   const moves = [];
@@ -421,7 +422,20 @@ export function createCallspaceWorkspace(deps = {}) {
   function updateComposer() {
     composer.dataset.hasDraft = String(!!input.value.trim() || ($('attachmentList') && !$('attachmentList').hidden));
     input.style.height = 'auto';
-    input.style.height = `${Math.min(128, Math.max(49, input.scrollHeight || 49))}px`;
+    const height = Math.min(128, Math.max(49, input.scrollHeight || 49));
+    input.style.height = `${height}px`;
+    shell.style.setProperty('--callspace-composer-height', `${height}px`);
+  }
+  function updateComposerForLayout() {
+    if (destroyed) return;
+    const { width, height } = dimensions();
+    const layout = [width, height, composer.getBoundingClientRect().width,
+      win.visualViewport?.width || 0, win.visualViewport?.height || 0].join(':');
+    if (layout === composerLayout) return;
+    // Track container / viewport dimensions, never the textarea's own height.
+    // A wrapped draft can grow after a resize without feeding a resize loop.
+    composerLayout = layout;
+    updateComposer();
   }
   listen(input, 'input', updateComposer);
   listen(input, 'focus', () => { if (mode === 'call') setMode('chat'); updateComposer(); });
@@ -501,13 +515,13 @@ export function createCallspaceWorkspace(deps = {}) {
   function onResize() {
     if (drag) releaseDrag(true);
     if (resizeFrame !== null) return;
-    resizeFrame = win.requestAnimationFrame(() => { resizeFrame = null; renderGeometry(); });
+    resizeFrame = win.requestAnimationFrame(() => { resizeFrame = null; renderGeometry(); updateComposerForLayout(); });
   }
   listen(win, 'resize', onResize);
   listen(win, 'orientationchange', onResize);
   listen(win.visualViewport, 'resize', onResize);
   const Resize = deps.ResizeObserver || win.ResizeObserver;
-  const resizeObserver = Resize ? new Resize(renderGeometry) : null;
+  const resizeObserver = Resize ? new Resize(() => { renderGeometry(); updateComposerForLayout(); }) : null;
   resizeObserver?.observe(shell);
   if ($('callParticipants')) resizeObserver?.observe($('callParticipants'));
   const Mutation = deps.MutationObserver || win.MutationObserver;
@@ -553,7 +567,7 @@ export function createCallspaceWorkspace(deps = {}) {
   showMenuSection('rooms');
   setMode('chat');
   syncWorkspaceAccess();
-  updateComposer();
+  updateComposerForLayout();
   return controller;
 }
 

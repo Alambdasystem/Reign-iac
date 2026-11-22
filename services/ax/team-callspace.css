@@ -45,6 +45,8 @@ body.callspace-ready {
 .callspace-shell {
   --callspace-transcript-top: 174px;
   --callspace-transcript-opacity: 1;
+  --callspace-composer-height: 49px;
+  --callspace-composer-extra: max(0px, calc(var(--callspace-composer-height) - 49px));
   position: relative;
   height: 100vh;
   height: 100dvh;
@@ -113,14 +115,14 @@ body.callspace-ready {
 .callspace-shell[data-mode="split"] .callspace-drag-handle { bottom: 10px; width: 40px; }
 .callspace-shell[data-mode="call"] .callspace-face { top: 0; }
 .callspace-shell[data-mode="call"] .portrait-shade { inset: 25% 0 0; background: linear-gradient(transparent 45%, #0e120ac9); }
-.callspace-shell[data-mode="call"] .reign-name { left: 24px; bottom: 184px; font-size: 23px; }
-.callspace-shell[data-mode="call"] .callspace-drag-handle { bottom: 147px; width: 40px; }
+.callspace-shell[data-mode="call"] .reign-name { left: 24px; bottom: calc(184px + var(--callspace-composer-extra)); font-size: 23px; }
+.callspace-shell[data-mode="call"] .callspace-drag-handle { bottom: calc(147px + var(--callspace-composer-extra)); width: 40px; }
 
 .callspace-ready #callspaceTranscript {
   position: absolute;
   z-index: 5;
   top: calc(var(--callspace-transcript-top) + env(safe-area-inset-top));
-  bottom: calc(136px + env(safe-area-inset-bottom));
+  bottom: calc(136px + env(safe-area-inset-bottom) + var(--callspace-composer-extra));
   left: max(16px, calc((100% - 880px) / 2));
   right: max(16px, calc((100% - 880px) / 2));
   display: flex;
@@ -158,7 +160,8 @@ body.callspace-ready {
 .callspace-shell[data-mode="call"] #callspaceTranscript { visibility: hidden; pointer-events: none; }
 .callspace-activity { position: absolute; z-index: 6; top: calc(var(--callspace-transcript-top) - 34px + env(safe-area-inset-top)); left: max(16px, calc((100% - 880px) / 2)); right: max(16px, calc((100% - 880px) / 2)); color: #a1a39b; font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: top .4s cubic-bezier(.22,.8,.2,1); pointer-events: none; }
 .callspace-shell[data-dragging="true"] .callspace-activity { transition: none; }
-.callspace-shell[data-mode="call"] .callspace-activity { top: auto; bottom: calc(106px + env(safe-area-inset-bottom)); left: 24px; right: 24px; color: #ffffffe0; font-size: 13px; font-weight: 500; line-height: 1.5; white-space: normal; max-height: 40px; }
+.callspace-shell[data-mode="call"] .callspace-activity { top: auto; bottom: calc(106px + env(safe-area-inset-bottom) + var(--callspace-composer-extra)); left: 24px; right: 24px; color: #ffffffe0; font-size: 13px; font-weight: 500; line-height: 1.5; white-space: normal; max-height: 40px; }
+.callspace-shell[data-mode="call"]:has(.callspace-composer[data-has-draft="true"]) .callspace-activity { bottom: calc(128px + env(safe-area-inset-bottom) + var(--callspace-composer-extra)); }
 
 .callspace-dock { position: absolute; z-index: 15; bottom: max(16px, calc(env(safe-area-inset-bottom) + 12px)); left: 50%; transform: translateX(-50%); width: min(calc(100% - 24px), 900px); }
 .callspace-dock-row { display: grid; grid-template-columns: 49px 49px minmax(0,1fr); align-items: end; gap: 8px; }
@@ -183,7 +186,7 @@ body.callspace-ready {
 .callspace-ready .callspace-composer .composer-actions .primary { color: white; background: #151713; border-color: #151713; }
 .callspace-ready .callspace-composer .attachment-list { position: absolute; bottom: calc(100% + 58px); right: 0; max-width: min(340px, 80vw); margin: 0; }
 .callspace-ready .attachment-chip { color: #555c4e; background: #f2f5ed; border-color: #dce3d1; }
-.callspace-feedback { position: absolute; left: 0; right: 0; bottom: 111px; max-height: 78px; overflow-y: auto; font-size: 12px; pointer-events: auto; }
+.callspace-feedback { position: absolute; left: 0; right: 0; bottom: calc(111px + var(--callspace-composer-extra)); max-height: 78px; overflow-y: auto; font-size: 12px; pointer-events: auto; }
 .callspace-feedback .form-status { margin: 0; color: #868c7d; font-size: 12px; line-height: 1.5; }
 .callspace-feedback .form-status:empty { display: none; }
 .callspace-feedback #retryMessage { min-height: 30px; padding: 5px 10px; margin-top: 4px; font-size: 11px; border-radius: 18px; background: #fff; }
@@ -308,7 +311,7 @@ body.callspace-ready {
 @media (min-width: 760px) {
   .callspace-topbar { top: max(28px, calc(env(safe-area-inset-top) + 18px)); inset-inline: 28px; }
   .callspace-ready .callspace-topbar > .callspace-icon { width: 49px; height: 49px; min-height: 49px; }
-  .callspace-ready #callspaceTranscript { bottom: 144px; }
+  .callspace-ready #callspaceTranscript { bottom: calc(144px + env(safe-area-inset-bottom) + var(--callspace-composer-extra)); }
   .callspace-dock { bottom: max(25px, calc(env(safe-area-inset-bottom) + 14px)); }
   .callspace-ready .message { margin-bottom: 32px; }
   .callspace-ready #callspaceTranscript .room-header { margin-bottom: 26px; }
@@ -322,7 +325,9 @@ body.callspace-ready {
   .callspace-shell[data-mode="call"] .callspace-activity { left: max(28px, calc((100% - 900px) / 2)); right: max(28px, calc((100% - 900px) / 2)); }
 }
 @media (max-height: 600px) and (min-width: 600px) {
-  .callspace-ready #callspaceTranscript { top: 133px; bottom: 110px; }
+  .callspace-ready #callspaceTranscript { top: 133px; bottom: calc(110px + env(safe-area-inset-bottom) + var(--callspace-composer-extra)); }
+  .callspace-shell:has(.callspace-composer[data-has-draft="true"]) #callspaceTranscript,
+  .callspace-shell:has(.callspace-composer:focus-within) #callspaceTranscript { bottom: calc(144px + env(safe-area-inset-bottom) + var(--callspace-composer-extra)); }
   .callspace-shell[data-mode="chat"] #roomView:has(#liveCameraView:not([hidden])):has(#callParticipants:not(:empty)) #callspaceTranscript { top: calc(var(--callspace-transcript-top) + env(safe-area-inset-top)); }
   .callspace-shell[data-mode="split"] #callspaceTranscript { left: 52%; top: 103px; right: 24px; }
   .callspace-shell[data-mode="split"] .callspace-face { left: 16px; top: 92px; width: calc(48% - 16px); height: calc(100% - 180px); }

@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 from playwright.async_api import async_playwright, expect
-from team_callspace_smoke import callspace_click, callspace_control, callspace_media_roundtrip, callspace_mode, close_callspace_panel
+from team_callspace_smoke import callspace_click, callspace_control, callspace_media_roundtrip, callspace_mode, close_callspace_panel, settled_callspace_view
 
 AX = "https://ax:10000"
 OUTPUT = Path("/evidence")
@@ -464,14 +464,49 @@ async def main():
                     await expect(current.locator("#presenceList")).not_to_contain_text("camera", timeout=10000)
                     await expect(current.locator("#presenceList")).not_to_contain_text("screen", timeout=10000)
                 passed("T09 camera disable removes stale remote tile; leaving releases tracks/peers and clears both viewers’ media indicators while preserving room")
+                await page.set_viewport_size({"width": 1280, "height": 900})
+                saved_draft = await page.locator("#messageInput").input_value()
+                resize_draft = "Keep this unsent thought intact when a wide desktop conversation becomes a narrow phone screen."
+                await (await callspace_control(page, "#messageInput")).fill(resize_draft)
+                await page.locator("#callspaceFace").focus()
+                await settled_callspace_view(page, "chat")
+                desktop_draft_height = await page.locator("#messageInput").evaluate("input => input.getBoundingClientRect().height")
+                assert desktop_draft_height < 128, "Resize fixture must fit below the textarea height cap on desktop"
+                draft_sizes = []
                 for width in (360, 390, 430, 1280):
                     await page.set_viewport_size({"width": width, "height": 900})
+                    await settled_callspace_view(page, "chat")
+                    # No input/focus event is sent after resize: wrapping itself
+                    # must update the existing draft's height and reserved space.
+                    await page.wait_for_function("""() => {
+                        const input = document.getElementById('messageInput');
+                        return Math.abs(input.getBoundingClientRect().height - Math.min(128, Math.max(49, input.scrollHeight))) <= 1;
+                    }""")
+                    draft_geometry = await page.evaluate("""() => {
+                        const input = document.getElementById('messageInput');
+                        const actions = document.querySelector('.callspace-composer .composer-actions');
+                        return {height: input.getBoundingClientRect().height, scrollHeight: input.scrollHeight,
+                            feedBottom: document.getElementById('eventFeed').getBoundingClientRect().bottom,
+                            transcriptBottom: document.getElementById('callspaceTranscript').getBoundingClientRect().bottom,
+                            actionsTop: actions.getBoundingClientRect().top,
+                            actionsVisible: getComputedStyle(actions).display !== 'none'};
+                    }""")
+                    await expect(page.locator("#messageInput")).to_have_value(resize_draft)
+                    assert draft_geometry["actionsVisible"] is True
+                    assert draft_geometry["feedBottom"] <= draft_geometry["actionsTop"] + 1, draft_geometry
+                    assert draft_geometry["transcriptBottom"] <= draft_geometry["actionsTop"] + 1, draft_geometry
+                    if width < 600:
+                        assert draft_geometry["height"] > desktop_draft_height, draft_geometry
+                    else:
+                        assert abs(draft_geometry["height"] - desktop_draft_height) <= 1, draft_geometry
+                    draft_sizes.append({"width": width, **draft_geometry})
                     assert await page.evaluate("() => document.documentElement.scrollWidth <= innerWidth"), f"overflow at {width}"
                     for selector in ("#logoutButton", "#askReign", "#sendMessage"):
                         await (await callspace_control(page, selector)).scroll_into_view_if_needed()
                         assert await page.locator(selector).evaluate("el=>{const r=el.getBoundingClientRect();return r.width>=40&&r.height>=32}")
                     await close_callspace_panel(page)
                     await page.locator("#callspaceShell").scroll_into_view_if_needed()
+                    await settled_callspace_view(page, "chat")
                     await page.screenshot(path=str(OUTPUT / f"team-initial-{width}.png"), full_page=width == 390)
                     if width == 390:
                         for mode in ("split", "call"):
@@ -479,6 +514,9 @@ async def main():
                             await page.screenshot(path=str(OUTPUT / f"team-callspace-{mode}-390.png"))
                         await callspace_mode(page, "chat")
                 passed("T10 shared workspace fits 360/390/430/1280 widths with usable action targets")
+                callspace_receipt["responsiveDraft"] = draft_sizes
+                passed("T22 an existing long draft grows and shrinks with the viewport while the transcript stays above its visible actions")
+                await (await callspace_control(page, "#messageInput")).fill(saved_draft)
                 assert not any(path.startswith(("/api/chat", "/api/sessions", "/api/accounts", "/api/voice")) for path in employee_requests)
                 assert not any(path.endswith(".onnx") or "/avatar-assets/ort/" in path for path in employee_requests)
                 passed("T11 employee shared page requests no private owner API or neural model runtime")

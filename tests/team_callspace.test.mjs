@@ -107,7 +107,10 @@ class Node extends Target {
   click() { if (!this.disabled) this.emit('click', {bubbles: true}); }
   showModal() { this.open = true; }
   close() { this.open = false; this.emit('close'); }
-  getBoundingClientRect() { return {x: 0, y: 0, top: 0, left: 0, width: 390, height: 844, right: 390, bottom: 844}; }
+  getBoundingClientRect() {
+    const {width = 390, height = 844} = this.rect || {};
+    return {x: 0, y: 0, top: 0, left: 0, width, height, right: width, bottom: height};
+  }
   setPointerCapture(id) { this.pointerId = id; }
   hasPointerCapture(id) { return this.pointerId === id; }
   releasePointerCapture(id) { if (this.pointerId === id) { this.pointerId = null; this.emit('lostpointercapture'); } }
@@ -120,7 +123,7 @@ function harness({reducedMotion = false, withLiveCamera = true} = {}) {
   doc.createComment = () => new Node('#comment', doc);
   doc.getElementById = id => doc.querySelector('#' + id);
   doc.body = doc.createElement('body'); doc.append(doc.body); doc.activeElement = doc.body;
-  const win = new Target(), frames = new Map(), timers = new Map(), observers = []; let job = 0;
+  const win = new Target(), frames = new Map(), timers = new Map(), observers = [], resizeObservers = []; let job = 0;
   Object.assign(win, {innerWidth: 390, innerHeight: 844, visualViewport: new Target(),
     matchMedia: () => ({matches: reducedMotion}),
     requestAnimationFrame: fn => { frames.set(++job, fn); return job; }, cancelAnimationFrame: id => frames.delete(id),
@@ -129,7 +132,10 @@ function harness({reducedMotion = false, withLiveCamera = true} = {}) {
       constructor(callback) { this.callback = callback; this.connected = true; this.targets = new Map(); observers.push(this); }
       observe(target, options) { this.targets.set(target, options); } disconnect() { this.connected = false; }
     },
-    ResizeObserver: class { observe() {} disconnect() {} },
+    ResizeObserver: class {
+      constructor(callback) { this.callback = callback; this.connected = true; this.targets = new Set(); resizeObservers.push(this); }
+      observe(target) { this.targets.add(target); } disconnect() { this.connected = false; }
+    },
   });
   doc.defaultView = win;
   const make = (tag, id, parent, className = '') => {
@@ -202,6 +208,7 @@ function harness({reducedMotion = false, withLiveCamera = true} = {}) {
       }
     },
     frame() { for (const [id, fn] of [...frames]) { frames.delete(id); fn(); } },
+    resizeObserved(target) { for (const observer of resizeObservers) if (observer.connected && observer.targets.has(target)) observer.callback([{target}]); },
   };
 }
 
@@ -276,6 +283,32 @@ test('keyboard full-face and shrink remain usable without a drawer or media rest
   h.node('callspaceEnd').click(); assert.equal(h.controller.getMode(), 'chat', 'ending an idle expanded view must only return to chat');
   h.controller.setMode('call');
   h.node('messageInput').focus(); assert.equal(h.controller.getMode(), 'chat', 'typing restores the conversation');
+  assertPreserved(h, media); h.controller.destroy();
+});
+
+test('an existing draft resizes and reserves space after viewport or container changes without losing text or selection', () => {
+  const h = harness(), input = h.node('messageInput'), shell = h.node('callspaceShell'), media = snapshotMedia(h);
+  const draft = input.value, selection = [input.selectionStart, input.selectionEnd];
+  shell.rect = {width: 1280, height: 900}; input.scrollHeight = 49;
+  h.win.emit('resize'); h.frame();
+  assert.equal(input.style.height, '49px');
+  assert.equal(shell.style.getPropertyValue('--callspace-composer-height'), '49px');
+  shell.rect.width = 390; input.scrollHeight = 99;
+  h.win.emit('resize'); h.frame();
+  assert.equal(input.style.height, '99px', 'wrapped draft did not grow on window resize');
+  assert.equal(shell.style.getPropertyValue('--callspace-composer-height'), '99px');
+  shell.rect.width = 360; input.scrollHeight = 224; h.resizeObserved(shell);
+  assert.equal(input.style.height, '128px', 'container resize did not apply the bounded textarea height');
+  assert.equal(shell.style.getPropertyValue('--callspace-composer-height'), '128px');
+  let heightWrites = 0, currentHeight = input.style.height;
+  Object.defineProperty(input.style, 'height', {configurable: true,
+    get: () => currentHeight, set: value => { heightWrites++; currentHeight = value; }});
+  h.resizeObserved(shell); h.resizeObserved(h.node('callParticipants'));
+  assert.equal(heightWrites, 0, 'unchanged layout caused another autosize cycle');
+  shell.rect.width = 1280; input.scrollHeight = 49; h.resizeObserved(shell);
+  assert.equal(input.style.height, '49px');
+  assert.equal(shell.style.getPropertyValue('--callspace-composer-height'), '49px');
+  assert.equal(input.value, draft); assert.deepEqual([input.selectionStart, input.selectionEnd], selection);
   assertPreserved(h, media); h.controller.destroy();
 });
 
