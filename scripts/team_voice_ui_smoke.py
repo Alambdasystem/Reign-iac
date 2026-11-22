@@ -283,13 +283,13 @@ async def continuous_team_voice_ui(browser, storage_state, origin, evidence):
         await page.wait_for_function("""() => Number(document.querySelector('#reignAvatar').dataset.mouth) > .05 &&
             document.querySelector('#reignAvatar').dataset.expression === 'concerned'""")
         await page.evaluate('__teamLiveVoice.finishOutput()')
-        await page.wait_for_function("document.querySelector('#reignAvatar').dataset.speaking === 'false'")
+        await page.wait_for_function("() => document.querySelector('#reignAvatar').dataset.speaking === 'false'")
         await page.evaluate('__teamLiveVoice.begin()')
         await page.evaluate("__teamLiveVoice.finish('Synthetic third spoken question.')")
         await page.wait_for_function("""() => Number(document.querySelector('#reignAvatar').dataset.mouth) > .05 &&
             document.querySelector('#reignAvatar').dataset.expression === 'thoughtful'""")
         await page.evaluate('__teamLiveVoice.finishOutput()')
-        await page.wait_for_function("document.querySelector('#reignAvatar').dataset.speaking === 'false'")
+        await page.wait_for_function("() => document.querySelector('#reignAvatar').dataset.speaking === 'false'")
         stage = 'continuous_capture_beyond_twenty_seconds'
         await page.wait_for_function("""() => performance.now() - __teamLiveVoice.captures[0].startedAt > 21500 &&
             __teamLiveVoice.providers[0].inputRms > .025""", timeout=30000)
@@ -301,10 +301,10 @@ async def continuous_team_voice_ui(browser, storage_state, origin, evidence):
         stage = 'mute_and_unmute'
         await page.locator('#muteReignMic').click()
         await expect(page.locator('#muteReignMic')).to_have_attribute('aria-pressed','true')
-        await page.wait_for_function('__teamLiveVoice.providers.at(-1).inputRms < .002')
+        await page.wait_for_function('() => __teamLiveVoice.providers.at(-1).inputRms < .002')
         assert (await page.evaluate('__teamLiveVoice.snapshot()'))['enabledTracks'] == 0
         await page.locator('#muteReignMic').click()
-        await page.wait_for_function('__teamLiveVoice.providers.at(-1).inputRms > .025')
+        await page.wait_for_function('() => __teamLiveVoice.providers.at(-1).inputRms > .025')
         assert len(offers) == 1
 
         hold_close = True
@@ -317,13 +317,13 @@ async def continuous_team_voice_ui(browser, storage_state, origin, evidence):
         close_release.set(); hold_close = False
         await expect(page.locator('#talkToReign')).to_be_enabled()
         await page.locator('#talkToReign').click()
-        await page.wait_for_function('__teamLiveVoice.providers.length === 2 && __teamLiveVoice.providers[1].inputRms > .025')
+        await page.wait_for_function('() => __teamLiveVoice.providers.length === 2 && __teamLiveVoice.providers[1].inputRms > .025')
         await page.locator(f'[data-room-id="{room_ids[1]}"]').click()
         await expect(page.locator('#roomTitle')).to_have_text(rooms[1]['title'])
-        await page.wait_for_function("__teamLiveVoice.captures.every(value => value.stream.getTracks().every(track => track.readyState === 'ended'))")
+        await page.wait_for_function("() => __teamLiveVoice.captures.every(value => value.stream.getTracks().every(track => track.readyState === 'ended'))")
         await expect(page.locator('#talkToReign')).to_be_enabled()
         await page.locator('#talkToReign').click()
-        await page.wait_for_function('__teamLiveVoice.providers.length === 3 && __teamLiveVoice.providers[2].inputRms > .025')
+        await page.wait_for_function('() => __teamLiveVoice.providers.length === 3 && __teamLiveVoice.providers[2].inputRms > .025')
         stage = 'logout_cleanup'
         await page.locator('#logoutButton').click()
         await asyncio.wait_for(logout_started.wait(),5)
