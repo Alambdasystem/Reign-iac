@@ -23,13 +23,18 @@ def audible_fixture():
 
 
 class TeamAcceptanceTests(unittest.IsolatedAsyncioTestCase):
-    async def probe(self, content, expression_segments=None, expression_error=None):
+    async def probe(self, content, expression_segments=None, expression_error=None, provenance_text="Spoken."):
         test = self
         caches = []
         class FixtureAssistant:
             def __init__(self, http, cache):
                 self.cache = cache; caches.append(cache)
             async def __call__(self, context, actor, text, attachments, speak):
+                if not speak:
+                    test.assertEqual(context["input_source"], "voice")
+                    test.assertEqual(attachments, [])
+                    return {"text": provenance_text, "segments": [{"text": provenance_text, "expression": "neutral"}],
+                            "documents": [], "speech_status": "not_requested"}
                 test.assertTrue(speak); test.assertEqual(len(attachments), 1)
                 picture = self.cache.get(attachments[0], context["room"]["id"], "image", actor["id"])
                 with Image.open(io.BytesIO(picture["data"])) as image:
@@ -57,10 +62,17 @@ class TeamAcceptanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(receipt["document_draft"])
         self.assertTrue(receipt["image_interpreted"])
         self.assertTrue(receipt["private_expression_annotation"])
+        self.assertTrue(receipt["spoken_input_provenance"])
         self.assertEqual(receipt["archive_writes"], 0)
         self.assertEqual(receipt["physical_device"], "not_run")
         self.assertEqual(receipt["audio"]["duration_seconds"], .5)
         self.assertGreater(receipt["audio"]["rms_normalized"], .002)
+
+    async def test_spoken_metadata_misread_as_typing_cannot_pass_provider_gate(self):
+        receipt = await self.probe("A blue square.", provenance_text="Typed.")
+        self.assertEqual(receipt["status"], "failed")
+        self.assertEqual(receipt["stage"], "voice_provenance")
+        self.assertNotIn("spoken_input_provenance", receipt)
 
     async def test_empty_or_unrelated_draft_cannot_produce_a_passed_release_receipt(self):
         for content in ("", " \n\t", "A release document is ready.", "A blue circle.", "A red square.", "Blueberry squared."):

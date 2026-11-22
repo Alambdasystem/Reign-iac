@@ -347,14 +347,32 @@ account-scoped storage on that browser. A saved custom experiment restores as
 a still image until neural editing starts. It does not replace REIGN's shared
 identity or sync devices, and closing the editor releases the heavy worker.
 
-Shared Talk turns use a bounded recording with approximately 750 ms silence
-endpointing, manual Finish and a 20-second cap. Actual provider transcription
-issues a short-lived actor/room/exact-text receipt before a new message can carry
-voice origin. Durable receipt lookup precedes ephemeral transcript expiry for
-safe retries. Shared narration releases its first complete verified sentence
-while later clips are generated with reserved memory and bounded deadlines;
-each pending audio read rechecks room authorization after waiting. The browser
-prefetches at most one future clip and follows the same real output clock.
+Workspace's primary microphone control streams continuously through WebRTC to
+the Realtime model. It stays on across utterances until muted, stopped or the
+connection ends. Server voice activity detection identifies turns and supports
+interruptions; it does not make the browser record and upload twenty-second
+clips. Each call is bound to the signed-in member, room and live viewer lease.
+The server retains its provider call ID and closes it on Off, room leave,
+membership revocation, presence expiry and shutdown. A client-known call UUID
+makes cancellation during negotiation safe. The provider's one-hour session
+limit is a connection lifetime, not a recording or utterance duration.
+
+Live requests enter only the room-authorized assistant path; they never invoke
+owner-only chat, browser or account endpoints. The voice client forwards the
+model's delegated request as text with a server-validated live call binding.
+This is voice provenance, not a claim that Core independently verified a raw
+recording. The existing Dictate path still requires a short-lived exact-text
+provider transcription receipt. The ordinary messages API cannot supply live
+call identifiers. Durable receipt lookup precedes ephemeral state validation
+so uncertain submissions can confirm their original result without replay.
+
+The initiating caller narrates the room's exact answer and model expressions
+over the existing Realtime connection, using the real output clock for its
+portrait. It skips that same reply's cached audio. For other room viewers,
+speech clips are reserved and generated in the background without blocking the
+live caller. Each pending audio read rechecks room authorization after waiting.
+The clip player prefetches at most one future clip. Stopping one call cancels
+only its own unfinished request, preserving typed tasks and other members.
 
 See [TEAM_WORKSPACE.md](TEAM_WORKSPACE.md) for `/team`, employee authorization,
 saved rooms and documents, bounded calls and explicit image sharing, the

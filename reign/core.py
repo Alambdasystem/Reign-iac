@@ -50,6 +50,7 @@ async def lifespan(app: FastAPI):
     team = None
     team_media = None
     team_browser = None
+    team_voice = None
     if os.environ.get("REIGN_TEAM_MODE", "disabled") == "disk":
         from reign.team_api import TeamRuntime
         from reign.team_store import TeamStore
@@ -70,22 +71,29 @@ async def lifespan(app: FastAPI):
         else:
             team.assistant = TeamAssistant(app.state.http, team_media, browser=team_browser)
             team.features.update(speech=True, vision=True, transcription=True, camera_to_ai=True,
-                                 screen_to_ai=True, voice_output=True)
+                                 screen_to_ai=True, voice_output=True, live_voice=True)
     try:
         async with WorkspaceMCP().connect() as connection:
             app.state.agent = AgentRuntime(adapter=MCPTools(connection), archive=archive)
             app.state.genesis = genesis
             app.state.nodes = nodes
             app.state.voice = VoiceBroker(app.state.http)
+            if team is not None and team.assistant is not None:
+                from reign.team_voice import TeamVoice
+                team_voice = TeamVoice(team, app.state.voice)
+                await team_voice.start()
             app.state.private_speech = PrivateSpeech(app.state.http)
             app.state.team = team
             app.state.team_media = team_media
             app.state.team_browser = team_browser
+            app.state.team_voice = team_voice
             if team_browser is not None:
                 await team_browser.start()
             try:
                 yield
             finally:
+                if team_voice is not None:
+                    await team_voice.shutdown()
                 if team is not None:
                     await team.shutdown()
                 if team_browser is not None:
@@ -107,6 +115,8 @@ from reign.team_media import install as install_team_media_routes
 install_team_media_routes(app)
 from reign.team_browser import install as install_team_browser_routes
 install_team_browser_routes(app)
+from reign.team_voice import install as install_team_voice_routes
+install_team_voice_routes(app)
 
 
 class OpenRequest(BaseModel):

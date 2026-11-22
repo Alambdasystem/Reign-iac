@@ -2,6 +2,8 @@ FROM tailscale/tailscale:v1.104.7 AS tailscale
 
 FROM python:3.13-slim
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PORT=10000
+# Also honored by the temporary diagnostic command's direct Uvicorn CLI.
+ENV UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN=2
 WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates openssh-client \

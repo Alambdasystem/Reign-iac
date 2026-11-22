@@ -12,3 +12,5 @@
 
 /* A standalone local preview never enrolls its camera in a group call. */
 .camera-preview{display:block;width:100%;max-height:46dvh;aspect-ratio:16/9;object-fit:contain;background:#09070a;border:1px solid var(--line);border-radius:12px}.camera-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}.camera-actions button{font-size:12px}.camera-dialog .form-status{margin:12px 0 8px}.camera-dialog .subtle-note{margin:0;font-size:11px}.camera-preview[data-state="requesting"]{opacity:.55}
+
+.live-voice-panel{padding:16px 18px;margin:0 0 16px;border:1px solid #75304e;border-radius:14px;background:#24111d}.live-voice-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.live-voice-heading strong{font-size:14px}.live-voice-controls{display:flex;flex-wrap:wrap;gap:8px}.live-voice-controls button{min-height:40px}.live-voice-panel>.subtle-note{margin-top:7px;max-width:75ch}.live-voice-heading progress{width:92px;height:7px;accent-color:#f58bab}.live-voice-caption{margin-top:10px;font-size:12px;color:#ead0df;white-space:pre-wrap;overflow-wrap:anywhere;max-height:120px;overflow:auto}

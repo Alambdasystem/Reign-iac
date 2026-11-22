@@ -16,7 +16,8 @@ from temporalio.client import Client
 from temporalio.api.enums.v1 import EventType
 from accounts_ui_smoke import accounts_ui_smoke
 from portrait_ui_smoke import portrait_ui_smoke
-from speech_ui_smoke import simulated_team_speech_ui, simulated_team_microphone_ui
+from speech_ui_smoke import simulated_team_speech_ui
+from team_voice_ui_smoke import continuous_team_voice_ui
 
 TARGET = "https://alambda-forge.onrender.com/"
 AX = "https://ax:10000"
@@ -630,7 +631,7 @@ async def main():
             simulated_voice = await simulated_voice_ui(browser, await context.storage_state())
             simulated_team_speech = await simulated_team_speech_ui(
                 browser, await context.storage_state(), AX, EVIDENCE)
-            simulated_team_microphone = await simulated_team_microphone_ui(
+            continuous_team_voice = await continuous_team_voice_ui(
                 browser, await context.storage_state(), AX, EVIDENCE)
             accounts_ui = await accounts_ui_smoke(
                 browser, await context.storage_state(), voice_bootstrap=SIMULATED_VOICE_BOOTSTRAP)
@@ -652,7 +653,7 @@ async def main():
                 "live_voice_audio": "not_run_no_provider_key",
                 "simulated_voice_ui": simulated_voice,
                 "simulated_team_speech_ui": simulated_team_speech,
-                "simulated_team_microphone_ui": simulated_team_microphone,
+                "continuous_team_voice_ui": continuous_team_voice,
                 "accounts_ui": accounts_ui,
                 "target": TARGET,
             }

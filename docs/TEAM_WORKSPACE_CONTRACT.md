@@ -45,6 +45,10 @@ Core-only login and identity operations require service authorization.
 | `POST /api/team/rooms/{room_id}/documents` | `{title,content,client_document_id}`; create Markdown document. |
 | `PUT /api/team/rooms/{room_id}/documents/{document_id}` | `{title,content,expected_version}`; reject stale edits with 409. |
 | `GET /api/team/rooms/{room_id}/documents/{document_id}` | `{document:{id,title,content,version,updated_at}}`; enforce room binding. |
+| `GET /api/team/rooms/{room_id}/voice` | Room-authorized `{configured,model,transport:"webrtc",max_duration_seconds:3600,...}`. |
+| `POST /api/team/rooms/{room_id}/voice/offer` | `{sdp,connection_id,client_session_id}`; return `{sdp,type,model,max_duration_seconds,voice_session_id}`. Both session IDs are the same caller-generated UUID. |
+| `DELETE /api/team/rooms/{room_id}/voice/sessions/{session_id}` | No body; idempotently retire this caller's pending or active session, close its provider call and cancel only its unfinished room request. |
+| `POST /api/team/rooms/{room_id}/voice/sessions/{session_id}/turns` | `{client_message_id,text}`; delegate a spoken request through the authorized room assistant and return `{event,run_id}`. Server supplies voice origin and session binding. |
 
 Room events have `{seq,id,type,user_id,display_name,created_at,data}`. Types are
 `message`, `assistant_started`, `assistant_message`, `assistant_error`, and
@@ -52,12 +56,23 @@ Room events have `{seq,id,type,user_id,display_name,created_at,data}`. Types are
 verified `input_source` (`text` or `voice`); assistant
 messages can include `segments:[{text,expression,audio_id?}]`, `audio_id`, document
 IDs and `speech_status` (`ready`, `streaming`, `unavailable`, `not_requested`).
-`streaming` means the first verified sentence is available while later bounded
-clips may still be generating; it does not mean continuous microphone input.
+`streaming` means one or more reserved shared clips may still be generating;
+every clip is verified before its audio endpoint returns it. For a live voice
+session, all clips may be pending when the text event is published so shared
+generation cannot delay the initiating caller. This cache status does not
+describe microphone input. Live assistant events also carry their server-supplied
+`voice_session_id`; the initiating browser matches both that ID and `run_id`
+before narrating the answer and suppresses its own cached duplicate.
 Expressions are bounded choices (`neutral`, `warm`, `thoughtful`, `concerned`).
 The assistant context is reconstructed only from that room's authorized history.
 One assistant run is active per room, with a bounded global model-call budget.
 Failed/interrupted runs are recorded honestly and never silently replay tools.
+
+The browser bounds its room long-poll wait to five seconds. The server can wake
+a wait on a visible presence change, but a leave between successive requests
+can occur before the next request's baseline snapshot. The shorter client wait
+keeps that case from retaining old microphone/camera flags for a twenty-second
+idle poll. This is a bounded refresh mechanism, not strict response ordering.
 
 ## Calling and multimodal boundaries
 
@@ -103,7 +118,7 @@ bytes through the existing vision model. The submitter's account identity does
 not establish who is pictured, and presence flags do not establish image content.
 
 `POST /api/team/rooms/{room_id}/transcriptions` accepts a bounded recording made
-by an explicit Dictate or Talk to REIGN action and returns `{text,transcription_id}`.
+by an explicit Dictate action and returns `{text,transcription_id}`.
 The receipt expires after five minutes, is limited to the requesting actor and
 room, and authorizes only the exact returned words as a spoken input. It does
 not authorize a tool or change room permissions. The room prompt and saved event
@@ -111,19 +126,59 @@ retain the voice source, so rendering a transcript does not imply typed input.
 Edited drafts use the ordinary text source. An uncertain send retries the same
 message ID and receipt; no automatic rerecording or resubmission occurs.
 
-Dictate puts text into the composer for review and remains manually completed.
-Talk starts one explicit microphone capture and submits it after roughly 750 ms
-of trailing quiet, once sustained input energy has been detected. A brief input
-click or initial silence cannot arm completion. Hysteresis preserves quieter
-subsequent syllables; shorter pauses stay in the same recording. The detector
-uses a local AudioContext analyser without a speaker connection. Suspension or
-missing samples cannot be treated as silence, and unavailable analysis falls
-back to the visible Finish control and twenty-second limit. Sound-level
-endpointing is not semantic VAD and cannot distinguish every long thinking pause
-from a completed question. The existing byte/time bounds remain in force.
-Cancel, room change, logout and page exit release owned tracks, close the
-analyser and abort transcription; late permission/results cannot submit a turn.
-There is no continuous listening to the group. Camera/screen content and raw
+Dictate puts text into the composer for review and remains manually completed,
+with its existing recording byte/time bounds. It never automatically submits
+the draft, and is unavailable while the live microphone is connected. Cancel,
+room change, logout and page exit release its owned tracks and abort
+transcription; late permission/results cannot submit a turn. The ordinary
+composer sends text origin, including reviewed or edited dictation drafts.
+
+**Microphone on** uses the existing Realtime WebRTC controller with room-specific
+negotiation and delegation. It never calls MediaRecorder or the recording
+transcription endpoint. Raw microphone audio continues on the same connection
+across utterances. Provider server VAD has a 450 ms silence window and supports
+interruptions; it is a turn boundary, not a timer that closes the microphone.
+The shared adapter disables the private controller's startup greeting, so an
+explicit spoken request is required before room work or narration begins.
+
+Before negotiation, the adapter renews the exact current viewer connection,
+then uses a new client-generated session UUID. That connection has the existing
+ten-second heartbeat and thirty-second presence lease. No human-call membership
+or fabricated microphone/camera presence flag is required. Core validates the
+member, room, credential revision, live viewer and session on each new spoken
+request. The browser cannot supply live session IDs to the ordinary messages
+endpoint. Voice-origin metadata records the live model's delegated request;
+it is not independent verification of raw audio, an exact transcription receipt,
+or permission to use tools outside the room. Provider call IDs and credentials
+remain server-side. At most four live calls, one per member, are admitted.
+
+**Mute mic** disables the owned audio track while retaining the connection;
+**Microphone off** immediately stops the track, peer connection and local output,
+then DELETEs the pending or active lease. The client-known session ID lets Off
+retire an offer before its provider answer arrives. A late answer repeats only
+idempotent cleanup. A restart waits for previous cleanup, and another Off cancels
+that waiting restart. Room changes, logout, page exit, membership revocation,
+viewer expiry and server shutdown also close the associated call. Expired calls
+return `team_voice_closed` with HTTP 410 and require an explicit reconnect.
+If Off precedes a provider's answer, the old call keeps its capacity reservation
+until cleanup finishes. An attempted restart during that interval returns
+`team_voice_closing` with HTTP 409, leaves the microphone off and asks the user
+to try **Microphone on** again shortly; no timed reconnect or request replay runs.
+The maximum one-hour session lifetime does not limit individual utterances.
+Media never reopens automatically on refresh, room restore or connection loss.
+
+Each delegated request receives one stable `client_message_id`. If submission
+is uncertain, the browser exposes an explicit retry of that exact ID and body;
+it does not replay tools automatically. Durable duplicate lookup precedes the
+ephemeral lease check so a request accepted before Off can still be confirmed.
+Ending one voice session cancels only that session's unfinished request and
+does not cancel another member's work or a separate typed turn. The portrait's
+native-output ownership ends with the call. Its retired IDs remain in a bounded
+client set so a delayed cached answer cannot play a second time after Off.
+
+Live voice captures only the caller's microphone. The human group call has
+separate media ownership; live voice does not stop peer tracks, join a call,
+enable a camera or capture other participants. Camera/screen content and raw
 recordings are not written to the durable conversation archive.
 
 Public STUN helps discover direct network routes. No TURN relay or SFU is
@@ -147,9 +202,24 @@ performed when building the atlas, not by the Render CPU at runtime.
 
 Core calls the existing configured OpenAI Responses model for authorized room
 text, deliberately shared image bytes, structured sentence expressions and
-requested Markdown documents. The same configured Realtime provider narrates
-each returned sentence. Narration has no tools, is checked against the requested
-sentence's transcript, and is stored only in a bounded ten-minute audio cache.
+requested Markdown documents. For the initiating live caller, the exact
+authorized answer and its model expressions are passed back to the existing
+Realtime connection for narration. The browser accepts expression plans only
+when their normalized text exactly covers that answer and both run and session
+IDs match the outstanding request. Native output level and media time drive
+the same prepared portrait; microphone energy never drives REIGN's mouth.
+Incoming user speech stops the current narration before a later reply can
+take its place. No synthetic greeting or direct unrequested model answer is
+permitted. Streaming narration is audible before its final transcript can be
+checked; a mismatch stops remaining output and is reported, rather than
+represented as fully verified audio heard before validation.
+
+For other viewers and ordinary typed replies, the same configured Realtime
+provider generates sentence clips with no tools. These clips are checked
+against the requested sentence's transcript before delivery and stored only
+in a bounded ten-minute audio cache. Live-session clip production starts in
+the background after reserving IDs and does not block delivery of the room
+answer to its initiating caller.
 The server reserves worst-case cache space before speech generation, limits
 concurrent speech producers, and exposes the first clip only after its complete
 transcript matches the sentence. Later clips are generated on the same bounded
@@ -164,8 +234,10 @@ clip plays. A pending clip is shown as buffering, and its expression never
 advances until actual playback starts. Later-clip failure resets the face and
 offers an explicit retry of only unheard segments; it does not rerun room tools
 or automatically replay prior sentences. Cancellation aborts pending audio
-requests and fences late decoding. This is bounded turn-based speech, not
-streaming duplex conversation or phoneme prediction. The browser samples the decoded PCM envelope
+requests and fences late decoding. This shared clip fallback remains bounded
+sentence playback; continuous input and native streaming output use the
+separate live WebRTC connection. Neither path predicts phonemes. For clips,
+the browser samples the decoded PCM envelope
 at its audio output position and advances sentence expressions on the same
 clock. Where available, Web Audio output timestamps account for device latency;
 the fallback is bounded by the context's reported time and latency. A suspended

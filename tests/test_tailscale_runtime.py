@@ -272,7 +272,7 @@ class ProcessTests(unittest.TestCase):
         file.chmod(0o700)
         return file
 
-    def _start(self, mode="enroll", app_mode="success", auth=True):
+    def _start(self, mode="enroll", app_mode="success", auth=True, shutdown_timeout=0.2):
         common = "import json,os,pathlib,signal,sys,time\n"
         common += "root=pathlib.Path(" + repr(str(self.root)) + ")\n"
         common += "mode=" + repr(mode) + "\n"
@@ -340,6 +340,9 @@ else:
 (root / "app.env").write_text(json.dumps(dict(os.environ)))
 (root / "app.pid").write_text(str(os.getpid()))
 def stop(signum, frame):
+    if app_mode == "slow_stop":
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        time.sleep(0.2)
     (root / "app.stopped").write_text(str(signum))
     sys.exit(0)
 signal.signal(signal.SIGTERM, stop)
@@ -364,7 +367,7 @@ t.TAILSCALED = %r
 t.TAILSCALE = %r
 t.STARTUP_TIMEOUT = 0.8
 t.COMMAND_TIMEOUT = 0.3
-t.SHUTDOWN_TIMEOUT = 0.2
+t.SHUTDOWN_TIMEOUT = %r
 t.POLL_INTERVAL = 0.01
 t.os.path.ismount = lambda path: path == t.VAULT_MOUNT
 key = os.environ.pop(t.AUTH_ENV, None)
@@ -374,7 +377,7 @@ except t.TailscaleError as error:
     print(str(error), file=sys.stderr)
     code=1
 raise SystemExit(code)
-""" % (str(self.mount), str(self.runtime_dir), str(daemon), str(cli), str(app)))
+""" % (str(self.mount), str(self.runtime_dir), str(daemon), str(cli), shutdown_timeout, str(app)))
         environment = os.environ.copy()
         environment.update({
             "PYTHONPATH": str(self.repo), "REIGN_VAULT_DIR": str(self.mount),
@@ -498,6 +501,17 @@ raise SystemExit(code)
 
     def test_sigterm_is_forwarded_to_app_and_daemon(self):
         process = self._start(mode="running", app_mode="wait", auth=False)
+        self._wait_marker("app.started", process)
+        process.send_signal(signal.SIGTERM)
+        self._finished(process, 128 + signal.SIGTERM)
+        self.assertTrue((self.root / "app.stopped").exists())
+        self.assertTrue((self.root / "daemon.stopped").exists())
+
+    def test_cooperative_app_can_finish_cleanup_within_shared_grace(self):
+        # Scale production's 25s grace to 0.5s. This 0.2s cleanup would be
+        # killed by the former 5s grace scaled the same way (0.1s).
+        process = self._start(mode="running", app_mode="slow_stop", auth=False,
+                              shutdown_timeout=runtime.SHUTDOWN_TIMEOUT / 50)
         self._wait_marker("app.started", process)
         process.send_signal(signal.SIGTERM)
         self._finished(process, 128 + signal.SIGTERM)

@@ -484,13 +484,16 @@
       if (!current(e) || typeof event.data !== 'string' || event.data.length > 262144) return;
       let value; try { value = JSON.parse(event.data); } catch (_) { return; }
       if (value.type === 'session.created' && !greetingSent) {
-        greetingSent = true; greetingPending = true;
-        send({type:'conversation.item.create',item:{type:'message',role:'user',content:[{type:'input_text',
-          text:'Voice connection check: greet me briefly and say you are ready to help. Do not run workspace actions.'}]}});
-        send({type:'response.create',response:{output_modalities:['text'],tool_choice:{type:'function',name:'delegate_to_reign'},
-          metadata:{reign_voice_turn:String(turnEpoch),reign_voice_phase:'connection_check'}}});
-        providerBusy = true;
-        update({phase:'thinking',status:'Connected. Checking REIGN’s spoken greeting…'});
+        greetingSent = true;
+        if (deps.connectionCheck !== false) {
+          greetingPending = true;
+          send({type:'conversation.item.create',item:{type:'message',role:'user',content:[{type:'input_text',
+            text:'Voice connection check: greet me briefly and say you are ready to help. Do not run workspace actions.'}]}});
+          send({type:'response.create',response:{output_modalities:['text'],tool_choice:{type:'function',name:'delegate_to_reign'},
+            metadata:{reign_voice_turn:String(turnEpoch),reign_voice_phase:'connection_check'}}});
+          providerBusy = true;
+          update({phase:'thinking',status:'Connected. Checking REIGN’s spoken greeting…'});
+        } else update({phase:'listening',status:listeningStatus()});
       }
       if (value.type === 'input_audio_buffer.speech_started') {
         turnEpoch++; resetSpeech(); speechNotice = null; narrationAllowed = false; narrationId = null;
@@ -498,6 +501,10 @@
         audio.muted = true;
         if (providerBusy) trySend({type:'response.cancel'});
         trySend({type:'output_audio_buffer.clear'});
+        // Shared rooms can also have cached PCM playback. Stop that separate
+        // sink immediately on real provider speech, without borrowing the mic
+        // signal for REIGN's mouth or restarting the continuous input track.
+        try { deps.onUserSpeechStart?.(); } catch (_) {}
         update({phase:'listening',audioPlaying:false,
           status: activeTurn ? 'The current task is still running. New requests queue; Stop / new chat requests cancellation. Already sent actions may complete.' : listeningStatus()});
       }
@@ -658,8 +665,10 @@
           if (!current(e)) return;
           clearTimer('connection'); clearTimer('disconnect');
           update({phase:'listening',status:listeningStatus()}); monitor(e);
-          const seconds = Math.min(900,Math.max(30,Number(capability.max_duration_seconds) || 900));
-          durationTimer = later(() => stop({reason:'Your 15-minute call ended. Start another call to continue.'}),seconds*1000);
+          const configured = Number(capability.max_duration_seconds);
+          const seconds = Number.isFinite(configured)&&configured>0 ? Math.min(3600,Math.max(30,Math.floor(configured))) : 900;
+          const duration = seconds%60===0 ? (seconds/60)+'-minute' : seconds+'-second';
+          durationTimer = later(() => stop({reason:'Your '+duration+' voice session ended. Turn the microphone on again to continue.'}),seconds*1000);
         };
         channel.onclose = () => { if (current(e)) stop({reason:'The voice channel closed. Start a new call to reconnect.',failed:true}); };
         channel.onerror = () => { if (current(e)) stop({reason:'The voice channel failed. Try a new call.',failed:true}); };
