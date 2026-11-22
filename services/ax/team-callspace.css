@@ -384,3 +384,5 @@ body.callspace-ready {
  }
  .callspace-shell[data-group-view="true"] #callParticipants .media-tile video {height: 23vh;}
 }
+
+.callspace-shell[data-group-view="true"] #callParticipants .media-tile:has(audio):not(:has(video)) { display: none; }

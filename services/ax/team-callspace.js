@@ -249,7 +249,7 @@ export function createCallspaceWorkspace(deps = {}) {
     const enabled = visionToggle.getAttribute('aria-pressed') !== 'true';
     visionToggle.setAttribute('aria-pressed', String(enabled));
     visionToggle.textContent = `Include my camera with my next Ask REIGN: ${enabled ? 'on' : 'off'}`;
-    win.dispatchEvent(new CustomEvent('reign:team-vision-consent', {detail:{enabled}}));
+    win.dispatchEvent?.(new CustomEvent('reign:team-vision-consent', {detail:{enabled}}));
   });
   function updateGroupStage() {
     const active = groupView && mode === 'call';
@@ -601,7 +601,7 @@ export function createCallspaceWorkspace(deps = {}) {
     if (destroyed) return;
     closePanel(false);
     groupObserver?.disconnect();
-    win.dispatchEvent(new CustomEvent('reign:team-vision-consent', {detail:{enabled:false}}));
+    win.dispatchEvent?.(new CustomEvent('reign:team-vision-consent', {detail:{enabled:false}}));
     if (drag) releaseDrag(true);
     destroyed = true;
     observer?.disconnect();
