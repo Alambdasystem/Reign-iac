@@ -50,6 +50,12 @@ the underlying controllers.
 nodes rather than copying or replacing them. `destroy()` restores their original
 positions and removes the layout's observers and event listeners.
 
+The existing `createTeamWorkspace` factory imports and owns this layout alongside
+its other feature modules. It creates the layout after the original controls and
+listeners are wired, then disposes it through the same Workspace teardown used
+for logout and page closure. `team.html` keeps `team.js` as its sole module entry
+point; the layout module does not bootstrap a second application.
+
 `services/ax/team-callspace.css` supplies the light visual treatment. Both assets
 are served by the existing same-origin static route with revalidation; no new
 external script, runtime dependency, server route, or relaxed content-security

@@ -4,6 +4,7 @@ import { createTeamRecorder } from '/assets/team-recorder.js';
 import { createTeamBrowser } from '/assets/team-browser.js';
 import { createTeamCamera } from '/assets/team-camera.js';
 import { createTeamVoice } from '/assets/team-voice.js';
+import { createCallspaceWorkspace } from '/assets/team-callspace.js';
 
 // The shared workspace uses only room-scoped endpoints. Owner tools and private
 // browser/conversation recovery intentionally have no dependency in this page.
@@ -30,7 +31,7 @@ export function createTeamWorkspace(deps = {}) {
     liveVoice: {active: false, phase: 'idle', muted: false, uncertain: false},
     camera: {phase: 'idle', active: false}, cameraBusy: false, cameraRevision: 0, cameraAbort: null};
   const callMe = {};
-  let call;
+  let call, layout = null;
   call = (deps.createCall || createTeamCall)({api: request, me: callMe, onState: renderCall,
     onStreams: renderStreams, onPresence: value => applyPresence(value?.presence || value)});
   const avatar = (deps.createAvatar || createTeamAvatar)({canvas: $('reignAvatar'), api: request,
@@ -962,6 +963,7 @@ export function createTeamWorkspace(deps = {}) {
     try { void Promise.resolve(liveVoice.dispose()).catch(() => {}); } catch {}
     try { sharedBrowser.dispose(); } catch {}
     try { camera.dispose(); } catch {}
+    try { layout?.destroy(); } catch {}
     for (const remove of listeners.splice(0)) remove();
   }
   listen($('newRoomButton'), 'click', () => { $('roomCreateForm').hidden = false; $('roomTitleInput').focus(); });
@@ -1040,6 +1042,8 @@ export function createTeamWorkspace(deps = {}) {
   listen(win, 'pagehide', destroy);
   listen(doc, 'visibilitychange', () => { if (doc.hidden) { clearCredential(); closeDialog('credentialDialog'); } });
   refreshControls();
+  // The view shares this workspace's lifetime and the original controls above.
+  layout = (deps.createLayout || createCallspaceWorkspace)({document: doc, window: win});
   return {start, destroy, selectRoom, logout};
 }
 

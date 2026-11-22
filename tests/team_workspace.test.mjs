@@ -28,11 +28,19 @@ const profile = (role = 'owner') => ({workspace: {id: 'rain', name: 'Workspace',
   rooms: [{id: 'room-a', title: 'Planning'}, {id: 'room-b', title: 'Research'}], capabilities: {assistant: true, speech: true, calls: true, documents: true, manage_members: role === 'owner', vision: true, transcription: true, live_voice: true}});
 const event = (seq, text, extra = {}) => ({id: 'event-' + seq, seq, type: 'message', user_id: 'user-1', display_name: 'CI Teammate', created_at: 1700000000, data: {text}, ...extra});
 const snapshot = id => ({room: {id, title: id === 'room-a' ? 'Planning' : 'Research'}, events: [], documents: [{id: 'document-1', title: 'Shared plan', version: 1}], presence: [], assistant: {status: 'idle'}, last_seq: 0});
-function harness({handle, role, leaveThrows = false, cameraCapture} = {}) {
+function harness({handle, role, leaveThrows = false, cameraCapture, injectLayout = false} = {}) {
   const nodes = new Map(), requests = [], timers = new Map(), polls = [], recordings = [], redirects = [], stored = [], media = {joins: 0, leaves: 0, disposed: 0}, avatar = {played: [], stopped: 0, destroyed: 0, unlocked: 0};
   let timer = 0, id = 0, options;
   const camera = {started: 0, stopped: 0, captures: 0, disposed: 0};
   const voice = {starts: [], stops: [], disposed: 0, muted: false, active: false, own: new Set(), accepted: []}; let voiceOptions;
+  const layout = {created: [], destroyed: 0, mediaAtDestroy: null};
+  const layoutFactory = origin => config => {
+    layout.created.push({origin, config});
+    return {destroy() {
+      layout.destroyed++;
+      layout.mediaAtDestroy = {call: media.disposed, avatar: avatar.destroyed, voice: voice.disposed, camera: camera.disposed};
+    }};
+  };
   const picture = () => ({blob: new Blob([new Uint8Array([255, 216, 255, 217])], {type: 'image/jpeg'}), capturedAt: '2026-11-22T12:00:00.000Z'});
   for (const match of html.matchAll(/id="([^"]+)"/g)) nodes.set(match[1], new Element());
   const node = name => { assert.ok(nodes.has(name), 'unknown DOM ID ' + name); return nodes.get(name); };
@@ -55,6 +63,7 @@ function harness({handle, role, leaveThrows = false, cameraCapture} = {}) {
     URL: {createObjectURL: () => 'blob:test', revokeObjectURL() {}}, FileReader: class {
       readAsDataURL(blob) { void blob.arrayBuffer().then(data => { this.result = 'data:' + blob.type + ';base64,' + Buffer.from(data).toString('base64'); this.onload?.(); }); }
     },
+    createCallspaceWorkspace: layoutFactory('imported'),
     createTeamCall: config => { options = config; return {join() { media.joins++; return Promise.resolve(); }, leave() { media.leaves++; if (leaveThrows) throw Error('cleanup failed'); return Promise.resolve(); }, syncPresence() {}, dispose() { media.disposed++; }, setMicrophone() {}, setCamera() {}, setScreen() {}, captureFrame: async () => picture()}; },
     createTeamAvatar: config => { config.onStatus({state: 'ready', message: 'Ready'}); return {play(room, value) { avatar.played.push({room, value}); }, unlock: async () => { avatar.unlocked++; return true; }, stop() { avatar.stopped++; }, destroy() { avatar.destroyed++; }, startLivePlayback() { avatar.stopped++; }, endLivePlayback() {}, setLivePlayback(value) { avatar.livePlayback = value; }}; },
     createTeamVoice: config => { voiceOptions = config; return {
@@ -76,12 +85,65 @@ function harness({handle, role, leaveThrows = false, cameraCapture} = {}) {
     })});
   vm.runInContext(source, context);
   const app = context.createTeamWorkspace({document: doc, window: win, fetch: fetcher, uuid: () => 'test-id-' + ++id,
+    ...(injectLayout ? {createLayout: layoutFactory('injected')} : {}),
     timers: {setTimeout(fn, delay) { const key = ++timer; timers.set(key, {fn, delay}); return key; }, clearTimeout(key) { timers.delete(key); }}});
-  return {app, node, doc, win, requests, polls, recordings, redirects, media, avatar, camera, voice, stored, timers, get voiceOptions() { return voiceOptions; }, get callOptions() { return options; }, response,
+  return {app, node, doc, win, requests, polls, recordings, redirects, media, avatar, camera, voice, layout, stored, timers, get voiceOptions() { return voiceOptions; }, get callOptions() { return options; }, response,
     click: name => node(name).emit('click'), submit(name, submitter) { node(name).emit('submit', {submitter: submitter ? node(submitter) : undefined}); },
     input(name, value) { node(name).value = value; node(name).emit('input'); },
     run(delay) { const task = [...timers.entries()].find(([, value]) => value.delay === delay); assert.ok(task, 'missing timer ' + delay); timers.delete(task[0]); task[1].fn(); }};
 }
+
+test('Workspace owns one layout with its existing document and window across boot and room changes', async () => {
+  for (const injectLayout of [false, true]) {
+    const h = harness({injectLayout});
+    assert.equal(h.layout.created.length, 1);
+    assert.equal(h.layout.created[0].origin, injectLayout ? 'injected' : 'imported');
+    assert.equal(h.layout.created[0].config.document, h.doc);
+    assert.equal(h.layout.created[0].config.window, h.win);
+    assert.deepEqual(Object.keys(h.layout.created[0].config).sort(), ['document', 'window']);
+    await h.app.start(); await h.app.selectRoom('room-b'); await h.app.start();
+    assert.equal(h.layout.created.length, 1, 'room restoration or boot retry created another layout');
+    assert.equal(h.layout.destroyed, 0, 'room changes must retain the shared layout');
+    h.app.destroy(); h.app.destroy(); h.win.emit('pagehide');
+    assert.equal(h.layout.destroyed, 1);
+    assert.deepEqual(h.layout.mediaAtDestroy, {call: 1, avatar: 1, voice: 1, camera: 1},
+      'the layout must keep original nodes available until media owners dispose');
+  }
+});
+
+test('the HTML has one Workspace entrypoint and importing its layout has no independent DOM boot', () => {
+  const scripts = [...html.matchAll(/<script\b([^>]*)>/gi)].map(([, attributes]) => ({
+    type: attributes.match(/\btype=["']([^"']+)["']/i)?.[1],
+    src: attributes.match(/\bsrc=["']([^"']+)["']/i)?.[1],
+  }));
+  assert.deepEqual(scripts, [{type: 'module', src: '/assets/team.js'}]);
+  let domReads = 0;
+  const untouched = new Proxy({}, {get() { domReads++; throw Error('A layout import accessed the DOM before Workspace requested it'); }});
+  const layoutSource = fs.readFileSync(new URL('../services/ax/team-callspace.js', import.meta.url), 'utf8')
+    .replace(/^export\s+(?=function\b)/gm, '');
+  vm.runInNewContext(layoutSource, {document: untouched, window: untouched});
+  assert.equal(domReads, 0);
+});
+
+test('page exit and cross-tab sign-out dispose the owned layout once with the other controllers', async () => {
+  for (const [event, value] of [['pagehide', {}], ['storage', {key: 'reign:ax:signed-out', newValue: 'another-tab'}]]) {
+    const h = harness(); await h.app.start();
+    h.win.emit(event, value); h.win.emit(event, value); h.app.destroy();
+    assert.equal(h.layout.destroyed, 1, event);
+    assert.deepEqual(h.layout.mediaAtDestroy, {call: 1, avatar: 1, voice: 1, camera: 1});
+  }
+});
+
+test('access loss retains the layout for account recovery until Workspace is actually disposed', async () => {
+  const h = harness({handle: (request, {response}) => request.url === '/api/team'
+    ? response({detail: 'Access changed'}, 403) : undefined});
+  await h.app.start();
+  assert.equal(h.node('workspace').hidden, true);
+  assert.equal(h.layout.created.length, 1); assert.equal(h.layout.destroyed, 0);
+  await h.app.logout(); h.app.destroy();
+  assert.equal(h.layout.destroyed, 1);
+  assert.equal(h.redirects.at(-1), '/?next=%2Fteam');
+});
 
 test('restoring a room loads only team data and leaves all media off', async () => {
   const h = harness({role: 'employee'}); await h.app.start();
@@ -153,7 +215,9 @@ test('sign out reaches the server even if local media cleanup throws and a faile
   const h = harness({handle: request => { if (request.url === '/logout' && failures-- > 0) throw Error('network down'); }}); await h.app.start();
   h.callOptions.onState({active: true, phase: 'active'}); await h.app.logout();
   assert.equal(h.redirects.length, 0); assert.equal(h.node('logoutButton').textContent, 'Retry log out'); assert.equal(h.node('sendMessage').disabled, true); assert.ok(h.avatar.stopped > 0);
+  assert.equal(h.layout.destroyed, 0, 'an unconfirmed logout must keep the recovery controls owned');
   await h.app.logout(); assert.equal(h.redirects.at(-1), '/?next=%2Fteam'); assert.equal(h.stored[0].key, 'reign:ax:signed-out'); assert.equal(h.media.disposed, 1);
+  h.win.emit('pagehide'); h.app.destroy(); assert.equal(h.layout.destroyed, 1);
   const broken = harness({leaveThrows: true}); await broken.app.logout(); assert.equal(broken.requests.filter(item => item.url === '/logout').length, 1); assert.equal(broken.redirects.length, 1);
 });
 
