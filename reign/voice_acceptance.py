@@ -293,6 +293,11 @@ async def run_graph(message, receipt):
                                 "tools": [tool for tool in tools if tool in known_tools],
                                 "usage": {key: max(0, int(result["usage"].get(key, 0)))
                                           for key in ("input_tokens", "output_tokens")}}
+            receipt["graph"]["run_status"] = result["status"] if result["status"] in (
+                "completed", "failed", "paused", "cancelled", "running") else "unknown"
+            receipt["graph"]["status_tool_completed"] = any(
+                event.get("kind") == "tool_completed" and event.get("tool") == "workspace_status"
+                for event in result["events"])
             success = any(event.get("kind") == "tool_completed" and event.get("tool") == "workspace_status"
                           and event.get("ok") is True for event in result["events"])
             if (result["status"] != "completed" or not success or adapter.denied
@@ -401,8 +406,14 @@ def main():
         receipt["error_code"] = "probe_timeout"
     except ConnectionClosed:
         receipt["error_code"] = "provider_connection_closed"
-    except Exception:
+    except Exception as error:
+        # Never log exception messages or tracebacks: SDK errors can contain
+        # provider responses, credentials, or delegated transcript text.
         receipt["error_code"] = "probe_internal_error"
+        safe_types = {"RuntimeError", "ValueError", "TypeError", "KeyError",
+                      "AttributeError", "OSError", "ExceptionGroup", "McpError"}
+        receipt["internal_error_type"] = (type(error).__name__
+                                          if type(error).__name__ in safe_types else "other")
     if receipt["status"] != "passed":
         receipt["stages"][receipt["stage"]] = "failed"
     receipt["finished_at"] = datetime.now(timezone.utc).isoformat()
