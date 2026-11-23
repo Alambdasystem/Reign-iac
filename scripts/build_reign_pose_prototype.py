@@ -7,11 +7,11 @@ from scripts.portrait_quality import inspect,contact_sheet,stage
 
 ROOT=Path(__file__).resolve().parents[1]
 POSES=(
- ("neutral",0,0,0,0),("yaw_left_6",-6,0,0,0),
- ("yaw_right_6",6,0,0,0),("yaw_left_12",-12,0,0,0),
- ("yaw_right_12",12,0,0,0),("nod_down_6",0,-6,0,0),
- ("nod_up_6",0,6,0,0),("tilt_left_4",0,0,-4,0),
- ("tilt_right_4",0,0,4,0),("mouth_mid",0,0,0,.45),
+ ("neutral",0,0,0,0),("yaw_left_3",-3,0,0,0),
+ ("yaw_right_3",3,0,0,0),("yaw_left_4",-4,0,0,0),
+ ("yaw_right_4",4,0,0,0),("nod_down_4",0,-4,0,0),
+ ("nod_up_4",0,4,0,0),("tilt_left_3",0,0,-3,0),
+ ("tilt_right_3",0,0,3,0),("mouth_mid",0,0,0,.45),
  ("mouth_open",0,0,0,.9)
 )
 

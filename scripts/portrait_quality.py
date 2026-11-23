@@ -14,7 +14,7 @@ def sharpness(image):
     edges=roi.filter(ImageFilter.FIND_EDGES).crop((2,2,roi.width-2,roi.height-2))
     return float(ImageStat.Stat(edges).var[0])
 
-def inspect(frames,source,minimum=36.0,ratio=.55):
+def inspect(frames,source,minimum=36.0,ratio=.75):
     baseline=sharpness(source)
     if baseline<minimum or not math.isfinite(baseline):
         raise ValueError("original source is blurry")
