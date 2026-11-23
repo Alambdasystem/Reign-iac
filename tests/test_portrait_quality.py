@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from PIL import Image,ImageDraw,ImageFilter
 from scripts.portrait_quality import sharpness,inspect,contact_sheet,stage
-from scripts.build_reign_pose_prototype import POSES
+from scripts.build_reign_pose_prototype import POSES,choose_sharp_pose
 
 def face():
     im=Image.new("RGB",(256,256),"#aaaaaa");d=ImageDraw.Draw(im)
@@ -52,3 +52,35 @@ class ClarityTests(unittest.TestCase):
         self.assertTrue(any(v[2]!=0 for v in POSES))
         self.assertTrue(any(v[3]!=0 for v in POSES))
         self.assertTrue(any(v[4]>0 for v in POSES))
+
+class AdaptivePoseTests(unittest.TestCase):
+    def test_retries_smaller_nonzero_angle_without_lowering_gate(self):
+        source=face(); blurred=source.filter(ImageFilter.GaussianBlur(7))
+        calls=[]
+        def render(yaw,pitch,roll,mouth):
+            calls.append(yaw)
+            return blurred if yaw > 2 else source
+        frame,detail=choose_sharp_pose("yaw_right_4",(4,0,0),0,source,render)
+        self.assertEqual(calls,[4,3,2])
+        self.assertEqual(detail["actual_degrees"],[2,0,0])
+        self.assertEqual(detail["scale"],0.5)
+        self.assertTrue(inspect([("pose",frame)],source)["pass"])
+
+    def test_never_accepts_blurry_pose_or_neutral_fallback(self):
+        source=face();blurred=source.filter(ImageFilter.GaussianBlur(7))
+        calls=[]
+        def render(yaw,pitch,roll,mouth):
+            calls.append(yaw)
+            return blurred
+        with self.assertRaisesRegex(ValueError,"no nonzero model pose"):
+            choose_sharp_pose("yaw_right_4",(4,0,0),0,source,render)
+        self.assertEqual(calls,[4,3,2,1])
+
+    def test_mouth_expression_not_reduced_or_retried(self):
+        source=face();calls=[]
+        def render(yaw,pitch,roll,mouth):
+            calls.append((yaw,pitch,roll,mouth))
+            return source
+        _,detail=choose_sharp_pose("mouth_open",(0,0,0),0.9,source,render)
+        self.assertEqual(calls,[(0,0,0,0.9)])
+        self.assertEqual(detail["scale"],1.0)
