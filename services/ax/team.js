@@ -49,7 +49,10 @@ export function createTeamWorkspace(deps = {}) {
   const liveVoice = (deps.createLiveVoice || createTeamVoice)({api: request, audio: $('reignLiveAudio'), uuid, timers: clock,
     onState(value) {
       const wasActive = state.liveVoice.active; state.liveVoice = value;
-      if (!value.active && wasActive) avatar.endLivePlayback?.();
+      if (!value.active && wasActive) {
+        avatar.endLivePlayback?.();
+        avatar.setListeningLevel?.(0);
+      }
       notice('liveVoiceStatus', value.status || 'Microphone off. Turn it on to talk naturally with REIGN.', value.phase === 'failed');
       $('liveVoiceDiagnostics').dataset.phase = value.phase || 'idle';
       $('liveVoiceDiagnostics').dataset.active = String(!!value.active);
@@ -70,7 +73,11 @@ export function createTeamWorkspace(deps = {}) {
       caption.textContent = (value.role === 'user' ? 'You said: ' : 'REIGN: ') + caption.dataset.text;
       caption.hidden = !caption.dataset.text;
     },
-    onLevel(level) { $('liveVoiceLevel').value = Math.max(0, Math.min(1, level || 0)); },
+    onLevel(level) {
+      const value = Math.max(0, Math.min(1, level || 0));
+      $('liveVoiceLevel').value = value;
+      if (state.liveVoice.active && !state.liveVoice.muted) avatar.setListeningLevel?.(value);
+    },
     onUserSpeechStart() { avatar.startLivePlayback?.(); },
     onOutputLevel(level, playback) {
       const active = usable() && playback?.active === true;
@@ -408,7 +415,12 @@ export function createTeamWorkspace(deps = {}) {
     try {
       const result = await request(roomPath(roomId) + '/presence', 'POST', {connection_id: state.connectionId,
         microphone: false, camera: false, screen: false, in_call: false}, {timeout: 12000});
-      if (generation === state.roomGeneration && !state.closed) applyPresence(result.presence || []);
+      if (generation === state.roomGeneration && !state.closed) {
+        applyPresence(result.presence || []);
+        // Prepare a room-scoped voice capability response in the background.
+        // This does not connect a microphone or a paid realtime provider.
+        void liveVoice.prepare?.({roomId, connectionId: state.connectionId});
+      }
     } catch (error) {
       if (generation === state.roomGeneration && !state.accessLost) connection('Reconnecting', 'error');
     } finally {

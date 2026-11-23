@@ -65,6 +65,7 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
   let expression = 0, previousExpression = 0, expressionChanged = 0;
   let playbackClock = null, lastPlaybackClock = null, expressionClock = false;
   let expressionSource = 'neutral', segment = 0, expressionProgress = 1, headYaw = 0;
+  let listeningLevel = 0, listeningUpdatedAt = -Infinity, headNod = 0, headTilt = 0;
   canvas.width = canvas.height = SIZE;
   function diagnostics(state) {
     canvas.dataset.ready = String(loaded && !dead);
@@ -72,6 +73,9 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
     canvas.dataset.speaking = String(speaking && !dead);
     canvas.dataset.mouth = mouth.toFixed(3);
     canvas.dataset.yaw = headYaw.toFixed(3);
+    canvas.dataset.nod = headNod.toFixed(3);
+    canvas.dataset.tilt = headTilt.toFixed(3);
+    canvas.dataset.present = String(loaded && !dead);
     canvas.dataset.expression = EXPRESSIONS[expression];
     canvas.dataset.expressionSource = expressionSource;
     canvas.dataset.expressionProgress = expressionProgress.toFixed(3);
@@ -116,6 +120,22 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
     const articulated = desired > .02 ? Math.min(.9, desired * 1.27 + .045) : 0;
     mouth += (articulated - mouth) * (1 - Math.exp(-dt / (articulated > mouth ? 28 : 76)));
     headYaw = speechHeadYaw({active: speaking, level: desired, clockMs: playbackClock, now});
+    // Small acknowledgement nods follow *incoming* speech activity while
+    // REIGN listens. These are display-only 2D gestures, not invented 3D
+    // rotations or an assertion that REIGN understood untranscribed words.
+    const recentlyListening = !speaking && now - listeningUpdatedAt < 240;
+    const listening = recentlyListening ? Math.min(1, listeningLevel * 2.2) : 0;
+    headNod = speaking ? Math.sin((playbackClock ?? now) / 270) * Math.min(2.4, desired * 2.7)
+      : listening > .05 ? Math.sin(now / 390) * listening * 2.2 : Math.sin(now / 2000) * .18;
+    headTilt = speaking ? Math.sin((playbackClock ?? now) / 1600) * 1.8
+      : listening > .05 ? Math.sin(now / 850) * listening * 1.6 : Math.sin(now / 3500) * .35;
+    // The static poster and animated canvas share a single transform, keeping
+    // the head alive even when the lips are closed or audio is unavailable.
+    const media = canvas.parentElement;
+    if (media?.style?.setProperty) {
+      media.style.setProperty('--reign-nod', headNod.toFixed(2) + 'px');
+      media.style.setProperty('--reign-tilt', headTilt.toFixed(2) + 'deg');
+    }
     const expressionTime = expressionClock && playbackClock !== null ? playbackClock : now;
     const transition = Math.min(1, Math.max(0, (expressionTime - expressionChanged) / 260));
     expressionProgress = transition;
@@ -135,6 +155,13 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
       for (const [col, weight] of yawWeights) stamp(dominant, 3, col, weight * blink, {top: 66, height: 54});
     }
     ctx.globalAlpha = 1; paints++; diagnostics(); schedule();
+  }
+  function setListeningLevel(value) {
+    if (dead) return;
+    const amplitude = Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
+    listeningLevel = amplitude;
+    listeningUpdatedAt = performance.now();
+    schedule();
   }
   function setSpeaking(value) {
     if (dead) return;
@@ -184,6 +211,10 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
     diagnostics(); if (redraw) schedule();
   }
   function stop() {
+    listeningLevel = 0; listeningUpdatedAt = -Infinity; headNod = headTilt = 0;
+    const media = canvas.parentElement;
+    media?.style?.setProperty?.('--reign-nod', '0px');
+    media?.style?.setProperty?.('--reign-tilt', '0deg');
     setPlaybackState({active: false, expression: 'neutral'});
   }
   function visibility() {
@@ -213,7 +244,7 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
     if (!dead) { loaded = false; status('error', 'REIGN’s face could not load. Reload to try again.'); }
     return false;
   });
-  return {ready, setSpeaking, setSpeechLevel, setExpression, setPlaybackState, stop, destroy};
+  return {ready, setSpeaking, setSpeechLevel, setListeningLevel, setExpression, setPlaybackState, stop, destroy};
 }
 
 // The private interface remains a classic script; expose the same renderer

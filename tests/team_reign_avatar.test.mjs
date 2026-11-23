@@ -158,3 +158,17 @@ test('mouth response is stronger but stops immediately and stays silent without 
   avatar.stop(); assert.equal(canvas.dataset.mouth,'0.000');
   avatar.destroy();
 });
+
+test('listening energy drives bounded nod and tilt without opening speaking audio', async () => {
+  const h=harness(), {avatar,canvas}=h.create(); await avatar.ready;
+  avatar.setListeningLevel(.7); h.advance(50);
+  assert.equal(canvas.dataset.speaking,'false');
+  assert.equal(canvas.dataset.mouth,'0.000');
+  const nod=Number(canvas.dataset.nod), tilt=Number(canvas.dataset.tilt);
+  assert.ok(Number.isFinite(nod) && Math.abs(nod) <= 2.2);
+  assert.ok(Number.isFinite(tilt) && Math.abs(tilt) <= 1.6);
+  avatar.stop();
+  assert.equal(canvas.dataset.nod,'0.000');
+  assert.equal(canvas.dataset.tilt,'0.000');
+  avatar.destroy();
+});

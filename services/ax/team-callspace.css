@@ -347,3 +347,9 @@ body.callspace-ready {
 @media (prefers-reduced-motion: reduce) {
   .callspace-ready *, .callspace-ready *::before, .callspace-ready *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
 }
+
+/* Idle portrait is the native high-resolution source instead of a scaled,
+   interpolated 256px neural frame. The animated canvas takes over for speech. */
+.callspace-ready .reign-portrait .reign-poster { background-position: center center; }
+.callspace-ready .reign-portrait canvas[data-ready="true"][data-speaking="false"] { opacity: 0; }
+.callspace-ready .reign-portrait canvas[data-ready="true"][data-speaking="true"] { opacity: 1; }
