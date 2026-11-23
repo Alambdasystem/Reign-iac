@@ -366,7 +366,8 @@ body.callspace-ready {
     mask-image: radial-gradient(ellipse var(--reign-eyes-rx, 45px) var(--reign-eyes-ry, 18px) at 50% var(--reign-eyes-center-y, 36%), black 65%, transparent 100%);
   }
   .reign-portrait canvas[data-ready="true"][data-mask-ready="true"],
-  .callspace-ready .reign-portrait canvas[data-ready="true"][data-mask-ready="true"] {
+  .callspace-ready .reign-portrait canvas[data-ready="true"][data-speaking="false"][data-mask-ready="true"],
+  .callspace-ready .reign-portrait canvas[data-ready="true"][data-speaking="true"][data-mask-ready="true"] {
     opacity: 1;
   }
   .reign-portrait canvas[data-ready="true"][data-speaking="true"][data-mask-ready="true"] {
