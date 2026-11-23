@@ -415,7 +415,12 @@ export function createTeamWorkspace(deps = {}) {
     try {
       const result = await request(roomPath(roomId) + '/presence', 'POST', {connection_id: state.connectionId,
         microphone: false, camera: false, screen: false, in_call: false}, {timeout: 12000});
-      if (generation === state.roomGeneration && !state.closed) applyPresence(result.presence || []);
+      if (generation === state.roomGeneration && !state.closed) {
+        applyPresence(result.presence || []);
+        // Prepare a room-scoped voice capability response in the background.
+        // This does not connect a microphone or a paid realtime provider.
+        void liveVoice.prepare?.({roomId, connectionId: state.connectionId});
+      }
     } catch (error) {
       if (generation === state.roomGeneration && !state.accessLost) connection('Reconnecting', 'error');
     } finally {
