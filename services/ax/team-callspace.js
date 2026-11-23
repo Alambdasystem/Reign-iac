@@ -496,7 +496,7 @@ export function createCallspaceWorkspace(deps = {}) {
     if (event.key !== 'Escape' || !activePanel) return;
     // A nested account picker is the topmost modal: let it handle Escape.
     // Closing the workspace menu here would also hide its focus return target.
-    if (event.target && !panels[activePanel].dialog.contains(event.target)) return;
+    if (doc.querySelector('dialog.provider-picker[open]')) return;
     event.preventDefault();
     closePanel();
   });
