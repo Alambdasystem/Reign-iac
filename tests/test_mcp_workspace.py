@@ -30,6 +30,7 @@ OBSERVATION = "synthetic_observation_01"
 URL = "https://alambda-forge.onrender.com/"
 SENSITIVE_FIXTURE = "synthetic-secret-must-not-escape-4387"
 EXPECTED_TOOLS = {
+    "linkedin_preview_post",
     "workspace_status", "browser_status", "open_browser", "navigate_browser",
     "browser_observe", "browser_click", "browser_fill", "browser_press", "browser_scroll",
     "vault_status", "vault_list_accounts", "vault_request_account", "vault_prepare_signup", "vault_use_account",

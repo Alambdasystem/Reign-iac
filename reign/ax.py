@@ -5,6 +5,7 @@ import json
 import os
 import re
 import secrets
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -185,6 +186,7 @@ def csrf(request: Request):
 @asynccontextmanager
 async def lifespan(app):
     app.state.auth = ax_auth.AuthState()
+    app.state.linkedin_previews = {}
     # Browser startup/Temporal dispatch can take longer than a normal API call.
     app.state.http = httpx.AsyncClient(timeout=120, trust_env=False)
     sweeper = asyncio.create_task(openstl.sweeper())
@@ -485,6 +487,7 @@ async def logout(request: Request):
     if session is not None:
         session_csrf(request, session)
         request.app.state.auth.revoke(session)
+        request.app.state.linkedin_previews.pop(session.nonce, None)
         if session.identity.role == "owner":
             openstl.pending.clear()
             for grant in list(openstl.grants.values()):
@@ -702,6 +705,79 @@ async def voice_offer(request: Request):
     sdp = await read_offer(request)
     return JSONResponse((await core("POST", "/api/voice/offer", {"sdp": sdp}, voice_errors=True)).json(),
                         headers={"Cache-Control": "no-store"})
+
+
+LINKEDIN_PREVIEW_SECONDS = 300
+LINKEDIN_BODY_LIMIT = 20000
+
+
+async def linkedin_body(request: Request):
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > LINKEDIN_BODY_LIMIT:
+            raise HTTPException(413, "LinkedIn request is too large")
+        data.extend(chunk)
+    try:
+        value = json.loads(data)
+    except (ValueError, UnicodeError):
+        raise HTTPException(422, "Invalid LinkedIn request") from None
+    if type(value) is not dict:
+        raise HTTPException(422, "Invalid LinkedIn request")
+    return value
+
+
+def linkedin_owner(request: Request):
+    session = principal(request)
+    if session.identity.role != "owner":
+        raise HTTPException(403, "Owner access required", headers={"Cache-Control": "no-store"})
+    session_csrf(request, session)
+    return session
+
+
+@app.post("/api/linkedin/preview")
+async def linkedin_preview(request: Request):
+    session = linkedin_owner(request)
+    body = await linkedin_body(request)
+    draft = body.get("text")
+    if set(body) != {"text"} or type(draft) is not str or not 1 <= len(draft.strip()) <= 3000:
+        raise HTTPException(422, "Post must have 1–3000 characters")
+    draft = draft.strip()
+    try:
+        draft.encode("utf-8")
+    except UnicodeError:
+        raise HTTPException(422, "Invalid post text") from None
+    candidate = (await core("POST", "/internal/linkedin/preview", {"text": draft})).json()
+    linkedin_owner(request)
+    previews = request.app.state.linkedin_previews
+    now = time.monotonic()
+    for nonce, (_, expiry, _) in list(previews.items()):
+        if expiry <= now or nonce not in request.app.state.auth.sessions:
+            del previews[nonce]
+    previews.pop(session.nonce, None)
+    if candidate.get("ready") is True:
+        receipt = secrets.token_urlsafe(32)
+        previews[session.nonce] = (receipt, now + LINKEDIN_PREVIEW_SECONDS,
+                                   {"text": candidate["text"], "author": candidate["author"]})
+        candidate["receipt"] = receipt
+    return JSONResponse(candidate, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/linkedin/publish")
+async def linkedin_publish(request: Request):
+    session = linkedin_owner(request)
+    body = await linkedin_body(request)
+    linkedin_owner(request)
+    value = body.get("receipt")
+    previews = request.app.state.linkedin_previews
+    pending = previews.get(session.nonce)
+    if (set(body) != {"receipt"} or type(value) is not str or not ax_auth.TOKEN.fullmatch(value)
+            or pending is None or pending[1] <= time.monotonic()
+            or not secrets.compare_digest(value, pending[0])):
+        raise HTTPException(409, "Preview expired or already used. Review the post again.")
+    # Consume before any await. Concurrent submissions cannot reuse this approval.
+    del previews[session.nonce]
+    result = (await core("POST", "/internal/linkedin/publish", pending[2])).json()
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/chat")

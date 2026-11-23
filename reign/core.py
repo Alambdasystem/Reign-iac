@@ -1,5 +1,6 @@
 """Private REIGN Core gateway for Temporal workflows and Computer sessions."""
 import os
+import asyncio
 import secrets
 import uuid
 from typing import Literal
@@ -72,6 +73,10 @@ async def lifespan(app: FastAPI):
             team.assistant = TeamAssistant(app.state.http, team_media, browser=team_browser)
             team.features.update(speech=True, vision=True, transcription=True, camera_to_ai=True,
                                  screen_to_ai=True, voice_output=True, live_voice=True)
+    # Optional diagnostic uses the already-running private Tailscale socket.
+    # It never changes the active LangGraph, team, speech or voice providers.
+    from reign.ollama_tailnet_probe import schedule_startup_probe
+    ollama_probe_task = schedule_startup_probe()
     try:
         async with WorkspaceMCP().connect() as connection:
             app.state.agent = AgentRuntime(adapter=MCPTools(connection), archive=archive)
@@ -102,6 +107,9 @@ async def lifespan(app: FastAPI):
                     await team_media.aclose()
                 await app.state.agent.shutdown()
     finally:
+        if ollama_probe_task is not None:
+            ollama_probe_task.cancel()
+            await asyncio.gather(ollama_probe_task, return_exceptions=True)
         await app.state.http.aclose()
 
 
@@ -387,6 +395,28 @@ async def voice_offer(request: Request):
                         headers={"Cache-Control": "no-store"})
 
 
+class LinkedInDraft(BaseModel):
+    text: str = Field(min_length=1, max_length=3000)
+
+
+class LinkedInApprovedPost(LinkedInDraft):
+    author: str = Field(min_length=1, max_length=128)
+
+
+@app.post("/internal/linkedin/preview", dependencies=[Depends(authorize)])
+async def linkedin_preview(data: LinkedInDraft):
+    from reign.linkedin_publishing import preview
+
+    return preview(data.text)
+
+
+@app.post("/internal/linkedin/publish", dependencies=[Depends(authorize)])
+async def linkedin_publish(data: LinkedInApprovedPost):
+    from reign.linkedin_publishing import publish
+
+    return await publish(data.text, expected_author=data.author)
+
+
 @app.post("/api/chat", dependencies=[Depends(authorize)])
 async def chat(data: ChatRequest):
     return app.state.agent.submit(data.message, str(data.thread_id) if data.thread_id else None,
@@ -423,6 +453,7 @@ class GenesisDraftRequest(BaseModel):
     agent_id: str = Field(min_length=2, max_length=63)
     name: str = Field(min_length=1, max_length=120)
     capabilities: list[str] = Field(default_factory=list, max_length=12)
+    agent_type: Literal["knowledge", "action"] = "knowledge"
 
 
 def genesis_pilot():
@@ -455,7 +486,8 @@ async def genesis_preview(data: GenesisDraftRequest):
 async def genesis_register(data: GenesisDraftRequest):
     from reign.sovereign_registry import RegistryDenied
     try:
-        return genesis_pilot().create_draft(data.agent_id, data.name, data.capabilities)
+        return genesis_pilot().create_draft(data.agent_id, data.name, data.capabilities,
+                                            data.agent_type)
     except (RegistryDenied, ValueError):
         raise HTTPException(422, "Genesis registration denied") from None
 
@@ -464,6 +496,7 @@ class GenesisUpdateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     capabilities: list[str] = Field(default_factory=list, max_length=12)
     expected_revision: int = Field(ge=1)
+    agent_type: Literal["knowledge", "action"] | None = None
 
 
 class GenesisRevisionRequest(BaseModel):
@@ -499,7 +532,8 @@ async def genesis_draft_detail(agent_id: str):
 async def genesis_draft_update(agent_id: str, data: GenesisUpdateRequest):
     try:
         return genesis_pilot().update_draft(
-            agent_id, data.name, data.capabilities, expected_revision=data.expected_revision)
+            agent_id, data.name, data.capabilities, expected_revision=data.expected_revision,
+            agent_type=data.agent_type)
     except Exception as error:
         genesis_lifecycle_error(error)
 

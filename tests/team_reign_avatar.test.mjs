@@ -179,7 +179,7 @@ test('sharp original face stays primary and neural mouth has no yaw mixing', asy
   const h=harness(), {avatar, canvas, draws}=h.create(); await avatar.ready;
   avatar.setPlaybackState({active:true,level:.8,clockMs:1000,expression:'neutral'});
   h.advance(50);
-  assert.equal(canvas.dataset.composite, 'sharp-original-mouth-only');
+  assert.equal(canvas.dataset.composite, 'sharp-original-eyes-and-mouth');
   const frames=draws.filter(row=>row.length===9&&row[0]?.naturalWidth===768);
   assert.ok(frames.length>0);
   assert.ok(frames.every(row=>row[1]===256),
@@ -194,6 +194,6 @@ test('mouth overlay follows object-fit cover crop in portrait and landscape', ()
   assert.ok(Math.abs(tall.centerY - (884/2 + 884*.11))<.01);
   assert.ok(Math.abs(wide.centerY - (720/2 + 1280*.11))<.01);
   assert.ok(wide.centerY>720*.62, 'wide fullscreen mouth must not mask the nose');
-  assert.ok(wide.radiusY < wide.radiusX/2, 'keep neural patch tightly on lips');
+  assert.ok(wide.radiusY < wide.radiusX/2, 'keep neural patch localized to lips and jaw');
   assert.equal(h.mouthGeometry(0,100), null);
 });

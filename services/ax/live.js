@@ -113,6 +113,91 @@ async function request(path,method='GET',body,options={}){
   }finally{clearTimeout(timeout);options.signal?.removeEventListener('abort',cancel)}
 }
 async function api(path,method='GET',body,options){return (await request(path,method,body,options)).json()}
+let linkedinReceipt = null;
+let linkedinRequest = null;
+
+function resetLinkedInPublishing(enabled) {
+  const publishing = $('linkedinPublishing');
+  if (!publishing) return;
+  linkedinRequest?.abort();
+  linkedinRequest = null;
+  linkedinReceipt = null;
+  publishing.hidden = !enabled;
+  publishing.open = false;
+  $('linkedinDraft').reset();
+  $('linkedinDraft').querySelector('button').disabled = false;
+  $('linkedinText').readOnly = false;
+  $('linkedinAuthor').textContent = '';
+  $('linkedinPostPreview').textContent = '';
+  $('linkedinStatus').textContent = '';
+  $('linkedinReview').hidden = true;
+}
+if ($('linkedinPublishing')) {
+  const form = $('linkedinDraft'), input = $('linkedinText');
+  const review = $('linkedinReview'), publish = $('linkedinPublish'), status = $('linkedinStatus');
+  const preview = form.querySelector('button');
+  input.addEventListener('input', () => {
+    linkedinReceipt = null;
+    review.hidden = true;
+    status.textContent = '';
+  });
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (linkedinRequest || !authenticated || accountRole !== 'owner') return;
+    const operation = new AbortController();
+    linkedinRequest = operation;
+    linkedinReceipt = null;
+    review.hidden = true;
+    preview.disabled = input.readOnly = true;
+    status.textContent = 'Preparing LinkedIn preview…';
+    try {
+      const result = await api('/api/linkedin/preview', 'POST', {text: input.value}, {signal: operation.signal});
+      if (operation.signal.aborted) return;
+      if (!result.receipt) {
+        status.textContent = result.error || 'LinkedIn publishing is unavailable.';
+        return;
+      }
+      linkedinReceipt = result.receipt;
+      $('linkedinAuthor').textContent = 'Publish as ' + result.author;
+      $('linkedinPostPreview').textContent = result.text;
+      review.hidden = false;
+      status.textContent = 'Review the text and author before publishing publicly.';
+    } catch (error) {
+      if (!operation.signal.aborted) status.textContent = error.message;
+    } finally {
+      if (linkedinRequest === operation) {
+        linkedinRequest = null;
+        preview.disabled = input.readOnly = false;
+      }
+    }
+  });
+  publish.addEventListener('click', async () => {
+    if (linkedinRequest || !linkedinReceipt || !authenticated || accountRole !== 'owner') return;
+    const receipt = linkedinReceipt, operation = new AbortController();
+    linkedinRequest = operation;
+    linkedinReceipt = null;
+    review.hidden = true;
+    preview.disabled = input.readOnly = true;
+    status.textContent = 'Publishing to LinkedIn…';
+    try {
+      const result = await api('/api/linkedin/publish', 'POST', {receipt}, {signal: operation.signal});
+      if (operation.signal.aborted) return;
+      if (result.status === 'published') {
+        input.value = '';
+        status.textContent = 'Published to LinkedIn · ' + result.post_id;
+      } else {
+        status.textContent = result.error || 'Publication could not be confirmed. Check LinkedIn before trying again.';
+      }
+    } catch {
+      if (!operation.signal.aborted) status.textContent = 'Publication could not be confirmed. Check LinkedIn before trying again.';
+    } finally {
+      if (linkedinRequest === operation) {
+        linkedinRequest = null;
+        preview.disabled = input.readOnly = false;
+      }
+    }
+  });
+}
 function accountErrorMessage(error,mutation=false){
   if(typeof error?.code==='string'&&Object.hasOwn(ACCOUNT_MESSAGES,error.code))return ACCOUNT_MESSAGES[error.code];
   if(error?.status===401)return 'Your sign-in expired. Sign in again.';
@@ -248,7 +333,7 @@ function refreshControls(){const blocked=busy||restoringWorkspace||loggingOut||l
 function clearFrame(){for(const id of ['screen','fullScreen'])$(id).removeAttribute('src');$('screen').hidden=true;$('emptyScreen').hidden=false;if(frameURL)URL.revokeObjectURL(frameURL);frameURL=null;frameSequence=0;$('frameStatus').textContent='Waiting for a session'}
 function pausePolling(){if(poll)clearTimeout(poll);poll=null}
 function stop(){pausePolling();sid=null;epoch=null;controller=null;connected=false;remember(null);clearFrame();closeExpanded();refreshControls()}
-function lost(error){connected=false;controller=null;epoch=null;pausePolling();clearFrame();$('frameStatus').textContent='No live frame';refreshControls();say(error.message,'Disconnected');entry('CONNECTION',error.message,true);if(error.status===404){if(sid)expiredSessions.add(sid);stop();say('Session expired. Open Git High to start again.','Ready')}if(error.status===401){closeAccounts();releaseReignPortrait();voiceController?.stop({reason:'Your sign-in expired. Sign in before calling again.',failed:true});stop();authenticated=false;$('console').hidden=true;$('loginPanel').hidden=false;$('loginMessage').textContent=error.message;refreshControls()}}
+function lost(error){connected=false;controller=null;epoch=null;pausePolling();clearFrame();$('frameStatus').textContent='No live frame';refreshControls();say(error.message,'Disconnected');entry('CONNECTION',error.message,true);if(error.status===404){if(sid)expiredSessions.add(sid);stop();say('Session expired. Open Git High to start again.','Ready')}if(error.status===401){resetLinkedInPublishing(false);closeAccounts();releaseReignPortrait();voiceController?.stop({reason:'Your sign-in expired. Sign in before calling again.',failed:true});stop();authenticated=false;$('console').hidden=true;$('loginPanel').hidden=false;$('loginMessage').textContent=error.message;refreshControls()}}
 async function sync(){
   const activeId=sid;if(!activeId)return;
   // Recovery may replace a tab's stale session while its last frame is still
@@ -346,6 +431,7 @@ async function signedIn(profile){
   accountRole=profile.role;logoutFailed=false;
   consoleGranted=accountRole==='employee'&&profile.landing_path==='/'&&profile.capabilities?.ai_chat===true;
   browserAllowed=accountRole==='owner';
+  resetLinkedInPublishing(browserAllowed);
   // Unprivileged employees stay in Team. A server-verified grant permits the
   // console but never changes their account into the owner identity.
   const destination=accountRole==='avatar'?'/avatar-lab':accountRole==='employee'&&!consoleGranted?'/team':avatarReturnPath(window.location?.search||'');
@@ -370,6 +456,7 @@ async function signedIn(profile){
 function announceSignout(){try{localStorage.setItem(SIGNOUT_KEY,`${Date.now()}:${Math.random()}`)}catch{}}
 function leaveWorkspace(message){
   authenticated=false;accountRole=null;consoleGranted=false;browserAllowed=false;logoutFailed=false;closeAccounts();
+  resetLinkedInPublishing(false);
   releaseReignPortrait();
   // Local teardown must not depend on cancellation or other server cleanup.
   voiceController?.stop({reason:message}).catch(()=>{});
@@ -380,7 +467,7 @@ function leaveWorkspace(message){
 async function logout(){
   if(loggingOut)return;
   reignPortrait?.stop();
-  loggingOut=true;logoutFailed=false;closeAccounts();pausePolling();clearTimeout(chatPoll);chatPoll=null;
+  loggingOut=true;logoutFailed=false;resetLinkedInPublishing(false);closeAccounts();pausePolling();clearTimeout(chatPoll);chatPoll=null;
   $('loginForm').querySelector('button').disabled=true;
   $('logout').textContent='Logging out…';refreshControls();
   let cleanupTimeout,cleanupComplete=false;

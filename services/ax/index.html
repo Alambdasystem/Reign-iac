@@ -13,6 +13,20 @@
 <div class="work-actions"><button id="open" type="button">Open Git High</button><button id="take" type="button" disabled>Take control</button><button id="return" type="button" disabled>Return control</button><button id="close" type="button" disabled>Close session</button><button id="reconnect" type="button" hidden>Reconnect</button></div>
 <div class="details" id="details" hidden></div>
 <div class="work-accounts" id="workAccounts" hidden><div><strong>Saved logins</strong><p>Manage the accounts REIGN can use in your browser.</p></div><button id="accountsOpen" type="button">Accounts</button></div>
+<details class="trace-details" id="linkedinPublishing" hidden>
+<summary>LinkedIn publishing</summary>
+<form id="linkedinDraft" class="account-form">
+<label for="linkedinText">Post text</label>
+<textarea id="linkedinText" rows="5" maxlength="3000" required></textarea>
+<button type="submit">Preview post</button>
+</form>
+<div id="linkedinReview" hidden>
+<p id="linkedinAuthor"></p>
+<pre id="linkedinPostPreview" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
+<button id="linkedinPublish" type="button">Publish publicly</button>
+</div>
+<p id="linkedinStatus" role="status"></p>
+</details>
 <div class="feed" id="feed" role="log" aria-label="Workspace activity" aria-live="polite"></div>
 <div hidden aria-hidden="true"><output id="session">None</output><output id="controller">—</output><output id="epoch">—</output></div>
 </section>

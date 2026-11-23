@@ -103,6 +103,29 @@ class GenesisPilotTests(unittest.TestCase):
         self.assertEqual(self.pilot.update_draft("legacy", "Modern", [],
                          expected_revision=1)["revision"], 2)
 
+    def test_knowledge_and_action_draft_types_are_metadata_not_execution(self):
+        action = self.pilot.create_draft("action-one", "Action draft", [],
+                                         agent_type="action")
+        knowledge = self.pilot.create_draft("knowledge-one", "Knowledge draft",
+                                            ["workspace_status"])
+        self.assertEqual(action["agent_type"], "action")
+        self.assertEqual(knowledge["agent_type"], "knowledge")
+        self.assertEqual(self.pilot.status()["execution"], "disabled")
+        revised = self.pilot.update_draft("action-one", "Reviewed", [],
+                                           expected_revision=1, agent_type="knowledge")
+        self.assertEqual(revised["agent_type"], "knowledge")
+        copied = self.pilot.clone_draft("action-one", "action-copy",
+                                        expected_revision=2)
+        self.assertEqual(copied["agent_type"], "knowledge")
+        self.assertFalse(copied["provisioned"])
+        with self.assertRaises(ValueError):
+            self.pilot.create_draft("invalid-one", "Invalid", [], agent_type="executor")
+        with self.assertRaises(ValueError):
+            self.pilot.update_draft("action-one", "Invalid", [],
+                                    expected_revision=2, agent_type="executor")
+        self.assertEqual(GenesisPilot(self.path).get_draft("action-one")["agent_type"],
+                         "knowledge")
+
     def test_symlink_registry_is_rejected(self):
         target = str(Path(self.tmp.name) / "real")
         Path(target).write_text("test")
