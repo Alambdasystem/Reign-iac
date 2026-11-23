@@ -183,7 +183,10 @@ export function createCallspaceWorkspace(deps = {}) {
     listen(close, 'click', () => closePanel());
     listen(dialog, 'cancel', event => { event.preventDefault(); closePanel(); });
     listen(dialog, 'click', event => { if (event.target === dialog) closePanel(); });
-    listen(dialog, 'close', () => { if (activePanel === name) finishPanelClose(); });
+    listen(dialog, 'close', () => {
+      // A queued close event can arrive after the same panel has reopened.
+      if (!dialog.open && activePanel === name) finishPanelClose();
+    });
   }
 
   const menuNav = element('nav', 'callspace-menu-nav');

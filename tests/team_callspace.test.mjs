@@ -383,6 +383,24 @@ test('drawers and disposal restore original nodes and listeners without touching
   assert.notEqual(next, h.controller); assert.equal(next.getMode(), 'chat'); next.destroy();
 });
 
+test('a queued dialog close leaves a reopened drawer active', () => {
+  const h = harness();
+  const trigger = h.node('callspaceMenu');
+  const panel = h.node('callspaceMenuPanel');
+  panel.close = () => { panel.open = false; };
+
+  trigger.click();
+  h.node('callspaceCloseMenu').click();
+  trigger.click();
+  panel.emit('close');
+
+  assert.equal(trigger.getAttribute('aria-expanded'), 'true');
+  h.node('callspaceCloseMenu').click();
+  assert.equal(panel.open, false);
+  assert.equal(trigger.getAttribute('aria-expanded'), 'false');
+  h.controller.destroy();
+});
+
 test('leaving the shared-browser drawer stops its visible-frame polling without closing the room browser', () => {
   const h = harness(), browser = h.node('browserPanel');
   h.controller.openPanel('menu'); h.node('callspaceNavBrowser').click();
