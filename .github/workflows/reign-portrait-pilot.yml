@@ -1,0 +1,52 @@
+name: REIGN portrait clarity pilot - manual, never deploy
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  pilot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install numpy==2.2.6 Pillow==11.3.0 onnxruntime==1.22.1
+      - name: Download SHA-verified public neural weights
+        run: |
+          python - <<'PY'
+          import hashlib,json,os,pathlib,urllib.request
+          items=json.loads(pathlib.Path('services/ax/portrait-assets.json').read_text())['assets']
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'models'
+          root.mkdir(parents=True,exist_ok=True)
+          for item in items:
+              if item['path'] not in ['models/appearance.onnx','models/distilled.onnx']:continue
+              path=root/item['path'].split('/')[-1]
+              h=hashlib.sha256();size=0
+              with urllib.request.urlopen(item['url'],timeout=90) as resp,path.open('wb') as f:
+                  while True:
+                      chunk=resp.read(1024*1024)
+                      if not chunk:break
+                      size+=len(chunk)
+                      if size>item['size']:raise ValueError('model oversized')
+                      h.update(chunk);f.write(chunk)
+              if size!=item['size'] or h.hexdigest()!=item['sha256']:
+                  path.unlink(missing_ok=True);raise ValueError('model hash mismatch')
+          PY
+      - name: Generate and reject blurred actual neural frames
+        run: |
+          python -m scripts.build_reign_pose_prototype \
+            --models "$RUNNER_TEMP/models" \
+            --review artifacts/pose-review \
+            --output artifacts/candidate-do-not-deploy
+      - name: Retain contact sheet/report even on failed clarity gate
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: reign-pose-clarity-review
+          path: artifacts/
+          if-no-files-found: ignore
+          retention-days: 14
