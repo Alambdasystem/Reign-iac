@@ -172,3 +172,16 @@ test('listening energy drives bounded nod and tilt without opening speaking audi
   assert.equal(canvas.dataset.tilt,'0.000');
   avatar.destroy();
 });
+
+// The low-resolution atlas must be used only for center-aligned lip shapes.
+test('sharp original face stays primary and neural mouth has no yaw mixing', async () => {
+  const h=harness(), {avatar, canvas, draws}=h.create(); await avatar.ready;
+  avatar.setPlaybackState({active:true,level:.8,clockMs:1000,expression:'neutral'});
+  h.advance(50);
+  assert.equal(canvas.dataset.composite, 'sharp-original-mouth-only');
+  const frames=draws.filter(row=>row.length===9&&row[0]?.naturalWidth===768);
+  assert.ok(frames.length>0);
+  assert.ok(frames.every(row=>row[1]===256),
+    'source atlas x must always select the center-column mouth frames');
+  avatar.stop();avatar.destroy();
+});

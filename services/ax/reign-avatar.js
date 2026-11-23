@@ -82,6 +82,7 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
     canvas.dataset.audioTime = (Number.isFinite(playbackClock) ? playbackClock / 1000 : 0).toFixed(3);
     canvas.dataset.segment = String(segment);
     canvas.dataset.mode = 'precomputed-neural';
+    canvas.dataset.composite = 'sharp-original-mouth-only';
     canvas.dataset.frames = String(paints);
   }
   function status(state, message) {
@@ -141,7 +142,10 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
     expressionProgress = transition;
     const expressions = previousExpression === expression ? [[expression, 1]] :
       [[previousExpression, 1 - transition], [expression, transition]];
-    const yawWeights = crispAxis(mixAxis(headYaw, -3, 3, 3));
+    // The full-resolution original owns the head. Center-column neural
+    // mouth frames prevent blurred sideways motion inside the mouth mask.
+    // Wider neural head turns remain blocked by the image-quality gate.
+    const yawWeights = [[1, 1]];
     const mouthWeights = crispAxis(mixAxis(mouth, 0, .9, 3));
     ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
     ctx.fillStyle = '#000'; ctx.fillRect(0, 0, SIZE, SIZE);
