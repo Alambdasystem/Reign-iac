@@ -199,6 +199,9 @@ async def simulated_team_speech_ui(browser, storage_state, origin, evidence):
         await page.wait_for_function("""() => __speechOutput.sources.length === 1 &&
             !__speechOutput.sources[0].ended &&
             Number(document.querySelector('#reignAvatar').dataset.mouth) > .15""")
+        await asyncio.wait_for(later_audio_requested.wait(), 2)
+        assert await page.evaluate('!__speechOutput.sources[0].ended')
+        later_audio_ready.set()
         # Browser-rendered speech must mask the neural image to the mouth only.
         assert await page.locator('#reignAvatar').evaluate("""canvas => {
             const style = getComputedStyle(canvas);
@@ -228,9 +231,6 @@ async def simulated_team_speech_ui(browser, storage_state, origin, evidence):
             path=str(evidence / 'reign-mouth-overlay-fullscreen.png'))
         await page.evaluate("document.getElementById('callspaceModeChat').click()")
 
-        await asyncio.wait_for(later_audio_requested.wait(), 2)
-        assert await page.evaluate('!__speechOutput.sources[0].ended')
-        later_audio_ready.set()
         await page.wait_for_function("""() => __speechOutput.sources.length === 2 &&
             __speechOutput.sources.every(source => source.ended) &&
             document.querySelector('#reignAvatar').dataset.speaking === 'false'""")
