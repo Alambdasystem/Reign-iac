@@ -51,6 +51,19 @@ export function speechHeadYaw({active = false, level = 0, clockMs = null, now = 
   return Math.max(-3, Math.min(3, turn * (.45 + .55 * energy / .9)));
 }
 
+// Compute the position of the *source mouth* after object-fit:cover crops a
+// centered square. A fixed percent of the screen instead targets the nose in
+// wide fullscreen mode and causes a visibly blurry oval.
+export function mouthOverlayGeometry(width, height) {
+  if (!(Number.isFinite(width) && Number.isFinite(height)) || width <= 0 || height <= 0) return null;
+  const cover = Math.max(width, height);
+  return {
+    centerY: height / 2 + cover * .11,  // mouth near source-image y=.61
+    radiusX: cover * .075,             // lips only, not cheek/eye skin
+    radiusY: cover * .028
+  };
+}
+
 export function speechEnvelope(samples) {
   if (!samples?.length) return 0;
   let sum = 0;
@@ -65,6 +78,19 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
   let expression = 0, previousExpression = 0, expressionChanged = 0;
   let playbackClock = null, lastPlaybackClock = null, expressionClock = false;
   let expressionSource = 'neutral', segment = 0, expressionProgress = 1, headYaw = 0;
+  let maskWidth = -1, maskHeight = -1, maskReady = false;
+  function layoutMouthMask() {
+    const width = canvas.clientWidth || canvas.parentElement?.clientWidth || 0;
+    const height = canvas.clientHeight || canvas.parentElement?.clientHeight || 0;
+    if (width === maskWidth && height === maskHeight) return;
+    maskWidth = width; maskHeight = height;
+    const layout = mouthOverlayGeometry(width, height);
+    maskReady = !!layout && !!canvas.style?.setProperty;
+    if (!maskReady) return;
+    canvas.style.setProperty('--reign-mouth-center-y', layout.centerY.toFixed(2) + 'px');
+    canvas.style.setProperty('--reign-mouth-rx', layout.radiusX.toFixed(2) + 'px');
+    canvas.style.setProperty('--reign-mouth-ry', layout.radiusY.toFixed(2) + 'px');
+  }
   let listeningLevel = 0, listeningUpdatedAt = -Infinity, headNod = 0, headTilt = 0;
   canvas.width = canvas.height = SIZE;
   function diagnostics(state) {
@@ -82,6 +108,8 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
     canvas.dataset.audioTime = (Number.isFinite(playbackClock) ? playbackClock / 1000 : 0).toFixed(3);
     canvas.dataset.segment = String(segment);
     canvas.dataset.mode = 'precomputed-neural';
+    canvas.dataset.composite = 'sharp-original-mouth-only';
+    canvas.dataset.maskReady = String(maskReady);
     canvas.dataset.frames = String(paints);
   }
   function status(state, message) {
@@ -101,6 +129,7 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
   function paint(now, initial = false) {
     animation = null;
     if (dead || !loaded || (document.hidden && !initial)) return;
+    layoutMouthMask();
     if (now - lastPaint < 1000 / 30) { schedule(); return; }
     if (getPlaybackState) {
       try { setPlaybackState(getPlaybackState() || {active: false}, false); }
@@ -141,7 +170,10 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
     expressionProgress = transition;
     const expressions = previousExpression === expression ? [[expression, 1]] :
       [[previousExpression, 1 - transition], [expression, transition]];
-    const yawWeights = crispAxis(mixAxis(headYaw, -3, 3, 3));
+    // The full-resolution original owns the head. Center-column neural
+    // mouth frames prevent blurred sideways motion inside the mouth mask.
+    // Wider neural head turns remain blocked by the image-quality gate.
+    const yawWeights = [[1, 1]];
     const mouthWeights = crispAxis(mixAxis(mouth, 0, .9, 3));
     ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
     ctx.fillStyle = '#000'; ctx.fillRect(0, 0, SIZE, SIZE);
