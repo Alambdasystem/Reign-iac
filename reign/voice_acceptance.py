@@ -12,6 +12,7 @@ import json
 import logging
 import math
 import sys
+import time
 import wave
 from array import array
 from datetime import datetime, timezone
@@ -217,13 +218,18 @@ async def collect_delegate(reader):
             return next(iter(calls.items()))
 
 
-async def collect_audio(reader, receipt):
+async def collect_audio(reader, receipt, *, input_committed_at=None, narration_started_at=None):
     stats, transcript_present, response_finished = PCMStats(), False, False
     while not (response_finished and reader.input_transcript_present):
         event = await reader.next()
         if event["type"] == "response.function_call_arguments.done":
             raise ProbeFailure("unexpected_second_delegation")
         if event["type"] == "response.output_audio.delta":
+            if not stats.sample_count and input_committed_at is not None:
+                now = time.monotonic()
+                receipt.setdefault("latency_ms", {})["input_commit_to_first_audio_delta"] = round((now - input_committed_at) * 1000)
+                if narration_started_at is not None:
+                    receipt["latency_ms"]["narration_to_first_audio_delta"] = round((now - narration_started_at) * 1000)
             try:
                 delta = base64.b64decode(event.get("delta", ""), validate=True)
             except (ValueError, TypeError):
@@ -267,32 +273,44 @@ class StatusOnlyTools:
 
 
 async def run_graph(message, receipt):
-    from reign.core import app, lifespan
-    async with lifespan(app):
-        runtime = app.state.agent
-        adapter = StatusOnlyTools(runtime.adapter)
-        runtime.adapter = adapter
-        initial = runtime.submit(message)
-        thread = runtime.get(initial["thread_id"])
-        await asyncio.wait_for(asyncio.shield(thread.task), 120)
-        result = thread.snapshot()
-        tools = [event.get("tool") for event in result["events"] if event.get("kind") == "tool_started"]
-        known_tools = {"workspace_status", "browser_status", "open_browser", "navigate_browser"}
-        receipt["graph"] = {"model": model_name("OPENAI_MODEL", "gpt-6-astra"),
-                            "tools": [tool for tool in tools if tool in known_tools],
-                            "usage": {key: max(0, int(result["usage"].get(key, 0)))
-                                      for key in ("input_tokens", "output_tokens")}}
-        success = any(event.get("kind") == "tool_completed" and event.get("tool") == "workspace_status"
-                      and event.get("ok") is True for event in result["events"])
-        if (result["status"] != "completed" or not success or adapter.denied
-                or any(tool != "workspace_status" for tool in tools)):
-            raise ProbeFailure("graph_status_tool_failed")
-        answer = result.get("answer")
-        if not isinstance(answer, str) or not 1 <= len(answer.strip()) <= 16000:
-            raise ProbeFailure("graph_answer_missing_or_oversized")
-        return {"status": "completed", "answer": answer, "orchestration": "langgraph",
-                "tools": ["workspace_status"]}
+    # Exercise the real MCP-backed LangGraph without starting the entire Core
+    # application (team, disk, voice and browser lifecycle are unrelated to
+    # this read-only voice probe and can fail during shutdown).
+    from reign.agent import AgentRuntime
+    from reign.mcp_client import MCPTools, WorkspaceMCP
+    async with WorkspaceMCP().connect() as connection:
+        adapter = StatusOnlyTools(MCPTools(connection))
+        runtime = AgentRuntime(adapter=adapter)
+        try:
+            initial = runtime.submit(message, input_source="voice")
+            thread = runtime.get(initial["thread_id"])
+            await asyncio.wait_for(asyncio.shield(thread.task), 120)
+            result = thread.snapshot()
+            tools = [event.get("tool") for event in result["events"] if event.get("kind") == "tool_started"]
+            known_tools = {"workspace_status", "browser_status", "open_browser", "navigate_browser"}
+            receipt["graph"] = {"model": model_name("OPENAI_MODEL", "gpt-6-astra"),
+                                "input_source": "voice",
+                                "tools": [tool for tool in tools if tool in known_tools],
+                                "usage": {key: max(0, int(result["usage"].get(key, 0)))
+                                          for key in ("input_tokens", "output_tokens")}}
+            receipt["graph"]["run_status"] = result["status"] if result["status"] in (
+                "completed", "failed", "paused", "cancelled", "running") else "unknown"
+            receipt["graph"]["status_tool_completed"] = any(
+                event.get("kind") == "tool_completed" and event.get("tool") == "workspace_status"
+                for event in result["events"])
+            success = any(event.get("kind") == "tool_completed" and event.get("tool") == "workspace_status"
+                          and event.get("ok") is True for event in result["events"])
+            if (result["status"] != "completed" or not success or adapter.denied
+                    or any(tool != "workspace_status" for tool in tools)):
+                raise ProbeFailure("graph_status_tool_failed")
+            answer = result.get("answer")
+            if not isinstance(answer, str) or not 1 <= len(answer.strip()) <= 16000:
+                raise ProbeFailure("graph_answer_missing_or_oversized")
+            return {"status": "completed", "answer": answer, "orchestration": "langgraph",
+                    "tools": ["workspace_status"]}
 
+        finally:
+            await runtime.shutdown()
 
 def new_receipt():
     return {"verification": "reign_voice_provider", "status": "failed", "stage": "configuration",
@@ -336,6 +354,7 @@ async def run_acceptance(receipt):
                 await socket.send(json.dumps({"type": "input_audio_buffer.append",
                                              "audio": base64.b64encode(pcm[offset:offset + 32768]).decode()}))
             await socket.send(json.dumps({"type": "input_audio_buffer.commit"}))
+            committed_at = time.monotonic()
             await reader.until("input_audio_buffer.committed")
             passed(receipt)
             stage(receipt, "delegation")
@@ -343,17 +362,22 @@ async def run_acceptance(receipt):
                 "output_modalities": ["text"],
                 "tool_choice": {"type": "function", "name": "delegate_to_reign"}}}))
             call_id, message = await collect_delegate(reader)
+            receipt["latency_ms"] = {"input_commit_to_delegation": round((time.monotonic() - committed_at) * 1000)}
             receipt["input_transcript_present"] = reader.input_transcript_present
             passed(receipt)
             stage(receipt, "langgraph")
+            graph_started_at = time.monotonic()
             result = await run_graph(message, receipt)
+            receipt["latency_ms"]["graph_with_probe_startup"] = round((time.monotonic() - graph_started_at) * 1000)
             passed(receipt)
             stage(receipt, "narration")
             await socket.send(json.dumps({"type": "conversation.item.create", "item": {
                 "type": "function_call_output", "call_id": call_id, "output": json.dumps(result)}}))
+            narration_started_at = time.monotonic()
             await socket.send(json.dumps({"type": "response.create", "response": {
                 "output_modalities": ["audio"], "tool_choice": "none"}}))
-            stats = await collect_audio(reader, receipt)
+            stats = await collect_audio(reader, receipt, input_committed_at=committed_at,
+                                        narration_started_at=narration_started_at)
             passed(receipt)
             stage(receipt, "audio_validation")
             stats.require_speech()
@@ -382,8 +406,14 @@ def main():
         receipt["error_code"] = "probe_timeout"
     except ConnectionClosed:
         receipt["error_code"] = "provider_connection_closed"
-    except Exception:
+    except Exception as error:
+        # Never log exception messages or tracebacks: SDK errors can contain
+        # provider responses, credentials, or delegated transcript text.
         receipt["error_code"] = "probe_internal_error"
+        safe_types = {"RuntimeError", "ValueError", "TypeError", "KeyError",
+                      "AttributeError", "OSError", "ExceptionGroup", "McpError"}
+        receipt["internal_error_type"] = (type(error).__name__
+                                          if type(error).__name__ in safe_types else "other")
     if receipt["status"] != "passed":
         receipt["stages"][receipt["stage"]] = "failed"
     receipt["finished_at"] = datetime.now(timezone.utc).isoformat()

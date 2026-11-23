@@ -19,13 +19,17 @@ jobs:
         with:
           node-version: '22'
       - name: Install application and test dependencies
-        run: pip install -r services/core/requirements.txt -r services/computer/requirements.txt -r services/ax/requirements.txt
+        run: pip install -r services/core/requirements.txt -r services/computer/requirements.txt -r services/ax/requirements.txt Pillow==13.0.0
       - run: python -m compileall -q reign scripts tests
       - run: python -m unittest discover -s tests -v
       - name: Voice controller lifecycle and delegation (simulated media/provider)
         run: |
           node --check services/ax/voice.js
           node --test tests/voice_controller.test.js tests/live_chat_recovery.test.js
+      - name: Portrait model controls, motion interpolation and worker lifecycle
+        run: node --test tests/portrait_engine.test.mjs tests/portrait_motion.test.mjs
+      - name: Shared workspace and media lifecycle
+        run: node --test tests/team_*.test.mjs
   postgres-integration:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -66,6 +70,15 @@ jobs:
           for service in core ax computer temporal; do
             docker build --platform linux/amd64 -f "services/$service/Dockerfile" -t "reign-$service:ci" .
           done
+      - name: Offline nonroot Tailscale daemon and CLI smoke
+        timeout-minutes: 2
+        run: |
+          docker run --rm --network none --user 10001:10001 --group-add 1000 \
+            --env PYTHONPATH=/app \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --read-only --tmpfs /tmp:rw,nosuid,noexec,mode=1777,size=32m \
+            --mount "type=bind,source=$PWD/scripts/tailscale_daemon_smoke.py,target=/smoke/tailscale_daemon_smoke.py,readonly" \
+            --entrypoint python reign-core:ci /smoke/tailscale_daemon_smoke.py
       - name: Real AX browser, Core, Temporal and Computer acceptance
         run: bash scripts/container_smoke.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

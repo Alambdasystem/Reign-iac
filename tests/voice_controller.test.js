@@ -60,20 +60,23 @@ class FakeChannel extends Events {
 }
 
 class FakeAudio extends Events {
-  constructor() {
-    super(); this.paused = true; this.srcObject = null; this.currentTime = 0;
+  constructor(clock) {
+    super(); this.clock = clock; this.paused = true; this.srcObject = null; this.currentTime = 0;
     this.plays = 0; this.pauses = 0; this.blockNextPlay = false;
   }
+  get currentTime() { return this.mediaTime + (this.paused || this.clockFrozen ? 0 : (this.clock.now() - this.anchor) / 1000); }
+  set currentTime(value) { this.mediaTime = Number(value) || 0; this.anchor = this.clock.now(); }
   async play() {
     this.plays++;
     if (this.blockNextPlay) {
       this.blockNextPlay = false;
       throw Object.assign(new Error('Browser requires a playback gesture.'), {name: 'NotAllowedError'});
     }
+    if (this.paused) this.anchor = this.clock.now();
     this.paused = false;
     this.emit('playing');
   }
-  pause() { this.pauses++; this.paused = true; this.emit('pause'); }
+  pause() { this.currentTime = this.currentTime; this.pauses++; this.paused = true; this.emit('pause'); }
   removeAttribute(name) { if (name === 'src') this.src = ''; }
   load() {}
 }
@@ -116,9 +119,9 @@ function fakeClock() {
 
 function harness(t, options = {}) {
   const clock = fakeClock(), microphone = track(), microphoneStream = stream(microphone);
-  const peers = [], apiCalls = [], turnCalls = [], cancelled = [], states = [], captions = [];
-  const audio = new FakeAudio();
-  let microphoneRequests = 0;
+  const peers = [], apiCalls = [], turnCalls = [], cancelled = [], states = [], captions = [], levels = [], outputLevels = [], outputStates = [];
+  const audio = new FakeAudio(clock);
+  let microphoneRequests = 0, speechStarts = 0;
   class FakePeer extends Events {
     constructor() {
       super(); this.connectionState = 'new'; this.iceConnectionState = 'new';
@@ -137,6 +140,8 @@ function harness(t, options = {}) {
   }
   const config = {configured: true, model: 'test-realtime-model', voice: 'marin', max_duration_seconds: 900};
   const controller = createVoiceController({
+    connectionCheck: options.connectionCheck,
+    onUserSpeechStart: () => { speechStarts++; options.onUserSpeechStart?.(); },
     api: async (path, method = 'GET', body, extra = {}) => {
       apiCalls.push({path, method, body, signal: extra.signal});
       if (options.api) return options.api(path, method, body, extra);
@@ -157,18 +162,20 @@ function harness(t, options = {}) {
     },
     onState: state => states.push({...state}),
     onCaption: caption => captions.push({...caption}),
-    onLevel() {},
+    onLevel: value => levels.push(value),
+    onOutputLevel: (value, playback) => { outputLevels.push(value); outputStates.push({...playback, level:value}); },
     mediaDevices: {getUserMedia: async constraints => {
       microphoneRequests++;
       assert.ok(constraints.audio, 'must request an audio track');
       return options.getUserMedia ? options.getUserMedia(constraints) : microphoneStream;
     }},
-    Peer: FakePeer, audio, AudioContext: null, timers: clock.timers, now: clock.now
+    Peer: FakePeer, audio, AudioContext: options.AudioContext || null, timers: clock.timers, now: clock.now
   });
   const h = {
     controller, microphone, microphoneStream, peers, audio, apiCalls, turnCalls,
-    cancelled, states, captions, clock,
+    cancelled, states, captions, clock, levels, outputLevels, outputStates,
     get microphoneRequests() { return microphoneRequests; },
+    get speechStarts() { return speechStarts; },
     get peer() { return peers.at(-1); },
     get channel() { return peers.at(-1)?.channel; },
     async connect() {
@@ -179,8 +186,10 @@ function harness(t, options = {}) {
       h.channel.readyState = 'open'; h.channel.emit('open');
       h.channel.receive({type: 'session.created', session: {id: 'test-session'}});
       await pending;
-      h.channel.receive({type: 'response.created', response: {id: 'setup-response'}});
-      h.channel.receive({type: 'response.done', response: {id: 'setup-response', status: 'completed', output: []}});
+      if(options.connectionCheck!==false){
+        h.channel.receive({type: 'response.created', response: {id: 'setup-response'}});
+        h.channel.receive({type: 'response.done', response: {id: 'setup-response', status: 'completed', output: []}});
+      }
       await settle();
       return h;
     },
@@ -216,6 +225,44 @@ test('connects microphone and negotiates audio without exposing provider credent
   const offer = h.apiCalls.find(call => call.path === '/api/voice/offer');
   assert.deepEqual(Object.keys(offer.body), ['sdp']);
   assert.ok(offer.signal instanceof AbortSignal);
+});
+
+test('continuous room mode skips the generated greeting and keeps one microphone stream across speech turns', async t => {
+  const h=await harness(t,{connectionCheck:false,config:{max_duration_seconds:3600}}).connect();
+  assert.equal(h.channel.sent.some(event=>event.type==='conversation.item.create'||event.type==='response.create'),false);
+  assert.equal(h.controller.snapshot().phase,'listening');
+  h.clock.advance(21000);await settle();
+  assert.equal(h.controller.snapshot().active,true,'there is no 20-second recording limit');
+  assert.equal(h.microphone.stops,0);assert.equal(h.microphoneRequests,1);
+  h.channel.receive({type:'input_audio_buffer.speech_started'});
+  h.channel.receive({type:'input_audio_buffer.speech_stopped'});
+  h.functionCall('continuous-first','First spoken question.');
+  await eventually(()=>h.turnCalls.length===1&&narrations(h).length===1);
+  const first=narrations(h)[0];
+  h.channel.receive({type:'response.created',response:{id:'continuous-narration',metadata:first.response.metadata}});
+  h.channel.receive({type:'input_audio_buffer.speech_started'});
+  assert.equal(h.speechStarts,2,'real provider speech-start also stops any competing shared-room playback');
+  assert.equal(h.audio.muted,true,'barge-in immediately closes REIGN output');
+  h.channel.receive({type:'response.done',response:{id:'continuous-narration',status:'cancelled',output:[]}});
+  h.channel.receive({type:'input_audio_buffer.speech_stopped'});
+  h.functionCall('continuous-second','Second spoken question.');
+  await eventually(()=>h.turnCalls.length===2);
+  assert.equal(h.microphoneRequests,1);assert.equal(h.peers.length,1);
+  assert.equal(h.peer.tracks[0].track,h.microphone);
+  assert.equal(h.microphone.enabled,true);assert.equal(h.microphone.stops,0);
+  assert.equal(h.turnCalls.every(item=>item.context.connectionCheck===false),true);
+});
+
+test('capability call duration honors the shared one-hour limit and reports its actual expiration', async t => {
+  for(const configured of [3600,7200]){
+    const h=await harness(t,{connectionCheck:false,config:{max_duration_seconds:configured}}).connect();
+    const duration=[...h.clock.scheduled.values()].find(item=>!item.repeat&&item.delay===3600000);
+    assert.ok(duration,'shared continuous voice must not inherit the private 15-minute timer');
+    await duration.fn();
+    assert.equal(h.controller.snapshot().active,false);
+    assert.match(h.controller.snapshot().status,/60-minute voice session ended/);
+    assert.equal(h.microphone.stops,1);
+  }
 });
 
 test('the connection greeting must finish the REIGN graph before requesting speech', async t => {
@@ -408,6 +455,311 @@ test('only a matching verified narration buffer can unmute incoming audio', asyn
     id: 'next-delegation', metadata: {reign_voice_phase: 'delegation', reign_voice_turn: '0'}
   }});
   assert.equal(h.audio.muted, true, 'a new non-narration response must close the verified playback gate');
+});
+
+class MeterAudioContext {
+  state = 'running'; destination = {};
+  async resume() { this.state = 'running'; }
+  async close() { this.state = 'closed'; }
+  createMediaStreamSource(value) {
+    return {connect(analyser) { analyser.stream = value; }, disconnect() {}};
+  }
+  createAnalyser() {
+    return {fftSize: 256, disconnect() {}, getByteTimeDomainData(values) {
+      const microphone = this.stream?.getAudioTracks()[0]?.id === 'microphone';
+      values.fill(microphone ? 176 : this.stream?.silent ? 128 : 144);
+    }};
+  }
+}
+
+function annotatedAnswer(segments = [
+  {text:'The verified first sentence.',expression:'warm'},
+  {text:'The verified second sentence.',expression:'thoughtful'}
+]) {
+  const result = {thread_id:'00000000-0000-4000-8000-000000000001',
+    run_id:'00000000-0000-4000-8000-000000000101',status:'completed',answer:segments.map(item => item.text).join(' ')};
+  return {...result,speech:{thread_id:result.thread_id,run_id:result.run_id,status:result.status,
+    text:result.answer,segments,speech_status:'ready'}};
+}
+const narrations = h => h.channel.sent.filter(event => event.type === 'response.create' && event.response.tool_choice === 'none');
+async function beginNarration(h, remote, id = 'first-spoken-response', {blocked = false} = {}) {
+  h.peer.emit('track', {streams:[remote]}); await settle();
+  h.functionCall('expression-plan');
+  await eventually(() => narrations(h).length === 1, 'verified graph output must request narration');
+  const request = narrations(h).at(-1);
+  h.channel.receive({type:'response.created',response:{id,metadata:request.response.metadata}});
+  h.audio.blockNextPlay = blocked;
+  h.channel.receive({type:'output_audio_buffer.started',response_id:id});
+  await settle();
+  return request;
+}
+
+test('speaker recovery never waits for a suspended meter context and late resume cannot revive an ended call', async t => {
+  const contexts = [];
+  class SuspendedContext extends MeterAudioContext {
+    state = 'suspended';
+    constructor() { super(); this.pending = deferred(); contexts.push(this); }
+    resume() { return this.pending.promise.then(() => { this.state='running'; this.onstatechange?.(); }); }
+  }
+  const h = await harness(t, {AudioContext:SuspendedContext}).connect();
+  await beginNarration(h, stream(track('reign-output')));
+  h.audio.pause();
+  assert.equal(h.controller.snapshot().speakerBlocked, true);
+  const before = h.audio.plays;
+  const enabled = h.controller.enableSpeaker();
+  assert.equal(h.audio.plays, before + 1, 'native play must begin synchronously in the gesture');
+  assert.equal(await enabled, true, 'the unresolved meter resume cannot block audio recovery');
+  assert.equal(h.audio.muted, false); assert.equal(h.audio.paused, false);
+  h.clock.advance(100);
+  assert.equal(h.outputLevels.at(-1), 0);
+  assert.equal(h.controller.snapshot().playback.meterState, 'suspended');
+  assert.equal(h.controller.snapshot().speakerBlocked, false);
+  await h.controller.stop(); const states = h.states.length;
+  contexts[0].pending.resolve(); await settle();
+  assert.equal(h.states.length, states, 'a late meter resume cannot update the retired call');
+  assert.equal(h.audio.srcObject, null);
+});
+
+test('a late successful play promise cannot hide a newer playback failure', async t => {
+  const h = await harness(t).connect(), old = deferred();
+  h.audio.play = () => old.promise;
+  h.peer.emit('track', {streams:[stream(track('remote-audio'))]});
+  h.audio.play = async () => { throw Error('Blocked'); };
+  h.functionCall('new-play');
+  await eventually(() => narrations(h).length === 1);
+  h.channel.receive({type:'response.created',response:{id:'new-play',metadata:narrations(h)[0].response.metadata}});
+  h.channel.receive({type:'output_audio_buffer.started',response_id:'new-play'});
+  await settle(); assert.equal(h.controller.snapshot().speakerBlocked, true);
+  old.resolve(); await settle();
+  assert.equal(h.controller.snapshot().speakerBlocked, true);
+});
+
+test('sentence expressions follow verified playback and queue only after the real audio tail is quiet', async t => {
+  const result = annotatedAnswer(), remote = stream(track('reign-output'));
+  remote.silent = true;
+  const h = await harness(t, {AudioContext:MeterAudioContext,runTurn:async () => result}).connect();
+  const first = await beginNarration(h, remote);
+  assert.equal(first.response.metadata.reign_voice_segment, '0');
+  assert.ok(first.response.instructions.endsWith(JSON.stringify(result.speech.segments[0].text)));
+  h.clock.advance(66);
+  assert.equal(h.outputStates.at(-1).active, true, 'silent samples do not end verified native playback');
+  assert.equal(h.outputStates.at(-1).expression, 'neutral', 'provider events alone do not advance an expression cue');
+  remote.silent = false; h.clock.advance(66);
+  assert.equal(h.outputStates.at(-1).expression, 'warm');
+  assert.equal(h.outputStates.at(-1).expressionSource, 'model');
+  const cue = h.outputStates.at(-1).cueMs;
+  remote.silent = true; h.clock.advance(66);
+  assert.equal(h.outputStates.at(-1).active, true); assert.equal(h.outputStates.at(-1).level, 0);
+  assert.equal(h.outputStates.at(-1).cueMs, cue);
+  remote.silent = false;
+  h.channel.receive({type:'response.done',response:{id:'first-spoken-response',status:'completed',output:[]}});
+  h.clock.advance(500); assert.equal(narrations(h).length, 1, 'response.done cannot skip the remaining audio');
+  h.channel.receive({type:'output_audio_buffer.stopped',response_id:'first-spoken-response'});
+  h.clock.advance(500); assert.equal(narrations(h).length, 1, 'server drain cannot skip an audible native tail');
+  remote.silent = true; h.clock.advance(250);
+  assert.equal(narrations(h).length, 2);
+  const second = narrations(h)[1];
+  assert.equal(second.response.metadata.reign_voice_segment, '1');
+  assert.notEqual(second.response.metadata.reign_voice_request, first.response.metadata.reign_voice_request);
+  assert.equal(h.turnCalls.length, 1, 'sentence sequencing never re-runs the graph');
+  h.channel.receive({type:'output_audio_buffer.cleared',response_id:'first-spoken-response'});
+  h.channel.receive({type:'response.created',response:{id:'second-spoken-response',metadata:second.response.metadata}});
+  h.channel.receive({type:'output_audio_buffer.started',response_id:'second-spoken-response'});
+  remote.silent = false; await settle(); h.clock.advance(66);
+  assert.equal(h.outputStates.at(-1).expression, 'thoughtful');
+  h.channel.receive({type:'input_audio_buffer.speech_started'});
+  assert.equal(h.outputStates.at(-1).active, false); assert.equal(h.outputStates.at(-1).expression, 'neutral');
+  h.channel.receive({type:'response.done',response:{id:'second-spoken-response',status:'completed',output:[]}});
+  h.channel.receive({type:'output_audio_buffer.stopped',response_id:'second-spoken-response'});
+  h.clock.advance(2000);
+  assert.equal(narrations(h).length, 2, 'interruption must discard the rest of the speech queue');
+});
+
+test('slow expression annotations cannot delay exact narration or change a sentence after its audible onset', async t => {
+  const complete=annotatedAnswer(), annotation=deferred();
+  const result={...complete,speech:undefined,speechPromise:annotation.promise};
+  const remote=stream(track('reign-output'));
+  const h=await harness(t,{AudioContext:MeterAudioContext,runTurn:async()=>result}).connect();
+  const readyAt=h.clock.now();
+  const first=await beginNarration(h,remote);
+  assert.equal(h.clock.now()-readyAt,0,'optional model work adds no timer wait before narration preparation');
+  assert.ok(first.response.instructions.endsWith(JSON.stringify(complete.speech.segments[0].text)));
+  assert.equal(first.response.metadata.reign_voice_segment_count,'2');
+  h.clock.advance(66);
+  assert.equal(h.outputStates.at(-1).expression,'neutral');
+  assert.ok(h.outputLevels.at(-1)>0,'the verified sentence is already playing while annotation is unresolved');
+  annotation.resolve(complete.speech);await settle();h.clock.advance(66);
+  assert.equal(h.outputStates.at(-1).expression,'neutral','a late cue never changes an already audible sentence');
+  h.channel.receive({type:'response.done',response:{id:'first-spoken-response',status:'completed',output:[]}});
+  h.channel.receive({type:'output_audio_buffer.stopped',response_id:'first-spoken-response'});
+  remote.silent=true;h.clock.advance(250);
+  assert.equal(narrations(h).length,2);
+  const second=narrations(h)[1];
+  h.channel.receive({type:'response.created',response:{id:'second-spoken-response',metadata:second.response.metadata}});
+  h.channel.receive({type:'output_audio_buffer.started',response_id:'second-spoken-response'});
+  remote.silent=false;await settle();h.clock.advance(66);
+  assert.equal(h.outputStates.at(-1).expression,'thoughtful','a matching future sentence still receives its model expression');
+  assert.equal(h.turnCalls.length,1,'annotation scheduling never repeats the graph action');
+});
+
+test('expression metadata arriving before audible onset applies without delaying audio preparation', async t => {
+  const complete=annotatedAnswer(), annotation=deferred();
+  const remote=stream(track('reign-output'));remote.silent=true;
+  const h=await harness(t,{AudioContext:MeterAudioContext,runTurn:async()=>({...complete,speech:undefined,speechPromise:annotation.promise})}).connect();
+  await beginNarration(h,remote);h.clock.advance(66);
+  annotation.resolve(complete.speech);await settle();
+  remote.silent=false;h.clock.advance(66);
+  assert.equal(h.outputStates.at(-1).expression,'warm');
+  assert.equal(h.outputStates.at(-1).expressionSource,'model');
+});
+
+test('a grouped annotation labels only future sentences fully contained in its verified span', async t => {
+  const complete=annotatedAnswer(),annotation=deferred();
+  const remote=stream(track('reign-output'));
+  const h=await harness(t,{AudioContext:MeterAudioContext,runTurn:async()=>({...complete,speech:undefined,speechPromise:annotation.promise})}).connect();
+  await beginNarration(h,remote);h.clock.advance(66);
+  assert.equal(h.outputStates.at(-1).expression,'neutral');
+  annotation.resolve({...complete.speech,segments:[{text:complete.answer,expression:'concerned'}]});
+  await settle();h.clock.advance(66);
+  assert.equal(h.outputStates.at(-1).expression,'neutral','the first sentence keeps its already audible neutral cue');
+  h.channel.receive({type:'response.done',response:{id:'first-spoken-response',status:'completed',output:[]}});
+  h.channel.receive({type:'output_audio_buffer.stopped',response_id:'first-spoken-response'});
+  remote.silent=true;h.clock.advance(250);
+  assert.equal(narrations(h).length,2);
+  const next=narrations(h)[1];
+  h.channel.receive({type:'response.created',response:{id:'second-spoken-response',metadata:next.response.metadata}});
+  h.channel.receive({type:'output_audio_buffer.started',response_id:'second-spoken-response'});
+  remote.silent=false;await settle();h.clock.advance(66);
+  assert.equal(h.outputStates.at(-1).expression,'concerned','the second sentence is fully inside the verified grouped tone span');
+  assert.equal(h.outputStates.at(-1).expressionSource,'model');
+  assert.equal(h.turnCalls.length,1);
+});
+
+test('interruption fences late expression plans and sentences crossing tone spans retain neutral cues', async t => {
+  for(const interrupted of [false,true]){
+    const complete=annotatedAnswer(),annotation=deferred();
+    const remote=stream(track('reign-output'));remote.silent=true;
+    const h=await harness(t,{AudioContext:MeterAudioContext,runTurn:async()=>({...complete,speech:undefined,speechPromise:annotation.promise})}).connect();
+    await beginNarration(h,remote);
+    if(interrupted)h.channel.receive({type:'input_audio_buffer.speech_started'});
+    const differentlySegmented={...complete.speech,segments:[
+      {text:'The verified',expression:'warm'},
+      {text:'first sentence. The verified second sentence.',expression:'concerned'}]};
+    annotation.resolve(interrupted?complete.speech:differentlySegmented);await settle();
+    remote.silent=false;h.clock.advance(66);
+    assert.equal(h.outputStates.at(-1).expression,'neutral');
+    assert.equal(h.outputStates.at(-1).expressionSource,'neutral');
+    if(interrupted)assert.equal(h.outputStates.at(-1).active,false);
+    assert.equal(narrations(h).length,1);
+  }
+});
+
+test('buffering or a frozen native media clock stops portrait motion and cannot silently advance a sentence', async t => {
+  const remote = stream(track('reign-output'));
+  const h = await harness(t, {AudioContext:MeterAudioContext,runTurn:async () => annotatedAnswer()}).connect();
+  await beginNarration(h, remote); h.clock.advance(66);
+  assert.ok(h.outputLevels.at(-1) > 0);
+  h.audio.emit('waiting');
+  assert.equal(h.outputStates.at(-1).active, false);
+  h.audio.emit('playing'); h.clock.advance(66); assert.ok(h.outputLevels.at(-1) > 0);
+  h.audio.currentTime = h.audio.currentTime; h.audio.clockFrozen = true;
+  h.clock.advance(500);
+  assert.equal(h.outputStates.at(-1).active, false); assert.equal(h.outputLevels.at(-1), 0);
+  assert.equal(h.audio.muted, false, 'meter/clock diagnostics must never mute the actual audio');
+  h.channel.receive({type:'response.done',response:{id:'first-spoken-response',status:'completed',output:[]}});
+  h.channel.receive({type:'output_audio_buffer.stopped',response_id:'first-spoken-response'});
+  remote.silent = true; h.clock.advance(1600);
+  assert.equal(narrations(h).length, 1);
+  assert.equal(h.controller.snapshot().playback.retryAvailable, true);
+  assert.match(h.controller.snapshot().status, /playback was not detected/);
+});
+
+test('a sentence drained during blocked playback is replayed only by a fresh speaker gesture, without re-running the graph', async t => {
+  const h = await harness(t, {AudioContext:MeterAudioContext,runTurn:async () => annotatedAnswer()}).connect();
+  await beginNarration(h, stream(track('reign-output')), 'first-spoken-response', {blocked:true});
+  assert.equal(h.controller.snapshot().speakerBlocked, true);
+  h.channel.receive({type:'response.done',response:{id:'first-spoken-response',status:'completed',output:[]}});
+  h.channel.receive({type:'output_audio_buffer.stopped',response_id:'first-spoken-response'});
+  h.clock.advance(2000); assert.equal(narrations(h).length, 1);
+  await h.controller.enableSpeaker();
+  assert.equal(narrations(h).length, 2); assert.equal(h.turnCalls.length, 1);
+  assert.equal(narrations(h)[1].response.metadata.reign_voice_segment, '0');
+  assert.notEqual(narrations(h)[1].response.metadata.reign_voice_request, narrations(h)[0].response.metadata.reign_voice_request);
+  assert.equal(h.audio.muted, true, 'a replay still waits for its new matching narration buffer');
+  h.channel.receive({type:'output_audio_buffer.started',response_id:'first-spoken-response'});
+  assert.equal(h.audio.muted, true, 'the old buffer cannot authorize the new replay');
+});
+
+test('a malformed or mismatched expression plan falls back to the original verified neutral narration', async t => {
+  const result = annotatedAnswer(); result.speech.segments[0].text = 'Unverified replacement text.';
+  const h = await harness(t, {AudioContext:MeterAudioContext,runTurn:async () => result}).connect();
+  await beginNarration(h, stream(track('reign-output'))); h.clock.advance(66);
+  assert.equal(narrations(h)[0].response.metadata.reign_voice_segment_count, '2');
+  assert.equal(narrations(h)[0].response.instructions.includes('Unverified replacement text'), false);
+  assert.equal(h.audio.muted, false); assert.ok(h.outputLevels.at(-1) > 0);
+  assert.equal(h.outputStates.at(-1).expressionSource, 'neutral');
+  assert.equal(JSON.parse(outputs(h.channel, 'expression-plan')[0].item.output).answer, result.answer);
+});
+
+test('private transcript checks preserve decimal tokens and accept harmless apostrophe punctuation', async t => {
+  const result = annotatedAnswer([{text:"It's 1.2 units.",expression:'thoughtful'}]);
+  const h = await harness(t, {AudioContext:MeterAudioContext,runTurn:async () => result}).connect();
+  await beginNarration(h, stream(track('reign-output')));
+  h.channel.receive({type:'response.output_audio_transcript.done',response_id:'first-spoken-response',transcript:'It’s 1.2 units!'});
+  assert.equal(h.audio.muted, false);
+  h.channel.receive({type:'response.output_audio_transcript.done',response_id:'first-spoken-response',transcript:'Its 1 2 units.'});
+  assert.equal(h.audio.muted, true);
+  assert.ok(h.channel.sent.some(event => event.type === 'output_audio_buffer.clear'));
+  h.channel.receive({type:'response.done',response:{id:'first-spoken-response',status:'completed',output:[]}});
+  assert.match(h.controller.snapshot().status, /did not match/);
+  assert.equal(h.outputStates.at(-1).expressionSource, 'neutral');
+});
+
+test('portrait output meter never borrows microphone energy and follows verified audible output', async t => {
+  const h = await harness(t, {AudioContext: MeterAudioContext}).connect();
+  const remote = stream(track('reign-output'));
+  h.peer.emit('track', {streams: [remote]}); await settle();
+  h.clock.advance(80);
+  assert.ok(h.levels.at(-1) > 0, 'the existing activity meter may show the microphone');
+  assert.equal(h.outputLevels.at(-1), 0, 'thinking/listening microphone energy must not animate REIGN');
+  h.channel.receive({type: 'output_audio_buffer.started', response_id: 'unverified'});
+  h.clock.advance(80); assert.equal(h.outputLevels.at(-1), 0);
+
+  h.functionCall('portrait-output');
+  await eventually(() => outputs(h.channel, 'portrait-output').length === 1, 'graph output must be verified');
+  const narration = h.channel.sent.findLast(event => event.type === 'response.create');
+  h.channel.receive({type: 'response.created', response: {id: 'portrait-narration', metadata: narration.response.metadata}});
+  h.channel.receive({type: 'output_audio_buffer.started', response_id: 'portrait-narration'});
+  await settle(); h.clock.advance(80);
+  assert.equal(h.outputLevels.at(-1), .375, 'only the remote output analyser should be sampled');
+  assert.equal(h.levels.at(-1), .375);
+  h.controller.mute(); h.clock.advance(80);
+  assert.equal(h.outputLevels.at(-1), .375, 'muting the local microphone must not stop REIGN speaking');
+
+  remote.silent = true; h.clock.advance(80);
+  assert.equal(h.outputLevels.at(-1), 0, 'a speaking provider state cannot invent mouth movement during silence');
+  remote.silent = false; h.clock.advance(80); assert.ok(h.outputLevels.at(-1) > 0);
+  h.channel.receive({type: 'output_audio_buffer.stopped', response_id: 'portrait-narration'});
+  h.clock.advance(80);
+  assert.ok(h.outputLevels.at(-1) > 0, 'verified browser-buffered audio tail keeps its portrait movement');
+  h.channel.receive({type: 'input_audio_buffer.speech_started'});
+  assert.equal(h.outputLevels.at(-1), 0, 'barge-in must clear portrait output synchronously');
+  h.clock.advance(80); assert.equal(h.outputLevels.at(-1), 0);
+  await h.controller.stop(); assert.equal(h.outputLevels.at(-1), 0);
+});
+
+test('blocked speaker playback never produces portrait output energy', async t => {
+  const h = await harness(t, {AudioContext: MeterAudioContext}).connect();
+  h.peer.emit('track', {streams: [stream(track('reign-output'))]}); await settle();
+  h.functionCall('blocked-portrait');
+  await eventually(() => outputs(h.channel, 'blocked-portrait').length === 1, 'graph output must be verified');
+  const narration = h.channel.sent.findLast(event => event.type === 'response.create');
+  h.channel.receive({type: 'response.created', response: {id: 'blocked-narration', metadata: narration.response.metadata}});
+  h.audio.blockNextPlay = true;
+  h.channel.receive({type: 'output_audio_buffer.started', response_id: 'blocked-narration'});
+  await settle(); h.clock.advance(80);
+  assert.equal(h.controller.snapshot().speakerBlocked, true); assert.equal(h.outputLevels.at(-1), 0);
+  await h.controller.enableSpeaker(); h.clock.advance(80); assert.ok(h.outputLevels.at(-1) > 0);
 });
 
 test('stopping an active turn cancels its ownership and drops late results', async t => {

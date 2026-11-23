@@ -19,6 +19,11 @@
   migration until authenticated push and ref parity are verified.
 - Run `.github/workflows/validate.yml` checks for relevant changes. Report actual
   results; mocked tests and container smoke are not live deployment or human E2E.
-- Tailscale and Windows GPU/LLM workers remain deferred. Do not enroll devices,
-  expose remote shells, or assume network access from saved hostnames.
+- James requested joining the existing REIGN Render service to his existing
+  Tailscale network for backend SSH on 2026-11-21. This supersedes the earlier
+  Tailscale deferral only for that connection. Use Core's existing disk and the
+  optional userspace client; inspect the actual tailnet and scope its grants
+  before enrollment. Do not expose a public shell, advertise Render subnets,
+  enroll this coding workspace, or assume access from saved hostnames.
+  GPU/LLM workload migration and new agent execution tools remain deferred.
 - Read `docs/HANDOFF.md` and `docs/APPLICATION_CONTRACTS.md` before application work.

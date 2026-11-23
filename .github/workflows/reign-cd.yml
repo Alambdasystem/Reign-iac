@@ -38,6 +38,15 @@ jobs:
           for service in core ax computer temporal; do
             docker build --platform linux/amd64 -f "services/$service/Dockerfile" -t "reign-$service:ci" .
           done
+      - name: Offline nonroot Tailscale storage and daemon restart smoke
+        timeout-minutes: 2
+        run: |
+          docker run --rm --network none --user 10001:10001 --group-add 1000 \
+            --env PYTHONPATH=/app \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --read-only --tmpfs /tmp:rw,nosuid,noexec,mode=1777,size=32m \
+            --mount "type=bind,source=$PWD/scripts/tailscale_daemon_smoke.py,target=/smoke/tailscale_daemon_smoke.py,readonly" \
+            --entrypoint python reign-core:ci /smoke/tailscale_daemon_smoke.py
       - name: Test all four images before publishing
         run: bash scripts/container_smoke.sh
       - name: Publish tested images and record immutable digests

@@ -1,0 +1,10 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' blob:; worker-src 'self' blob:; connect-src 'self' blob:; style-src 'self'; base-uri 'none'; form-action 'none'">
+<title>REIGN Node</title><link rel="stylesheet" href="phone.css"></head><body><main>
+<header><span class="mark" aria-hidden="true">R</span><div><h1>REIGN Node</h1><span class="muted">Android · on-device inference</span></div></header>
+<section><h2>On this phone</h2><strong>SmolLM2 360M Instruct</strong><p id="model" role="status">Model included · Q4_K_M</p><button id="load">Load local model</button></section>
+<section><label for="prompt">Message</label><textarea id="prompt" maxlength="1600" rows="3" placeholder="Ask a question…"></textarea><div class="row"><button id="ask" disabled>Ask phone</button><button id="askCore" class="secondary">Ask REIGN Core</button></div>
+<div class="result" hidden><h3 id="source">Answer</h3><output id="answer" aria-live="polite"></output><button id="reuse" class="secondary" hidden>Edit answer as next message</button></div></section>
+<section><h2>Genesis connection</h2><p id="connection" role="status">Sign in to REIGN to register this installation.</p><div class="row"><button id="genesis" class="secondary">Open Genesis / sign in</button><button id="pair" class="secondary" disabled>Register this phone</button></div></section>
+<footer>Model by Hugging Face · Quantization by bartowski · llama.cpp via wllama</footer>
+</main><script type="module" src="phone.js"></script></body></html>

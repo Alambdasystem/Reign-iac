@@ -11,7 +11,7 @@ services:
   region: oregon
   numInstances: 1
   image:
-    url: ghcr.io/alambdasystem/reign-temporal@sha256:afbae0626e74adbb7f1b4fab54b11342bc11af12df184b0847a5d6c55089aeb4
+    url: ghcr.io/alambdasystem/reign-temporal@sha256:47ae69225d2f058de9b00a39d6d39698404f97d7f33b5d3c06eb8b51a529d2ef
   envVars:
   - key: PORT
     value: '7233'
@@ -26,7 +26,7 @@ services:
   region: oregon
   numInstances: 1
   image:
-    url: ghcr.io/alambdasystem/reign-computer@sha256:b2dbbefe732e56d2526391dcb9116051c3c10f5bc674e3751f91ebc1f0128faa
+    url: ghcr.io/alambdasystem/reign-computer@sha256:ab7d77a635637eee241da233bc8a16163ccc8346abd050b6b9fecbb6a939bf47
   envVars:
   - key: PORT
     value: '10000'
@@ -64,7 +64,7 @@ services:
   region: oregon
   numInstances: 1
   image:
-    url: ghcr.io/alambdasystem/reign-core@sha256:fd7101f709e17e6760ad95e38e2d43bc0a7b33fa83ec0ed016688246f3cbb5ca
+    url: ghcr.io/alambdasystem/reign-core@sha256:ee05d8117cc6728856203aa799498e8d974391d5ad60c7e6091f02659e664e71
   envVars:
   - key: PORT
     value: '10000'
@@ -106,6 +106,16 @@ services:
     value: /var/data/reign-vault
   - key: REIGN_VAULT_KEY
     generateValue: true
+  # Optional outbound tailnet client. Enable only with the tested Core image,
+  # verified tailnet policy and a privately configured enrollment key.
+  - key: REIGN_TAILSCALE_ENABLED
+    value: '1'
+  - key: REIGN_TAILSCALE_HOSTNAME
+    value: render-reign-core
+  - key: REIGN_TAILSCALE_TAGS
+    value: tag:reign-render-core
+  - key: REIGN_TAILSCALE_AUTHKEY
+    sync: false
   # Existing private Core mount stores encrypted transcript records. The
   # Render generates/preserves a random 256-bit key; no secret enters Git.
   - key: REIGN_HISTORY_MODE
@@ -116,17 +126,20 @@ services:
   # provider provisioning, external IAM, or paid resources.
   - key: GENESIS_DRAFT_MODE
     value: enabled
+  # Core disk-backed node inventory only; no new workers or live dispatch.
+  - key: REIGN_NODES_MODE
+    value: inventory
+  # Shared rooms, employee access and documents use the existing private disk.
+  - key: REIGN_TEAM_MODE
+    value: disk
   - key: CREDENTIAL_CHANNEL_KEY
     generateValue: true
-  # Core derives both private endpoints from the referenced host variables.
+  # Use the tested image entrypoint and normal Tailscale-supervised CMD.
   dockerCommand: ''
-  # Block promotion unless real provider speech reaches the LangGraph status
-  # tool and returns non-silent audio. Synthetic input; no device-audio claim.
-  # Render pre-deploy has no persistent disk; run the real voice/graph probe
-  # with ephemeral *test* memory and Genesis draft registration disabled in
-  # this mountless pre-deploy container. Production startup still requires
-  # the private disk for both transcript history and Genesis drafts.
-  preDeployCommand: env REIGN_HISTORY_MODE=disabled GENESIS_DRAFT_MODE=disabled python -m reign.voice_acceptance
+  # Predeploy has no mounted disk. Require private voice/graph acceptance,
+  # the live scoped-worker protocol, and synthetic team vision/document/speech.
+  # Only this verification process disables disk features; runtime stays durable.
+  preDeployCommand: env -u REIGN_TAILSCALE_AUTHKEY REIGN_TAILSCALE_ENABLED=0 REIGN_HISTORY_MODE=disabled GENESIS_DRAFT_MODE=disabled REIGN_NODES_MODE=disabled REIGN_TEAM_MODE=disabled python -m reign.release_acceptance
   disk:
     name: reign-account-vault
     mountPath: /var/data/reign-vault
@@ -138,7 +151,7 @@ services:
   region: oregon
   numInstances: 1
   image:
-    url: ghcr.io/alambdasystem/reign-ax@sha256:7ce58fbab003277bbfb8b9bc1bd5be2e3f0b11bcb456caba895d66c6d5fa01cf
+    url: ghcr.io/alambdasystem/reign-ax@sha256:1f8d4007f73a0b6bc990b20ed647015cda04ed90115bc56a48b54a532916d134
   envVars:
   - key: PORT
     value: '10000'
@@ -156,12 +169,16 @@ services:
     generateValue: true
   - key: AX_ADMIN_PASSWORD
     generateValue: true
+  - key: AX_AVATAR_USERS_JSON
+    sync: false
   - key: AX_PUBLIC_ORIGIN
     fromService:
       name: reign-ax-pilot
       type: web
       envVarKey: RENDER_EXTERNAL_URL
   - key: AX_ALLOW_INTERNAL_HTTP
+    value: '1'
+  - key: AX_TEAM_ENABLED
     value: '1'
   # Render passes the remainder after /bin/sh -c as one shell program. Do not
   # quote that entire program as in a local terminal command.

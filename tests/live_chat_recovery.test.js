@@ -13,6 +13,7 @@ const SESSION = '00000000-0000-4000-8000-000000000001';
 const OLD_SESSION = '00000000-0000-4000-8000-000000000002';
 const THREAD = '00000000-0000-4000-8000-000000000003';
 const NEW_THREAD = '00000000-0000-4000-8000-000000000004';
+const RUN = '00000000-0000-4000-8000-000000000101';
 
 class Element {
   constructor() {
@@ -29,6 +30,7 @@ class Element {
   querySelector() { return this.child || (this.child = new Element()); }
   querySelectorAll() { return []; }
   addEventListener() {}
+  reset() { this.value = ''; }
   focus() {}
 }
 
@@ -40,8 +42,14 @@ async function eventually(check) {
   assert.ok(check(), 'AX controller did not reach the expected state');
 }
 
-function harness({threadStatus = 404, oldBrowser = false} = {}) {
-  const nodes = new Map(), calls = [], timers = new Map();
+function harness({threadStatus = 404, oldBrowser = false, search = '', initiallyAuthenticated = true,
+  role = 'owner', cleanupStatus = 200, logoutFailures = 0, voiceFailure = false, holdVoiceCleanup = false,
+  portraitMode = 'ready', voiceConfigured = false, speechStatus = 200, holdSpeech = false, runningPolls = 0} = {}) {
+  const nodes = new Map(), calls = [], timers = new Map(), navigations = [], windowEvents = new Map(), announcements = [];
+  const portraits = [];
+  let voiceOptions, voiceStarts = 0;
+  let releaseSpeech;
+  const speechWait=holdSpeech?new Promise(resolve=>{releaseSpeech=resolve}):null;
   const node = id => { if (!nodes.has(id)) nodes.set(id, new Element()); return nodes.get(id); };
   const storage = new Map([['reign-session', SESSION], ['reign-thread', THREAD]]);
   let timer = 0, frame = 0;
@@ -56,7 +64,7 @@ function harness({threadStatus = 404, oldBrowser = false} = {}) {
   };
   const session = {id: SESSION, url: 'https://alambda-forge.onrender.com/', title: 'Recovered browser', mode: 'human', epoch: 7};
   const snapshot = (id, status, sessionId = SESSION) => ({
-    thread_id: id, run_id: 'synthetic-run', status, session_id: sessionId,
+    thread_id: id, run_id: RUN, status, session_id: sessionId,
     events: status === 'completed' ? [{sequence: 1, kind: 'completed'}] : [],
     answer: status === 'completed' ? 'Browser status checked.' : '', error: null,
     usage: {input_tokens: 1, output_tokens: 1}, turns: 1, max_turns: 12,
@@ -69,12 +77,21 @@ function harness({threadStatus = 404, oldBrowser = false} = {}) {
   const json = (value, status = 200) => new Response(JSON.stringify(value), {
     status, headers: {'Content-Type': 'application/json'}
   });
+  const profile = {authenticated: true, username: role === 'avatar' ? 'mayur' : 'admin',
+    display_name: role === 'avatar' ? 'Mayur' : 'Owner', role,
+    landing_path: role === 'avatar' ? '/avatar-lab' : '/', capabilities: {ai_chat: role === 'owner', avatar_lab: true}};
   const fetch = async (url, options) => {
     const request = {path: url, method: options.method, body: options.body ? JSON.parse(options.body) : undefined};
     calls.push(request);
-    if (url === '/api/me') return json({capabilities: {ai_chat: true}});
+    if (url === '/api/me') return initiallyAuthenticated ? json(profile) : json({}, 401);
+    if (url === '/login' && options.method === 'POST') return json(profile);
+    if (url === '/logout' && options.method === 'POST') {
+      if (logoutFailures-- > 0) throw new Error('Synthetic disconnected network');
+      return json({status: 'signed_out'});
+    }
+    if (options.method === 'DELETE') return json({}, cleanupStatus);
     if (url === '/api/agent') return json({configured: true});
-    if (url === '/api/voice') return json({configured: false});
+    if (url === '/api/voice') return json({configured: voiceConfigured});
     if (url === '/api/status') return json({status: 'ready'});
     if (url === '/api/sessions/' + SESSION) return json(session);
     if (url === '/api/sessions/' + OLD_SESSION) return json({}, 404);
@@ -84,7 +101,13 @@ function harness({threadStatus = 404, oldBrowser = false} = {}) {
     if (url === '/api/chat/' + THREAD) return typeof threadStatus === 'number'
       ? json({}, threadStatus) : json(snapshot(THREAD, threadStatus, oldBrowser ? OLD_SESSION : SESSION));
     if (url === '/api/chat' && options.method === 'POST') return json(snapshot(NEW_THREAD, 'completed'));
-    if (url === '/api/chat/' + NEW_THREAD && options.method === 'GET') return json(snapshot(NEW_THREAD, 'completed'));
+    if (url === '/api/chat/' + NEW_THREAD && options.method === 'GET') return json(snapshot(NEW_THREAD, runningPolls-->0?'running':'completed'));
+    if (url === '/api/chat/' + NEW_THREAD + '/speech' && options.method === 'POST') {
+      if(speechWait)await speechWait;
+      return speechStatus === 200 ? json({thread_id:NEW_THREAD,run_id:RUN,status:'completed',text:'Browser status checked.',
+        segments:[{text:'Browser status checked.',expression:'thoughtful'}],speech_status:'ready'})
+      : json({detail:'Synthetic unavailable annotation'},speechStatus);
+    }
     throw new Error('Unexpected simulated request: ' + options.method + ' ' + url);
   };
   class TestURL extends URL {
@@ -92,17 +115,39 @@ function harness({threadStatus = 404, oldBrowser = false} = {}) {
     static revokeObjectURL() {}
   }
   const context = vm.createContext({
-    document, window: {addEventListener() {}}, fetch, Response, AbortController, URL: TestURL,
+    document, window: {addEventListener: (event, handler) => windowEvents.set(event, handler),
+      REIGNAvatar: portraitMode === 'missing' ? undefined : {createReignAvatar(options) {
+        const value = {visibleWhenMounted: !node('console').hidden, speaking: false, level: 0, destroyed: false,
+          setSpeaking(active) { this.speaking = active; if (!active) this.level = 0; },
+          setSpeechLevel(level) { this.level = level; },
+          setPlaybackState(playback) { this.playback=playback; this.speaking=playback.active;
+            this.level=playback.active?playback.level:0; this.expression=playback.active?playback.expression:'neutral'; },
+          stop() { this.speaking = false; this.level = 0; this.expression='neutral'; },
+          destroy() { this.stop(); this.destroyed = true; }};
+        value.ready = Promise.resolve().then(() => {
+          if (!value.destroyed) options.onStatus({state: portraitMode === 'error' ? 'error' : 'ready',
+            message: portraitMode === 'error' ? 'REIGN’s face could not load.' : 'REIGN is ready.'});
+          return portraitMode !== 'error';
+        });
+        portraits.push(value); return value;
+      }},
+      location: {search, replace: target => navigations.push(target)}},
+    fetch, Response, AbortController, URL: TestURL, URLSearchParams,
     sessionStorage: {getItem: key => storage.get(key) ?? null,
       setItem: (key, value) => storage.set(key, String(value)), removeItem: key => storage.delete(key)},
+    localStorage: {setItem: (key, value) => announcements.push({key, value})},
     setTimeout: (callback, delay) => { timers.set(++timer, {callback, delay}); return timer; },
     clearTimeout: id => timers.delete(id), setInterval() {},
     run: false, voiceState: 'idle', activity: 0, animate() {},
-    REIGNVoice: {createVoiceController: () => ({stop: async () => {}, mute() {}, start() {}, enableSpeaker() {}})}
+    REIGNVoice: {createVoiceController: options => { voiceOptions = options; return {stop: async () => {
+      if (voiceFailure) throw Error('Synthetic voice cleanup failure');
+      if (holdVoiceCleanup) await new Promise(() => {});
+    }, mute() {}, start() { voiceStarts++; }, enableSpeaker() {}}; }}
   });
   vm.runInContext(source, context, {filename: 'services/ax/live.js'});
-  return {node, calls, storage, session, timers,
-    ready: () => eventually(() => calls.some(call => call.path === '/api/status') && !node('logout').disabled)};
+  return {node, calls, storage, session, timers, navigations, windowEvents, announcements, portraits, releaseSpeech,
+    get voiceOptions() { return voiceOptions; }, get voiceStarts() { return voiceStarts; },
+    ready: () => eventually(() => calls.some(call => call.path === '/api/status') && !node('cancelAgent').disabled)};
 }
 
 function assertBrowserPreserved(h) {
@@ -114,6 +159,110 @@ function assertBrowserPreserved(h) {
   assert.match(h.node('screen').src, /^blob:synthetic-frame-/);
   assert.equal(h.storage.get('reign-session'), SESSION);
 }
+
+test('private REIGN portrait mounts after authenticated UI and only output audio drives it', async () => {
+  const h = harness({voiceConfigured: true}); await h.ready();
+  assert.equal(h.portraits.length, 1); const portrait = h.portraits[0];
+  assert.equal(portrait.visibleWhenMounted, true);
+  h.voiceOptions.onState({active: true, phase: 'listening', muted: false, speakerBlocked: false, status: 'Listening'});
+  h.voiceOptions.onLevel(.8);
+  assert.equal(portrait.speaking, false); assert.equal(portrait.level, 0);
+  h.voiceOptions.onState({active: true, phase: 'speaking', muted: false, speakerBlocked: false, status: 'Speaking'});
+  assert.equal(portrait.level, 0, 'provider phase alone must not simulate speech');
+  h.voiceOptions.onOutputLevel(.4);
+  assert.equal(portrait.speaking, true); assert.equal(portrait.level, .4);
+  h.voiceOptions.onOutputLevel(0);
+  assert.equal(portrait.speaking, false); assert.equal(portrait.level, 0);
+  h.voiceOptions.onOutputLevel(.4);
+  h.voiceOptions.onState({active: false, phase: 'ended', speakerBlocked: false, status: 'Ended'});
+  assert.equal(portrait.speaking, false); assert.equal(portrait.level, 0);
+  h.windowEvents.get('pagehide')(); assert.equal(portrait.destroyed, true);
+  h.voiceOptions.onOutputLevel(.8); assert.equal(portrait.level, 0, 'late output cannot animate a retired portrait');
+});
+
+test('portrait failure or unavailable module does not disable an otherwise available voice call', async () => {
+  for (const portraitMode of ['error', 'missing']) {
+    const h = harness({portraitMode, voiceConfigured: true}); await h.ready();
+    assert.equal(h.node('voiceStart').disabled, false);
+    h.node('voiceStart').onclick(); assert.equal(h.voiceStarts, 1);
+    if (portraitMode === 'error') assert.match(h.node('portraitStatus').textContent, /face could not load/);
+  }
+});
+
+test('private portrait receives playback clocks and model cues while silent samples keep the active speech gate', async () => {
+  const h = harness({voiceConfigured:true}); await h.ready();
+  const portrait = h.portraits[0];
+  const playback = {active:true,outputActive:true,verified:true,paused:false,muted:false,advancing:true,
+    mediaTime:1.25,cueMs:1000,expression:'warm',expressionSource:'model',segmentIndex:1,segmentCount:2,
+    meterState:'running',meterAvailable:true,outputLevel:.4};
+  h.voiceOptions.onState({active:true,phase:'speaking',muted:false,speakerBlocked:false,status:'Speaking',playback});
+  h.voiceOptions.onOutputLevel(.4,playback);
+  assert.equal(portrait.playback.clockMs,1250); assert.equal(portrait.playback.cueMs,1000);
+  assert.equal(portrait.expression,'warm'); assert.equal(portrait.playback.expressionSource,'response-segment');
+  h.voiceOptions.onOutputLevel(0,{...playback,mediaTime:1.3,outputLevel:0});
+  assert.equal(portrait.speaking,true); assert.equal(portrait.level,0);
+  assert.equal(h.node('voiceDiagnostics').dataset.mediaTime,'1.3');
+  assert.equal(h.node('voiceDiagnostics').dataset.expressionSource,'model');
+  h.voiceOptions.onState({active:true,phase:'speaking',speakerBlocked:false,status:'Playback active',
+    playback:{...playback,meterState:'suspended',meterAvailable:false,needsGesture:true}});
+  assert.equal(h.node('voiceSpeaker').hidden,false);
+  assert.match(h.node('voiceDiagnostics').textContent,/face meter unavailable/);
+  h.voiceOptions.onOutputLevel(0,{...playback,active:false,outputActive:false,expression:'neutral',expressionSource:'neutral'});
+  assert.equal(portrait.speaking,false); assert.equal(portrait.expression,'neutral');
+});
+
+test('private speech requests are bound to the exact graph run and annotation failure preserves its verified answer', async () => {
+  for (const speechStatus of [200,503]) {
+    const h=harness({voiceConfigured:true,speechStatus}); await h.ready();
+    const result=await h.voiceOptions.runTurn('Check the workspace.',{voiceCallId:'synthetic-voice-call',signal:new AbortController().signal});
+    const requests=h.calls.filter(call=>call.path.endsWith('/speech'));
+    assert.equal(requests.length,1);
+    assert.deepEqual(requests[0].body,{run_id:RUN});
+    assert.equal(requests[0].path,'/api/chat/'+NEW_THREAD+'/speech');
+    assert.equal(h.calls.filter(call=>call.path==='/api/chat'&&call.method==='POST').length,1);
+    assert.equal(result.answer,'Browser status checked.');
+    const speech=await result.speechPromise;
+    if(speechStatus===200)assert.equal(speech.segments[0].expression,'thoughtful');
+    else assert.equal(speech,null,'optional annotations cannot replace or discard the verified answer');
+    const submitted=h.calls.find(call=>call.path==='/api/chat'&&call.method==='POST');
+    assert.equal(submitted.body.input_source,'voice','the graph receives microphone provenance, not a typed-message claim');
+  }
+});
+
+test('private narration receives the verified result before optional expression annotation finishes', async () => {
+  const h=harness({voiceConfigured:true,holdSpeech:true}); await h.ready();
+  const signal=new AbortController();
+  const result=await h.voiceOptions.runTurn('Check the workspace.',{voiceCallId:'live-voice-turn',signal:signal.signal});
+  assert.equal(result.answer,'Browser status checked.');
+  assert.ok(result.speechPromise,'expression work continues independently of the verified answer');
+  assert.equal(h.calls.filter(call=>call.path.endsWith('/speech')).length,1);
+  assert.equal(h.calls.filter(call=>call.path==='/api/chat'&&call.method==='POST').length,1);
+  signal.abort();h.releaseSpeech();
+  assert.equal(await result.speechPromise,null,'late optional metadata is discarded after call cancellation');
+});
+
+test('voice graph completion polls every 250ms while synthetic connection checks retain their actual input source', async () => {
+  const h=harness({voiceConfigured:true,runningPolls:1}); await h.ready();
+  const outcome=h.voiceOptions.runTurn('Check the voice connection.',{voiceCallId:'connection-check',connectionCheck:true,signal:new AbortController().signal});
+  await eventually(()=>[...h.timers.values()].some(item=>item.delay===250));
+  const poll=[...h.timers.values()].find(item=>item.delay===250);
+  poll.callback();
+  const result=await outcome;
+  assert.equal(result.answer,'Browser status checked.');await result.speechPromise;
+  const submitted=h.calls.find(call=>call.path==='/api/chat'&&call.method==='POST');
+  assert.equal(submitted.body.input_source,undefined,'a generated connection check is not real microphone speech');
+});
+
+test('restricted and signed-out users never mount the private portrait controller', async () => {
+  const signedOut = harness({initiallyAuthenticated: false});
+  await eventually(() => signedOut.calls.some(call => call.path === '/api/me'));
+  signedOut.windowEvents.get('reign:avatar-module-ready')();
+  assert.equal(signedOut.portraits.length, 0);
+  const restricted = harness({role: 'avatar'});
+  await eventually(() => restricted.navigations.length === 1);
+  restricted.windowEvents.get('reign:avatar-module-ready')();
+  assert.equal(restricted.portraits.length, 0);
+});
 
 test('reload clears only an expired chat reference and the next prompt uses the recovered browser', async () => {
   const h = harness();
@@ -178,4 +327,126 @@ test('current-run trace inspector shows allowlisted metadata but no untrusted to
   assert.match(text, /core \/ agent\.tool · workspace_status · ok · 12 ms/);
   assert.doesNotMatch(text, /my-fixture-secret|private-password|password=/);
   assert.match(text, /Trace events: 2/);
+});
+
+test('a restored session follows the Avatar Lab return path without touching a workspace', async () => {
+  const h = harness({search: '?next=%2Favatar-lab'});
+  await eventually(() => h.navigations.length === 1);
+  assert.deepEqual(h.navigations, ['/avatar-lab']);
+  assert.deepEqual(h.calls.map(call => call.path), ['/api/me']);
+  assert.equal(h.storage.get('reign-session'), SESSION);
+  assert.equal(h.storage.get('reign-thread'), THREAD);
+});
+
+test('sign-in follows the same return path only after successful authentication', async () => {
+  const h = harness({search: '?next=%2Favatar-lab', initiallyAuthenticated: false});
+  await eventually(() => h.node('connection').textContent === 'SIGN IN');
+  assert.deepEqual(h.navigations, []);
+  h.node('password').value = 'disposable-test-password';
+  await h.node('loginForm').onsubmit({preventDefault() {}, currentTarget: h.node('loginForm')});
+  assert.deepEqual(h.navigations, ['/avatar-lab']);
+  assert.deepEqual(h.calls.map(call => call.path), ['/api/me', '/login']);
+  assert.equal(h.node('password').value, '');
+});
+
+test('untrusted or duplicate return paths never become redirects', async () => {
+  for (const search of [
+    '?next=https%3A%2F%2Fevil.example%2F', '?next=%2F%2Fevil.example',
+    '?next=javascript%3Aalert(1)', '?next=%252Favatar-lab',
+    '?next=%2Favatar-lab%2F', '?next=%2Favatar-lab%3Fnext%3Dhttps%3A%2F%2Fevil.example',
+    '?next=%2Favatar-lab%23fragment', '?next=%2Favatar-lab%00',
+    '?next=%2Favatar-lab&next=%2Favatar-lab', '?next=%2Favatar-lab&next=https%3A%2F%2Fevil.example',
+  ]) {
+    const h = harness({search});
+    await h.ready();
+    assert.deepEqual(h.navigations, [], search);
+    assertBrowserPreserved(h);
+  }
+});
+
+test('a restored avatar account goes straight to the lab without owner workspace reads', async () => {
+  const h = harness({role: 'avatar', search: '?next=https%3A%2F%2Fevil.example'});
+  await eventually(() => h.navigations.length === 1);
+  assert.deepEqual(h.navigations, ['/avatar-lab']);
+  assert.deepEqual(h.calls.map(call => call.path), ['/api/me']);
+  assert.equal(h.storage.get('reign-session'), SESSION);
+  assert.equal(h.storage.get('reign-thread'), THREAD);
+});
+
+test('named sign-in sends the username and honors the returned avatar role', async () => {
+  const h = harness({role: 'avatar', initiallyAuthenticated: false});
+  await eventually(() => h.node('connection').textContent === 'SIGN IN');
+  h.node('username').value = ' mayur ';
+  h.node('password').value = 'synthetic-named-password';
+  await h.node('loginForm').onsubmit({preventDefault() {}, currentTarget: h.node('loginForm')});
+  assert.deepEqual(h.calls.map(call => call.path), ['/api/me', '/login']);
+  assert.deepEqual(h.calls[1].body, {username: 'mayur', password: 'synthetic-named-password'});
+  assert.deepEqual(h.navigations, ['/avatar-lab']);
+  assert.equal(h.node('password').value, '');
+});
+
+test('an unrecognized account role never opens owner surfaces', async () => {
+  const h = harness({role: 'unexpected'});
+  await eventually(() => h.node('connection').textContent === 'SIGN IN');
+  assert.deepEqual(h.calls.map(call => call.path), ['/api/me']);
+  assert.deepEqual(h.navigations, []);
+});
+
+test('logout is still sent after voice and owner cleanup fail', async () => {
+  const h = harness({threadStatus: 'completed', voiceFailure: true, cleanupStatus: 503});
+  await h.ready();
+  await h.node('logout').onclick();
+  assert.ok(h.calls.some(call => call.path === '/api/chat/' + THREAD && call.method === 'DELETE'));
+  assert.ok(h.calls.some(call => call.path === '/api/sessions/' + SESSION && call.method === 'DELETE'));
+  assert.equal(h.calls.filter(call => call.path === '/logout').length, 1);
+  assert.deepEqual(h.navigations, ['/']);
+  assert.equal(h.announcements.length, 1);
+});
+
+test('expired-session cleanup cannot prevent the idempotent logout request', async () => {
+  const h = harness({threadStatus: 'completed', cleanupStatus: 401});
+  await h.ready();
+  await h.node('logout').onclick();
+  assert.equal(h.calls.filter(call => call.path === '/logout').length, 1);
+  assert.deepEqual(h.navigations, ['/']);
+  assert.equal(h.node('loginPanel').hidden, false);
+});
+
+test('a stalled cleanup has a bounded wait before logout', async () => {
+  const h = harness({holdVoiceCleanup: true});
+  await h.ready();
+  const logout = h.node('logout').onclick();
+  await eventually(() => [...h.timers.values()].some(timer => timer.delay === 2500));
+  [...h.timers.values()].find(timer => timer.delay === 2500).callback();
+  await logout;
+  assert.equal(h.calls.filter(call => call.path === '/logout').length, 1);
+  assert.deepEqual(h.navigations, ['/']);
+});
+
+test('an unconfirmed logout stays visible and can be retried without a false success', async () => {
+  const h = harness({logoutFailures: 1});
+  await h.ready();
+  await h.node('logout').onclick();
+  assert.deepEqual(h.navigations, []);
+  assert.deepEqual(h.announcements, []);
+  assert.equal(h.node('logout').hidden, false);
+  assert.equal(h.node('logout').disabled, false);
+  assert.equal(h.node('logout').textContent, 'Retry log out');
+  assert.equal(h.node('console').hidden, false);
+  assert.match(h.node('status').textContent, /Couldn’t confirm log out/);
+  await h.node('logout').onclick();
+  assert.deepEqual(h.navigations, ['/']);
+  assert.equal(h.announcements.length, 1);
+});
+
+test('another tab’s signout clears this surface without owner server mutations', async () => {
+  const h = harness();
+  await h.ready();
+  h.windowEvents.get('storage')({key: 'unrelated', newValue: '1'});
+  assert.deepEqual(h.navigations, []);
+  h.windowEvents.get('storage')({key: 'reign:ax:signed-out', newValue: 'synthetic-event'});
+  assert.deepEqual(h.navigations, ['/']);
+  assert.ok(h.calls.every(call => call.method === 'GET'));
+  assert.equal(h.node('console').hidden, true);
+  assert.equal(h.storage.has('reign-session'), false);
 });

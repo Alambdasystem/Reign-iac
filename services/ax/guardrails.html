@@ -1,0 +1,39 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Genesis · Guardrails & Privacy</title><link rel="stylesheet" href="/assets/connections.css">
+<style>
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#0b1020;color:#edf1fa}body{margin:0;background:radial-gradient(circle at top right,#342643,transparent 52%),#0b1020;min-height:100vh}
+main{max-width:960px;padding:32px 18px;margin:auto}header{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}h1{font-size:clamp(28px,5vw,42px);margin:8px 0}p{color:#bfc7d6;line-height:1.55}a{color:#e9b1d7}
+.panel{border:1px solid #71839e66;border-radius:16px;padding:22px;background:#ffffff0b;margin-top:20px}dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(265px,1fr));gap:12px}dl div{padding:14px;border:1px solid #7f90aa45;border-radius:10px;background:#0002}dt{font-size:12px;color:#aab5ca}dd{margin:6px 0 0;font-weight:600;word-break:break-word}button{cursor:pointer;border-radius:9px;border:1px solid #ae7faf;background:#743b71;color:white;padding:11px 17px;font:inherit}button:focus-visible,a:focus-visible{outline:2px solid #8cddff;outline-offset:3px}
+small{letter-spacing:.1em;color:#bfafc5}.note{padding:12px;border:1px solid #b88d6c88;border-radius:10px;background:#80552c20;color:#f8d9ad}
+</style></head><body><main><header><div><small>GENESIS · ADMINISTRATOR SECURITY</small><h1>Guardrails & Privacy</h1><p>Inspect the actual REIGN security posture. Configuration and policy enforcement are not activated by this page.</p></div><a href="/genesis">Genesis Console</a></header>
+<div class="panel"><h2>Security readiness</h2><p id="state" role="status">Loading verified status…</p><dl id="status"></dl><button id="refresh" type="button">Refresh</button></div>
+<div class="panel"><h2>What's protected today?</h2><p>Existing completed-turn conversation archives use authenticated encryption when their Core disk and key are active. The runtime still has process-local LangGraph checkpoints and metadata-only traces.</p>
+<p class="note">PHI/PII egress prevention and Genesis policy enforcement are not operational yet. Do not use this page as evidence of HIPAA compliance or assume unclassified content is safe to send to external models.</p></div>
+</main><script>
+const fields={
+ policy_enforcement:"Genesis rules enforced on tools",
+ phi_pii_egress_protection:"PHI/PII egress prevention",
+ conversation_storage:"Conversation archive",
+ langgraph_checkpoints:"LangGraph checkpoint persistence",
+ trace_storage:"Observability storage",
+ identity:"Identity model",
+ genesis_agent_execution:"Genesis agent activation",
+ dynamic_mcp_registration:"Dynamic MCP tool registration",
+ distributed_dispatch:"Distributed dispatch"
+};
+async function load(){
+ const state=document.getElementById("state"),list=document.getElementById("status");
+ state.textContent="Checking current Core status…";list.replaceChildren();
+ try{
+  const res=await fetch("/api/security/status",{cache:"no-store",credentials:"same-origin"});
+  if(!res.ok)throw Error(res.status===401?"Login required":"Security status unavailable");
+  const data=await res.json();
+  for(const [key,label] of Object.entries(fields)){
+   const item=document.createElement("div"),term=document.createElement("dt"),value=document.createElement("dd");
+   term.textContent=label;value.textContent=String(data[key]??"unknown");item.append(term,value);list.append(item);
+  }
+  state.textContent="Read-only status from authenticated REIGN Core. No changes made.";
+ }catch(e){state.textContent=e.message;}
+}
+document.getElementById("refresh").onclick=load;load();
+</script></body></html>

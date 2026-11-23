@@ -21,8 +21,8 @@ browser, and physical-device acceptance requirements.
   `COMPUTER_TOKEN`, `CORE_TOKEN`. Use server-side authenticated requests.
 - AX consumes `CORE_URL`, `CORE_TOKEN`, `AX_SESSION_KEY`. AX owns an authenticated
   browser session; service tokens must not be shipped in JavaScript, localStorage,
-  URL query strings, screenshots or logs. Define a proper user login before
-  exposing session actions. Use secure HttpOnly cookies and CSRF protection.
+  URL query strings, screenshots or logs. Owner and Avatar Lab access use separate
+  roles, secure HttpOnly session cookies and session-bound CSRF protection.
 - `GET /api/voice` reports sanitized provider configuration. `configured` means
   server configuration is present, not that a provider connection has passed.
   `POST /api/voice/offer` validates and brokers an SDP offer with session/CSRF
@@ -39,9 +39,54 @@ browser, and physical-device acceptance requirements.
   through Core. Tie each session and frame to the authenticated human owner.
   Establish endpoint schemas before implementing the AX client and its tests.
 
+### Owner and Avatar Lab access
+
+`POST /login` accepts `password` and an optional `username`. An empty username,
+`admin`, or `owner` retains the existing owner password flow. Named users are
+configured in the private `AX_AVATAR_USERS_JSON` environment variable as an object
+keyed by their lowercase username, with `display_name` and `password_hash` fields.
+These accounts have the fixed `avatar` role; configuration cannot grant owner
+access. Only a salted password verifier belongs in the service configuration.
+Never place a real password or verifier in Git, images, CI fixtures or logs.
+Create a verifier with `python scripts/hash_ax_password.py --output
+/private/path/outside-this-repository`. The helper reads the password with a
+hidden terminal prompt and writes a new mode-0600 file; automation can use
+`--stdin` with redirected input. Passwords must contain at least 15 UTF-8 bytes.
+Put the resulting verifier in the private environment JSON, then remove the
+temporary verifier file after configuration. To revoke access, remove that
+username; to change its password, replace its verifier and deploy the updated
+environment. Existing sessions for that account then require a fresh login.
+
+Login and `GET /api/me` return the authenticated username, display name, role,
+capabilities and `landing_path`. Owners retain the existing workspace capabilities.
+Avatar users land directly on `/avatar-lab`, before any workspace recovery calls,
+and can use only their profile, the lab and logout. Owner API routes reject an
+avatar session, including browser, saved accounts, chat, voice and Open STL
+management. The Core pilot remains a single-owner workspace; this limited lab
+role does not add multi-user data isolation to Core.
+
+Sessions are signed and tracked by the current AX process. Logout revokes the
+session on the server before clearing its cookies, so copying an old cookie does
+not keep it valid. Sessions also expire after a process restart or account
+verifier removal/rotation. Legacy owner cookies are rejected on first deployment
+of this change; the owner signs in once again with the same password. Scaling AX
+beyond its existing one process/one instance requires a shared session store.
+
+Both interfaces expose **Log out**. Active-session logout requires same-origin
+and CSRF validation; a same-origin request can clear an already expired cookie.
+Avatar logout never closes the owner's browser or revokes the owner's Open STL
+grants. The browser confirms server logout before showing a signed-out state,
+releases avatar workers/model memory, and propagates sign-out to other tabs.
+
+The Blueprint declares `AX_AVATAR_USERS_JSON` with `sync: false`. Because adding
+such a field to an existing Blueprint does not provision its value, set the
+private value separately on the existing AX service, preserving all other
+environment variables. Promote the tested AX image through the same Blueprint;
+do not create another service or change the compute plan for member access.
+
 ### Browser session recovery
 
-This pilot has one authenticated administrator and one active managed browser.
+The Core workspace has one authenticated administrator and one active managed browser.
 `GET /api/sessions/active` requires the AX login session (Core and Computer use
 their existing service authorization) and returns `{"session":null}` or the
 active session's public metadata. Responses are not cached. This discovery
@@ -117,6 +162,15 @@ Core exposes authenticated `GET /api/agent`, `POST /api/chat`,
 cookie; writes also require same-origin CSRF verification. The OpenAI key never
 reaches AX or the browser. `/api/agent.configured` is the configuration signal;
 `/api/me.capabilities.ai_chat` identifies endpoint support, not provider readiness.
+
+`POST /api/chat` accepts `input_source: "text" | "voice"`, defaulting to text.
+The authenticated voice controller supplies voice for actual microphone turns;
+its generated connection check retains the default. The current graph state
+keeps that source across tool steps and resets it for each new turn. A fixed
+server instruction explains that a spoken request reaches graph reasoning as
+words, so REIGN must not mistake that representation for user typing or invent
+details from a raw waveform she does not receive. The field does not change
+tools, ownership, authorization or confirmation requirements.
 
 Chat uses LangChain ChatOpenAI with the OpenAI Responses API, `store=false`,
 serial tool calls and Workmates' configured model. LangGraph maintains messages,
@@ -231,3 +285,99 @@ and actual external account/repository creation. CI also tests Accounts UI,
 one-use and wrong-context grants, secret exclusions, and account persistence
 across new service/container and browser instances. Controlled fixture success
 does not assert that a live external account or repository was created.
+
+### Open STL owner workspace bridge
+
+`/connect/openstl` is a top-level REIGN sign-in/consent page. The game starts a
+five-minute device connection at `/api/openstl/connect`, displays a matching code,
+and polls with a separate 256-bit device secret. Approval requires the existing
+AX administrator cookie, exact AX Origin and CSRF token. Redemption is single-use.
+The returned opaque access token stays in game memory, lasts at most one hour,
+and is bound to the exact approved game origin (production HTTPS or the packaged
+Android `https://localhost` WebView). Credentials and service tokens never cross
+to Open STL. There is no refresh token, URL bearer, local-storage bearer or public
+WebSocket tool invocation.
+
+The pilot allows one owner connection. It must create its own browser; it cannot
+attach the existing active browser. Browser and chat identifiers are server-owned
+and cannot be provided by the game. The bridge exposes only this new thread,
+its frame, bounded input, navigation, ownership control and task resume. It does
+not expose accounts/history/admin endpoints. Agent tasks retain REIGN's existing
+MCP tools (including authorized saved-account use), origin policy, human takeover,
+epoch fencing and budgets. A browser must exist before a task starts so revocation
+can stop that known browser even if the agent is running.
+
+Disconnect, REIGN logout, expiry and graceful AX shutdown revoke the grant and
+cancel its thread/close its browser. Failed cleanup is retried by the 15-second
+sweeper; no replacement connection is approved while cleanup remains pending.
+AX restarts lose in-memory grants, and an ungraceful crash can leave a browser to
+be closed by the administrator in AX. This is intentionally a single-owner pilot,
+not tenant isolation for multiple REIGN accounts.
+
+The floating game workspace is private and is not sent to meeting participants.
+Minimize preserves its connection and task; disconnect stops it. Top-level mobile
+sign-in can interrupt a game call, so authenticate before joining a meeting.
+
+## Workspace shared team area
+
+The product display name is **Workspace**. Its AI participant remains **REIGN**,
+pronounced **Rain**. The internal workspace ID stays `rain`; membership records,
+room IDs, `team:rain:{room_id}` browser scopes and encryption bindings are
+unchanged. This naming correction does not migrate or delete saved work.
+
+Private voice, team speech and the default Avatar Lab preview use one shared
+prepared REIGN portrait. It loads automatically, without model initialization;
+only the exact versioned public atlas receives immutable browser caching.
+Private mouth movement follows verified assistant output audio, never the
+microphone. Team speech uses its own output meter and sentence expressions.
+Private speech reuses that bounded sentence-expression schema through an
+owner-only, CSRF-protected graph-run endpoint. Expression text must match the
+server's current verified graph result exactly after whitespace normalization;
+the annotation has no tools and cannot replace graph execution. A stale run is
+rejected, while optional annotation failures retain neutral verified narration.
+Annotation runs alongside private narration and cannot delay its first sentence.
+Late cues apply only to exact unplayed text fully contained in one verified
+annotation span; an already audible sentence keeps its current expression.
+These cues do not supply word/phoneme timestamps or a phoneme-based lip model.
+Audio remains usable if the portrait fails to load. Interruption, call end,
+logout and navigation clear the appropriate playback and renderer state.
+
+The optional Lab editor keeps custom photos and crop settings in bounded,
+account-scoped storage on that browser. A saved custom experiment restores as
+a still image until neural editing starts. It does not replace REIGN's shared
+identity or sync devices, and closing the editor releases the heavy worker.
+
+Workspace's primary microphone control streams continuously through WebRTC to
+the Realtime model. It stays on across utterances until muted, stopped or the
+connection ends. Server voice activity detection identifies turns and supports
+interruptions; it does not make the browser record and upload twenty-second
+clips. Each call is bound to the signed-in member, room and live viewer lease.
+The server retains its provider call ID and closes it on Off, room leave,
+membership revocation, presence expiry and shutdown. A client-known call UUID
+makes cancellation during negotiation safe. The provider's one-hour session
+limit is a connection lifetime, not a recording or utterance duration.
+
+Live requests enter only the room-authorized assistant path; they never invoke
+owner-only chat, browser or account endpoints. The voice client forwards the
+model's delegated request as text with a server-validated live call binding.
+This is voice provenance, not a claim that Core independently verified a raw
+recording. The existing Dictate path still requires a short-lived exact-text
+provider transcription receipt. The ordinary messages API cannot supply live
+call identifiers. Durable receipt lookup precedes ephemeral state validation
+so uncertain submissions can confirm their original result without replay.
+
+The initiating caller narrates the room's exact answer and model expressions
+over the existing Realtime connection, using the real output clock for its
+portrait. It skips that same reply's cached audio. For other room viewers,
+speech clips are reserved and generated in the background without blocking the
+live caller. Each pending audio read rechecks room authorization after waiting.
+The clip player prefetches at most one future clip. Stopping one call cancels
+only its own unfinished request, preserving typed tasks and other members.
+
+See [TEAM_WORKSPACE.md](TEAM_WORKSPACE.md) for `/team`, employee authorization,
+saved rooms and documents, bounded calls and explicit image sharing, the
+server-generated speech/portrait player, and the separately scoped shared
+browser. This feature uses the existing private Core disk and requires a staged
+Computer-before-Core/AX promotion. Its feature flags and provider gates are
+documented there. CI, actual provider acceptance, live deployment checks, and
+physical-device acceptance remain separate claims.

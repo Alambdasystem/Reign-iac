@@ -24,12 +24,27 @@ from reign.browser_actions import (ACTION_TIMEOUT_MS, ActionRequest, Observation
 from reign.browser_proxy import BrowserProxy, BrowserProxyError
 from reign.session_errors import BROWSER_OCCUPIED_MESSAGE
 from reign.tool_errors import BrowserActionError, browser_action_error_response
-from reign.workflows import OpenBrowser, NavigateBrowser, BrowserAction, FillAccount
+from reign.workflows import (OpenBrowser, NavigateBrowser, BrowserAction, FillAccount,
+                             TeamOpenBrowser, TeamNavigateBrowser, TeamBrowserAction)
+
+
+def checked_scope(scope):
+    if scope != "owner" and (not isinstance(scope, str) or not re.fullmatch(
+            r"team:rain:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", scope)):
+        raise HTTPException(403, "Invalid browser resource scope")
+    return scope
+
+
+def request_scope(request):
+    # This header is private Core-to-Computer context. AX never forwards a
+    # browser-supplied value. Legacy clients remain in the owner scope.
+    return checked_scope(request.headers.get("X-Reign-Browser-Scope", "owner") if request is not None else "owner")
 
 
 class BrowserSessions:
     def __init__(self):
         self.sessions = {}
+        self.closed_team_sessions = {}
         self.lock = asyncio.Lock()
         self.browser = None
         self.playwright = None
@@ -57,15 +72,16 @@ class BrowserSessions:
         except (ValueError, BrowserActionError):
             await route.abort("blockedbyclient")
 
-    def get(self, sid):
+    def get(self, sid, scope="owner"):
+        checked_scope(scope)
         s = self.sessions.get(sid)
-        if s is None:
+        if s is None or s.get("scope", "owner") != scope:
             raise HTTPException(404, "Browser session expired or worker restarted; open a new session")
         s["last_access"] = time.monotonic()
         return s
 
-    async def info(self, sid):
-        s = self.get(sid)
+    async def info(self, sid, scope="owner"):
+        s = self.get(sid, scope)
         return {"id": sid, "mode": s["mode"], "epoch": s["epoch"],
                 "title": self.redact(s, await s["page"].title())[:300],
                 "url": self.public_url(s, s["page"].url),
@@ -154,10 +170,10 @@ class BrowserSessions:
         except (ValueError, TypeError):
             raise BrowserActionError("invalid_action") from None
 
-    async def validate_action(self, sid, data):
+    async def validate_action(self, sid, data, scope="owner"):
         request = self.parse_action(data, preflight=True)
         async with self.lock:
-            s = self.get(sid)
+            s = self.get(sid, scope)
             self.require_agent(s, request.epoch)
             observation = s.get("observation")
             if not observation or observation.id != request.observation_id:
@@ -171,9 +187,9 @@ class BrowserSessions:
                 raise BrowserActionError("stale_observation") from None
             return {"valid": True}
 
-    async def observe(self, sid, epoch):
+    async def observe(self, sid, epoch, scope="owner"):
         async with self.lock:
-            s = self.get(sid)
+            s = self.get(sid, scope)
             if s["epoch"] != epoch:
                 raise BrowserActionError("stale_observation")
             await self.invalidate(s)
@@ -186,7 +202,7 @@ class BrowserSessions:
                 payload["text"] = self.redact(s, payload["text"])
                 for element in payload["elements"]:
                     element["name"] = self.redact(s, element["name"])
-                result = {**await self.info(sid), "observation_id": observation.id,
+                result = {**await self.info(sid, scope), "observation_id": observation.id,
                           **payload}
                 return result
             except BrowserActionError:
@@ -195,10 +211,10 @@ class BrowserSessions:
                 await self.invalidate(s)
                 raise BrowserActionError("stale_observation") from None
 
-    async def act(self, sid, data):
+    async def act(self, sid, data, scope="owner"):
         request = self.parse_action(data)
         async with self.lock:
-            s = self.get(sid)
+            s = self.get(sid, scope)
             self.require_agent(s, request.epoch)
             observation = self.take_observation(s, request.observation_id, request.epoch)
             started, element = False, None
@@ -228,7 +244,7 @@ class BrowserSessions:
                 if request.ref:
                     await observation.check_dispatch(navigation_allowed=request.action in {"click", "press"})
                 allowed_origin(s["page"].url)
-                return {**await self.info(sid), "acted": True}
+                return {**await self.info(sid, scope), "acted": True}
             except BrowserActionError:
                 if started:
                     raise BrowserActionError("action_uncertain") from None
@@ -319,19 +335,26 @@ class BrowserSessions:
                 username = password = None
                 await observation.dispose()
 
-    async def active(self):
-        # This pilot has one authenticated administrator and one browser slot.
-        # Discovery reconnects a lost tab reference without creating a browser
-        # or changing the existing page, control owner, or ownership epoch.
+    async def active(self, scope="owner"):
+        checked_scope(scope)
+        # Discovery must never attach the owner's UI to a team's browser or
+        # reveal the owner's private page to a room. The slot is still shared.
         async with self.lock:
-            sid = next(iter(self.sessions), None)
-            return {"session": await self.info(sid) if sid is not None else None}
+            sid = next((sid for sid, value in self.sessions.items() if value.get("scope", "owner") == scope), None)
+            return {"session": await self.info(sid, scope) if sid is not None else None}
 
-    async def open(self, sid, url):
+    async def open(self, sid, url, scope="owner"):
+        checked_scope(scope)
         checked_url(url)
         async with self.lock:
+            self.closed_team_sessions = {key: value for key, value in self.closed_team_sessions.items()
+                                         if value["expires"] > time.monotonic()}
+            if sid in self.closed_team_sessions:
+                raise HTTPException(409, "This browser request was closed")
+            if scope != "owner" and len(self.closed_team_sessions) >= 256:
+                raise HTTPException(429, "Browser cleanup capacity reached")
             if sid in self.sessions:
-                return await self.info(sid)
+                return await self.info(sid, scope)
             if len(self.sessions) >= int(os.getenv("MAX_SESSIONS", "1")):
                 raise HTTPException(409, "Worker is occupied; close the active session first")
             if self.browser is None:
@@ -352,8 +375,8 @@ class BrowserSessions:
                 if response is None or response.status >= 400:
                     raise ValueError("Target did not return a successful HTTP response")
                 self.sessions[sid] = {"context": context, "page": page, "proxy": proxy, "mode": "agent", "epoch": 0,
-                                      "last_access": time.monotonic(), "http_status": response.status}
-                return await self.info(sid)
+                                      "scope": scope, "last_access": time.monotonic(), "http_status": response.status}
+                return await self.info(sid, scope)
             except BaseException:
                 if context is not None:
                     with contextlib.suppress(Exception):
@@ -361,10 +384,10 @@ class BrowserSessions:
                 await proxy.close()
                 raise
 
-    async def navigate(self, sid, url, epoch):
+    async def navigate(self, sid, url, epoch, scope="owner"):
         checked_url(url)
         async with self.lock:
-            s = self.get(sid)
+            s = self.get(sid, scope)
             self.require_agent(s, epoch)
             if s.get("credential_origin") and allowed_origin(url) != s["credential_origin"]:
                 raise BrowserActionError("origin_blocked")
@@ -374,11 +397,11 @@ class BrowserSessions:
             s["http_status"] = response.status if response else None
             if response is None or response.status >= 400:
                 raise ValueError("Target did not return a successful HTTP response")
-            return await self.info(sid)
+            return await self.info(sid, scope)
 
-    async def control(self, sid, mode, epoch):
+    async def control(self, sid, mode, epoch, scope="owner"):
         async with self.lock:
-            s = self.get(sid)
+            s = self.get(sid, scope)
             if epoch != s["epoch"]:
                 raise HTTPException(409, "Stale control state; refresh the session")
             if mode == s["mode"]:
@@ -388,11 +411,11 @@ class BrowserSessions:
             await self.invalidate(s)
             s["mode"] = mode
             s["epoch"] += 1
-            return await self.info(sid)
+            return await self.info(sid, scope)
 
-    async def input(self, sid, data):
+    async def input(self, sid, data, scope="owner"):
         async with self.lock:
-            s = self.get(sid)
+            s = self.get(sid, scope)
             if s["mode"] != "human" or s["epoch"] != data.epoch:
                 raise HTTPException(409, "Human input requires current takeover ownership")
             await self.invalidate(s)
@@ -407,10 +430,21 @@ class BrowserSessions:
                 await page.keyboard.press(data.key)
             else:
                 await page.mouse.wheel(0, data.dy)
-            return await self.info(sid)
+            return await self.info(sid, scope)
 
-    async def close(self, sid):
+    async def close(self, sid, scope="owner"):
+        checked_scope(scope)
         async with self.lock:
+            if sid in self.sessions:
+                self.get(sid, scope)
+            if scope != "owner":
+                previous = self.closed_team_sessions.get(sid)
+                if previous and previous["scope"] != scope:
+                    raise HTTPException(404, "Browser session not found")
+                # Cancelled workflow/open acknowledgements can arrive after a
+                # close. Never let such a late open recreate a retired room ID.
+                if previous or len(self.closed_team_sessions) < 256:
+                    self.closed_team_sessions[sid] = {"scope": scope, "expires": time.monotonic() + 180}
             s = self.sessions.pop(sid, None)
             if s:
                 await self.invalidate(s)
@@ -429,11 +463,11 @@ class BrowserSessions:
             await asyncio.sleep(30)
             for sid, s in list(self.sessions.items()):
                 if time.monotonic() - s["last_access"] > 1800:
-                    await self.close(sid)
+                    await self.close(sid, s.get("scope", "owner"))
 
     async def shutdown(self):
         for sid in list(self.sessions):
-            await self.close(sid)
+            await self.close(sid, self.sessions[sid].get("scope", "owner"))
         if self.browser:
             await self.browser.close()
         if self.playwright:
@@ -446,7 +480,7 @@ manager = BrowserSessions()
 @activity.defn
 async def open_browser(data: dict) -> dict:
     try:
-        return await manager.open(data["id"], data["url"])
+        return await manager.open(data["id"], data["url"], data.get("scope", "owner"))
     except (ValueError, HTTPException) as e:
         if isinstance(e, HTTPException) and e.status_code == 409:
             raise ApplicationError(BROWSER_OCCUPIED_MESSAGE, type="WorkerOccupied", non_retryable=True) from e
@@ -456,7 +490,7 @@ async def open_browser(data: dict) -> dict:
 @activity.defn
 async def navigate_browser(data: dict) -> dict:
     try:
-        return await manager.navigate(data["id"], data["url"], data["epoch"])
+        return await manager.navigate(data["id"], data["url"], data["epoch"], data.get("scope", "owner"))
     except BrowserActionError as e:
         raise ApplicationError(e.code, type="BrowserActionRejected", non_retryable=True) from None
     except (ValueError, HTTPException) as e:
@@ -482,7 +516,7 @@ def action_application_error(error):
 @activity.defn
 async def browser_action(data: dict) -> dict:
     try:
-        return await manager.act(data["id"], {key: value for key, value in data.items() if key != "id"})
+        return await manager.act(data["id"], {key: value for key, value in data.items() if key not in {"id", "scope"}}, data.get("scope", "owner"))
     except Exception as error:
         raise action_application_error(error) from None
 
@@ -495,12 +529,43 @@ async def fill_account(data: dict) -> dict:
         raise action_application_error(error) from None
 
 
+def require_team_activity(data):
+    try:
+        if not isinstance(data, dict) or data.get("scope") == "owner":
+            raise ValueError()
+        checked_scope(data.get("scope"))
+    except (ValueError, HTTPException):
+        raise ApplicationError("Team browser scope required", type="BrowserActionRejected", non_retryable=True) from None
+
+
+@activity.defn
+async def team_open_browser(data: dict) -> dict:
+    require_team_activity(data)
+    return await open_browser(data)
+
+
+@activity.defn
+async def team_navigate_browser(data: dict) -> dict:
+    require_team_activity(data)
+    return await navigate_browser(data)
+
+
+@activity.defn
+async def team_browser_action(data: dict) -> dict:
+    require_team_activity(data)
+    return await browser_action(data)
+
+
 async def run_worker():
     while True:
         try:
             client = await Client.connect(temporal_address(), namespace=NAMESPACE)
-            async with Worker(client, task_queue=QUEUE, workflows=[OpenBrowser, NavigateBrowser, BrowserAction, FillAccount],
-                              activities=[open_browser, navigate_browser, browser_action, fill_account], max_concurrent_activities=1):
+            async with Worker(client, task_queue=QUEUE,
+                              workflows=[OpenBrowser, NavigateBrowser, BrowserAction, FillAccount,
+                                         TeamOpenBrowser, TeamNavigateBrowser, TeamBrowserAction],
+                              activities=[open_browser, navigate_browser, browser_action, fill_account,
+                                          team_open_browser, team_navigate_browser, team_browser_action],
+                              max_concurrent_activities=1):
                 manager.worker_ready = True
                 await asyncio.Event().wait()
         except asyncio.CancelledError:
@@ -527,6 +592,16 @@ app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None
 app.add_exception_handler(BrowserActionError, browser_action_error_response)
 
 
+@app.middleware("http")
+async def team_protocol_acknowledgement(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/team-sessions/"):
+        # Include this on scoped 404s too. Core must distinguish an expired
+        # scoped session from an old worker that does not implement this API.
+        response.headers["X-Reign-Team-Browser-Protocol"] = "1"
+    return response
+
+
 def authorize(request: Request):
     token = request.headers.get("authorization", "").removeprefix("Bearer ")
     if not secrets.compare_digest(token, app.state.token):
@@ -537,34 +612,35 @@ def authorize(request: Request):
 async def health():
     if not manager.worker_ready:
         raise HTTPException(503, "Temporal worker not ready")
-    return {"status": "ready", "worker": "reign-computer", "sessions": len(manager.sessions)}
+    return {"status": "ready", "worker": "reign-computer", "sessions": len(manager.sessions),
+            "team_browser_protocol": 1}
 
 
 @app.get("/sessions/active", dependencies=[Depends(authorize)])
-async def active_session():
-    return await manager.active()
+async def active_session(request: Request):
+    return await manager.active(request_scope(request))
 
 
 @app.get("/sessions/{sid}", dependencies=[Depends(authorize)])
-async def info(sid: str):
+async def info(sid: str, request: Request):
     async with manager.lock:
-        return await manager.info(sid)
+        return await manager.info(sid, request_scope(request))
 
 
 @app.get("/sessions/{sid}/observe", dependencies=[Depends(authorize)])
-async def observe(sid: str, epoch: int):
-    return JSONResponse(await manager.observe(sid, epoch), headers={"Cache-Control": "no-store"})
+async def observe(sid: str, epoch: int, request: Request):
+    return JSONResponse(await manager.observe(sid, epoch, request_scope(request)), headers={"Cache-Control": "no-store"})
 
 
 @app.post("/sessions/{sid}/validate-action", dependencies=[Depends(authorize)])
-async def validate_action(sid: str, data: dict):
-    return JSONResponse(await manager.validate_action(sid, data), headers={"Cache-Control": "no-store"})
+async def validate_action(sid: str, data: dict, request: Request):
+    return JSONResponse(await manager.validate_action(sid, data, request_scope(request)), headers={"Cache-Control": "no-store"})
 
 
 @app.get("/sessions/{sid}/frame", dependencies=[Depends(authorize)])
-async def frame(sid: str):
+async def frame(sid: str, request: Request = None):
     async with manager.lock:
-        session = manager.get(sid)
+        session = manager.get(sid, request_scope(request))
         page = session["page"]
         # Mask all editable fields, including a password changed to type=text
         # by page script. Human viewing must not turn a credential into evidence.
@@ -600,16 +676,34 @@ class Input(BaseModel):
 
 
 @app.post("/sessions/{sid}/control", dependencies=[Depends(authorize)])
-async def control(sid: str, data: Control):
-    return await manager.control(sid, data.mode, data.epoch)
+async def control(sid: str, data: Control, request: Request):
+    return await manager.control(sid, data.mode, data.epoch, request_scope(request))
 
 
 @app.post("/sessions/{sid}/input", dependencies=[Depends(authorize)])
-async def input_event(sid: str, data: Input):
-    return await manager.input(sid, data)
+async def input_event(sid: str, data: Input, request: Request):
+    return await manager.input(sid, data, request_scope(request))
 
 
 @app.delete("/sessions/{sid}", dependencies=[Depends(authorize)])
-async def close(sid: str):
-    await manager.close(sid)
+async def close(sid: str, request: Request):
+    await manager.close(sid, request_scope(request))
     return {"closed": True}
+
+
+def authorize_team_scope(room_id: str, request: Request):
+    expected = checked_scope("team:rain:" + room_id)
+    if request_scope(request) != expected:
+        raise HTTPException(403, "Team browser scope does not match this room")
+
+
+# A legacy worker has none of these paths, so a team input/control/DELETE cannot
+# silently pass through a version that ignores the scope header.
+for suffix, endpoint, methods in (
+    ("", info, ["GET"]), ("", close, ["DELETE"]),
+    ("/frame", frame, ["GET"]), ("/observe", observe, ["GET"]),
+    ("/validate-action", validate_action, ["POST"]),
+    ("/control", control, ["POST"]), ("/input", input_event, ["POST"]),
+):
+    app.add_api_route("/team-sessions/{room_id}/{sid}" + suffix, endpoint, methods=methods,
+                      dependencies=[Depends(authorize), Depends(authorize_team_scope)])

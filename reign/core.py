@@ -18,6 +18,7 @@ from reign.session_errors import BrowserOccupied, browser_occupied_response
 from reign.owned_workflow import execute_owned_workflow
 from reign.tool_errors import ACTION_MESSAGES, BrowserActionError, browser_action_error_response
 from reign.voice import VoiceBroker, VoiceError, capabilities as voice_capabilities, read_offer, voice_error_response
+from reign.speech import PrivateSpeech, read_speech_request
 
 
 def authorize(request: Request):
@@ -42,14 +43,63 @@ async def lifespan(app: FastAPI):
     if os.environ.get("GENESIS_DRAFT_MODE", "disabled") == "enabled":
         from reign.genesis_pilot import GenesisPilot
         genesis = GenesisPilot.from_env()
+    nodes = None
+    if os.environ.get("REIGN_NODES_MODE", "disabled") == "inventory":
+        from reign.distributed_nodes import NodeRegistry
+        nodes = NodeRegistry.from_env()
+    team = None
+    team_media = None
+    team_browser = None
+    team_voice = None
+    if os.environ.get("REIGN_TEAM_MODE", "disabled") == "disk":
+        from reign.team_api import TeamRuntime
+        from reign.team_store import TeamStore
+        from reign.team_media import TeamMedia
+        from reign.team_assistant import TeamAssistant
+        from reign.team_browser import TeamBrowser
+        from reign.voice import configuration
+        team = TeamRuntime(TeamStore.from_env())
+        await team.start()
+        team_media = TeamMedia()
+        team_browser = TeamBrowser(team)
+        team.attachment_validator = team_media.validate_attachments
+        team.transcription_validator = team_media.validate_transcription
+        try:
+            configuration()
+        except VoiceError:
+            pass
+        else:
+            team.assistant = TeamAssistant(app.state.http, team_media, browser=team_browser)
+            team.features.update(speech=True, vision=True, transcription=True, camera_to_ai=True,
+                                 screen_to_ai=True, voice_output=True, live_voice=True)
     try:
         async with WorkspaceMCP().connect() as connection:
             app.state.agent = AgentRuntime(adapter=MCPTools(connection), archive=archive)
             app.state.genesis = genesis
+            app.state.nodes = nodes
             app.state.voice = VoiceBroker(app.state.http)
+            if team is not None and team.assistant is not None:
+                from reign.team_voice import TeamVoice
+                team_voice = TeamVoice(team, app.state.voice)
+                await team_voice.start()
+            app.state.private_speech = PrivateSpeech(app.state.http)
+            app.state.team = team
+            app.state.team_media = team_media
+            app.state.team_browser = team_browser
+            app.state.team_voice = team_voice
+            if team_browser is not None:
+                await team_browser.start()
             try:
                 yield
             finally:
+                if team_voice is not None:
+                    await team_voice.shutdown()
+                if team is not None:
+                    await team.shutdown()
+                if team_browser is not None:
+                    await team_browser.shutdown()
+                if team_media is not None:
+                    await team_media.aclose()
                 await app.state.agent.shutdown()
     finally:
         await app.state.http.aclose()
@@ -59,6 +109,14 @@ app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None
 app.add_exception_handler(VoiceError, voice_error_response)
 app.add_exception_handler(BrowserOccupied, browser_occupied_response)
 app.add_exception_handler(BrowserActionError, browser_action_error_response)
+from reign.team_api import install as install_team_routes
+install_team_routes(app, authorize)
+from reign.team_media import install as install_team_media_routes
+install_team_media_routes(app)
+from reign.team_browser import install as install_team_browser_routes
+install_team_browser_routes(app)
+from reign.team_voice import install as install_team_voice_routes
+install_team_voice_routes(app)
 
 
 class OpenRequest(BaseModel):
@@ -114,21 +172,23 @@ class InputRequest(BaseModel):
     dy: int = Field(default=0, ge=-1000, le=1000)
 
 
-def worker_headers():
+def worker_headers(scope="owner"):
     token = os.environ.get("COMPUTER_TOKEN", "")
     if len(token) < 32:
         raise HTTPException(503, "Computer token not configured")
-    return {"Authorization": "Bearer " + token}
+    return {"Authorization": "Bearer " + token, "X-Reign-Browser-Scope": scope}
 
 
-async def worker(method: str, path: str, payload=None):
+async def worker(method: str, path: str, payload=None, *, scope="owner", team_protocol=False):
     try:
         response = await app.state.http.request(
             method, computer_url().rstrip("/") + path,
-            headers=worker_headers(), json=payload,
+            headers=worker_headers(scope), json=payload,
         )
     except httpx.RequestError:
         raise HTTPException(503, "Computer worker unreachable")
+    if team_protocol and response.headers.get("X-Reign-Team-Browser-Protocol") != "1":
+        raise HTTPException(503, "The managed browser worker does not support the required team isolation protocol.")
     if response.status_code >= 400:
         try:
             code = response.json().get("code")
@@ -143,6 +203,30 @@ async def worker(method: str, path: str, payload=None):
 @app.get("/healthz")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/api/security/status", dependencies=[Depends(authorize)])
+async def security_status():
+    """Truthful control-plane status. No secrets, patient data or diagnostic bodies.
+
+    This endpoint is intentionally read-only. Draft policy simulations MUST NOT
+    be represented as runtime enforcement or HIPAA compliance.
+    """
+    agent = getattr(app.state, "agent", None)
+    encrypted_archive = bool(agent is not None and getattr(agent, "archive", None))
+    return JSONResponse({
+        "policy_enforcement": "not_active",
+        "phi_pii_egress_protection": "not_active",
+        "genesis_agent_execution": "disabled",
+        "dynamic_mcp_registration": "disabled",
+        "distributed_dispatch": "disabled",
+        "conversation_storage": "encrypted_finished_turn_archive" if encrypted_archive
+                                else "no_verified_archive",
+        "langgraph_checkpoints": "process_local",
+        "trace_storage": "in_memory_metadata_only",
+        "identity": "single_admin",
+        "status_note": "Draft policies cannot authorize agent or tool execution.",
+    }, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/readyz", dependencies=[Depends(authorize)])
@@ -284,6 +368,7 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     thread_id: uuid.UUID | None = None
     session_id: uuid.UUID | None = None
+    input_source: Literal["text", "voice"] = "text"
 
 
 @app.get("/api/agent", dependencies=[Depends(authorize)])
@@ -305,7 +390,8 @@ async def voice_offer(request: Request):
 @app.post("/api/chat", dependencies=[Depends(authorize)])
 async def chat(data: ChatRequest):
     return app.state.agent.submit(data.message, str(data.thread_id) if data.thread_id else None,
-                                  str(data.session_id) if data.session_id else None)
+                                  str(data.session_id) if data.session_id else None,
+                                  input_source=data.input_source)
 
 
 @app.get("/api/chat/{tid}", dependencies=[Depends(authorize)])
@@ -316,6 +402,13 @@ async def chat_state(tid: uuid.UUID):
 @app.post("/api/chat/{tid}/resume", dependencies=[Depends(authorize)])
 async def chat_resume(tid: uuid.UUID):
     return await app.state.agent.resume(str(tid))
+
+
+@app.post("/api/chat/{tid}/speech", dependencies=[Depends(authorize)])
+async def chat_speech(tid: uuid.UUID, request: Request):
+    run_id = await read_speech_request(request)
+    result = await app.state.private_speech.plan(app.state.agent, str(tid), run_id)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @app.delete("/api/chat/{tid}", dependencies=[Depends(authorize)])
@@ -644,6 +737,71 @@ async def genesis_policy_audit(policy_id: str):
     except Exception as error:
         genesis_policy_error(error)
 
+
+
+
+# Node inventory and routing previews only. The node heartbeat uses a
+# separate random token, not the administrator's CORE_TOKEN. This module
+# cannot provision, launch, invoke or dispatch a node.
+class NodeEnrollRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    node_id: str = Field(min_length=2, max_length=63)
+    kind: Literal["render", "aws", "azure", "onprem", "edge"]
+    label: str = Field(min_length=1, max_length=120)
+    capabilities: list[str] = Field(default_factory=list, max_length=12)
+
+
+def node_registry():
+    registry = getattr(app.state, "nodes", None)
+    if registry is None:
+        raise HTTPException(503, "Distributed node inventory unavailable")
+    return registry
+
+
+@app.get("/api/nodes", dependencies=[Depends(authorize)])
+async def nodes_list():
+    return {"nodes": node_registry().list_nodes(), "dispatch_enabled": False}
+
+
+@app.post("/api/nodes/enroll", dependencies=[Depends(authorize)])
+async def nodes_enroll(data: NodeEnrollRequest):
+    from reign.distributed_nodes import NodeDenied
+    try:
+        return node_registry().enroll(**data.model_dump())
+    except (NodeDenied, ValueError):
+        raise HTTPException(422, "Node enrollment rejected") from None
+
+
+@app.post("/api/nodes/{node_id}/heartbeat")
+async def node_heartbeat(node_id: str, request: Request):
+    from reign.distributed_nodes import NodeDenied, heartbeat_body
+    # Node credential is not a Core admin token and is never logged or returned.
+    token = request.headers.get("x-node-token", "")
+    try:
+        apps = await heartbeat_body(request)
+    except ValueError:
+        raise HTTPException(422, "Invalid heartbeat") from None
+    try:
+        return node_registry().heartbeat(node_id, token, apps)
+    except (NodeDenied, ValueError):
+        raise HTTPException(401, "Node authentication denied") from None
+
+
+@app.get("/api/nodes/route-preview/{capability}", dependencies=[Depends(authorize)])
+async def node_route_preview(capability: str):
+    try:
+        return node_registry().route_preview(capability)
+    except ValueError:
+        raise HTTPException(422, "Node routing preview rejected") from None
+
+
+@app.post("/api/nodes/{node_id}/disable", dependencies=[Depends(authorize)])
+async def node_disable(node_id: str):
+    from reign.distributed_nodes import NodeDenied
+    try:
+        return node_registry().disable(node_id)
+    except (NodeDenied, ValueError):
+        raise HTTPException(404, "Node not found") from None
 
 from reign.accounts import install as install_accounts, vault_tool
 install_accounts(app, authorize)

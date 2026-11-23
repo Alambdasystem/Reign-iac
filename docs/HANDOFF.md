@@ -1,4 +1,172 @@
-## Current checkpoint: live browser/vault acceptance; source fixes pending (2026-11-09)
+## Current implementation: continuous live microphone in Workspace (2026-11-21)
+
+James explicitly rejected the bounded Talk recording flow. Workspace's primary
+voice control now starts a continuous WebRTC microphone connection to the
+Realtime model. Pauses trigger responses without closing the microphone; the
+same connection handles successive spoken requests and interruptions. Mute and
+Mic off are explicit controls. Dictate remains a separate reviewed recording
+workflow. The live path does not use MediaRecorder, a twenty-second upload, or
+the recording transcription endpoint. The provider's session lifetime is a
+separate connection constraint, never an utterance cutoff.
+
+Each live call belongs to the authenticated member, room and current viewer
+connection. Provider call IDs and credentials stay in Core. A pending offer has
+a client-known UUID, so Off can retire it before negotiation finishes. Leaving
+the room, revoking a member, losing its presence lease, shutdown or Mic off
+closes the associated provider call and cancels only that call's unfinished
+room request. Durable duplicate receipts still confirm previously accepted
+work without replaying actions. Live requests carry voice origin; their text
+is the live model's delegated representation, not an independently verified
+recording and not an authorization upgrade.
+
+The existing room assistant remains the source of answers, expressions,
+documents and authorized tools. The initiating caller receives verified-answer
+narration over the same WebRTC connection. The portrait follows that output
+clock. Other room viewers receive the existing bounded speech clips, generated
+in the background without delaying the caller or causing duplicate playback.
+Private voice keeps its existing authorization boundary and startup behavior.
+
+These are implementation notes. CI/browser, actual provider and deployed-device
+receipts must be reported separately. The earlier audio release was held when
+James clarified the required streaming interaction; it must not be promoted as
+the completed solution without this follow-up.
+
+## Superseded Talk design: bounded microphone turns and progressive speech (2026-11-21)
+
+Talk to REIGN now starts an explicit microphone capture and automatically finishes
+after about 750 ms of quiet following sustained speech. Manual Finish and the
+20-second cap remain. This is bounded recording with endpoint detection, not a
+continuous audio stream to the room assistant. Cancel, room changes and logout
+release owned tracks and abort transcription. Recording stops REIGN's local output
+before opening the microphone to avoid recording her reply.
+
+Shared voice messages carry a five-minute server-issued transcript receipt bound
+to the member, room and exact words. The archive and assistant context preserve
+`input_source: voice`; typed messages retain text origin. Durable duplicate lookup
+comes before receipt expiry checks, so an uncertain submission can confirm its
+original result without running actions again. Private voice similarly sends an
+explicit input source through the owner-authorized graph route, applying it to
+the current turn and preserving all existing action permissions.
+
+Private voice uses a 450 ms provider silence window and 250 ms graph polling.
+Optional expression annotation runs alongside verified narration instead of
+blocking it. Valid late expression spans can label only exact unplayed text;
+an audible sentence never changes its cue midway through playback.
+
+Shared speech publishes its first complete transcript-verified sentence while a
+bounded producer generates later sentences on the same provider connection.
+Pending audio IDs wait behind the existing member-authorized audio route, with
+membership checked again before delivery. Worst-case memory reservations, two
+producer slots and deadlines bound this work; shutdown cancels and drains it.
+The browser prefetches only the next clip, retains the audio output clock for
+mouth and expression cues, and offers retry of unheard clips after a partial
+failure. Microphone transcription retains the aggregate 12/minute and 200/day
+limits; a single member can use that same minute allowance.
+
+New tests cover actual recorder/audio browser primitives with synthetic media,
+deliberately delayed speech and expression providers, exact spoken provenance,
+pending-clip authorization and cancellation. These source notes are not a live
+deployment or physical-device latency receipt; keep those results separate.
+
+## Prepared follow-up: Render to Tailscale SSH (2026-11-21)
+
+James requested joining his existing Render service to his existing tailnet to
+reach backend computers over SSH. The optional Core userspace client uses the
+existing mounted disk for device identity. Enrollment is disabled in the
+Blueprint until the actual tailnet, destination devices and access policy are
+verified. The account sign-in did not complete during preparation; no tailnet
+device, policy, key, service environment or live image was changed.
+
+See [the deployment and acceptance procedure](TAILSCALE.md). The candidate adds
+process supervision, a pinned Tailscale client, OpenSSH, local lifecycle tests
+and a network-disabled real-daemon CI check. Source and test fixtures do not
+establish live enrollment or SSH access. Preserve the existing manual tested-image
+promotion flow and the current application functionality.
+
+## Current implementation: speech timing and camera descriptions (2026-11-21)
+
+The shared composer now requests speech by default when available and unlocks
+audio from the Ask REIGN gesture. An explicit text-only choice is retained while
+switching rooms. Audio suspension exposes retry instead of reporting false
+speech. The prepared portrait samples the decoded PCM using the audio output
+clock, so sentence expressions and mouth energy pause and resume with playback.
+
+Private voice retains its mandatory graph delegation. A bounded owner-only
+annotation route labels the exact completed graph result with the existing
+sentence-expression schema; it cannot rewrite the result or authorize actions.
+Verified narration plays the segments in order, applying each expression only
+when its output begins and waiting for the previous audio tail. Annotation
+failure retains the verified neutral narration. Meter-context failures cannot
+block the native audio player's independent recovery.
+
+Workspace also provides a direct Camera preview and Describe what you see action.
+It requests video only, shares one explicit frame through the existing room-bound
+vision path, and requests a spoken reply with the same expressions. A confirmed
+send returns to REIGN's visible portrait and stops the preview camera. Stop,
+close, room changes and logout also stop it. The viewer connection stays outside
+the group call; typed drafts are retained and no continuous camera feed is sent.
+The original call snapshot path now sends the required ISO capture timestamp.
+
+Browser acceptance now checks actual Web Audio progression, non-silent output
+graph samples, PCM silence/voice mouth timing, expression boundaries, suspension,
+recovery and room cleanup with synthetic clips. Private controller fixtures
+remain simulated provider/graph media. The actual provider pre-deploy gate is
+separate, and neither establishes physical-device speaker audibility. This note
+describes source behavior; its release and rollout require separate receipts.
+
+## Product note: Workspace and REIGN (2026-11-21)
+
+The application is named **Workspace**, including the shared team area at
+`/team`. Its AI participant is
+**REIGN**, pronounced **Rain**. Visible labels, copied employee login details and
+assistant instructions use this distinction. The internal workspace ID `rain`,
+`team:rain:{room_id}` browser scopes, encrypted record associations, member IDs
+and saved room/document titles remain unchanged. No data migration or deletion
+is part of this correction. See [the workspace guide](TEAM_WORKSPACE.md) and
+[implementation contract](TEAM_WORKSPACE_CONTRACT.md) for current behavior.
+
+The shared room supports employee access, saved conversations/documents, current
+presence, explicit calls and bounded image sharing. It keeps the owner's private
+workspace separate. This source note is not a release or deployment receipt;
+historical checkpoints below retain their original evidence and limitations.
+
+REIGN's public prepared portrait now loads automatically in the private voice
+area, team room and Avatar Lab through one shared renderer and versioned atlas.
+Private voice drives the mouth from verified assistant output audio only;
+microphone input does not animate it. Team speech uses the same renderer and
+its own output meter. Interruptions, call end, logout and page exit release
+active playback and reset mouth movement. A missing portrait must not block
+otherwise working audio. Ordinary use does not start the neural worker.
+
+The Lab's optional neural editor remains explicit and frees its worker when
+closed. A custom Lab photo and crop can persist in account-scoped browser
+storage, within fixed image/account limits; it restores as a still image.
+This local experiment neither changes the shared REIGN identity nor syncs
+across devices. Reset removes only the current account's local experiment.
+These implementation notes require their own CI and deployment receipts.
+
+## Previous implementation: separate Avatar Lab access (2026-11-21)
+
+James requested a separate login for Mayur and a logout option. The source adds
+named, Avatar Lab-only accounts and visible **Log out** controls in the lab and
+main workspace. The existing owner password remains valid. Member sessions must
+not access Core's single-owner browser, saved accounts, chat, voice or Open STL
+management. The account configuration and password stay outside this public
+repository; only a salted verifier is configured on the existing AX service.
+
+Login/logout validation must cover named-user routing, owner API denial, server
+session revocation, rejection of copied cookies, and survival of a separate owner
+session. The existing real neural-model browser acceptance remains a release
+gate. These source changes are subject to the normal tested-image release and
+manual Blueprint promotion; this implementation note is not a deployment receipt.
+See [the access contract](APPLICATION_CONTRACTS.md#owner-and-avatar-lab-access).
+
+The user confirmed the existing portrait prototype works on their device.
+Server-side avatar rendering, talking-avatar synthesis and Voicebox integration
+remain separate future work. This access change keeps the current browser-based
+portrait model and existing Render compute plans.
+
+## Previous checkpoint: live browser/vault acceptance; source fixes pending (2026-11-09)
 
 Deployed application source `08bad55dc8bd483fe78b13f90ae249872ace71af` has now
 executed live prompt-driven `workspace_status` and `vault_status` checks through

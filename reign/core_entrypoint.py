@@ -8,6 +8,8 @@ import os
 import pwd
 import sys
 
+from reign import tailscale_runtime
+
 
 VAULT_MOUNT = "/var/data/reign-vault"
 
@@ -28,6 +30,11 @@ def prepare_mount(uid, gid):
 def main():
     if len(sys.argv) < 2:
         raise SystemExit("Core startup command is required")
+    # Only the image's explicit runtime supervisor may receive the enrollment
+    # secret. Pre-deploy replaces CMD and must never start or enroll Tailscale,
+    # even if Render applies a command's environment prefix after ENTRYPOINT.
+    if sys.argv[1:4] != ["python", "-m", "reign.tailscale_runtime"]:
+        os.environ.pop(tailscale_runtime.AUTH_ENV, None)
     account = pwd.getpwnam("reign")
     if os.geteuid() == 0:
         prepare_mount(account.pw_uid, account.pw_gid)

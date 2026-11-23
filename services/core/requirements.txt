@@ -9,3 +9,4 @@ langchain-openai==1.7.4
 langgraph==1.2.20
 langchain-core==1.7.6
 websockets==17.4
+Pillow==13.0.0
