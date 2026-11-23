@@ -183,18 +183,56 @@ async def simulated_team_speech_ui(browser, storage_state, origin, evidence):
     try:
         await page.goto(origin + '/team')
         await expect(page.locator('#reignAvatar')).to_have_attribute('data-ready', 'true')
+        # Idle means the original high-resolution photo, never the neural face.
+        assert await page.locator('#reignAvatar').evaluate("""canvas => {
+            const poster = canvas.parentElement.querySelector('.reign-poster');
+            return getComputedStyle(poster).backgroundImage.includes('idle-portrait.png')
+                && getComputedStyle(canvas).opacity === '0'
+                && canvas.dataset.composite === 'sharp-original-mouth-only';
+        }"""), 'Original portrait must remain visible before speech'
         await expect(page.locator('#speakReply')).to_be_checked()
         assert await page.evaluate('__speechOutput.contexts.length') == 0
         await (await callspace_control(page, '#messageInput')).fill('Synthetic audio synchronization check.')
         await callspace_click(page, '#askReign')
+        # Expand the face BEFORE the audio starts, so the screenshot captures
+        # actual lip motion rather than a slow 400ms layout transition.
+        await page.evaluate("document.getElementById('callspaceModeCall').click()")
+        await page.wait_for_function("""() => document.querySelector('.callspace-shell').dataset.mode === 'call'""")
         # A pending later segment must not delay already available first audio.
         # Release it only after real playback and mouth movement are observed.
         await page.wait_for_function("""() => __speechOutput.sources.length === 1 &&
             !__speechOutput.sources[0].ended &&
             Number(document.querySelector('#reignAvatar').dataset.mouth) > .15""")
+        # Capture immediately in the short voiced interval. Screenshotting
+        # after other browser assertions can race the 2.6s fixture audio.
+        await page.locator('#callspaceFace').screenshot(
+            path=str(evidence / 'reign-mouth-overlay-fullscreen.png'))
         await asyncio.wait_for(later_audio_requested.wait(), 2)
         assert await page.evaluate('!__speechOutput.sources[0].ended')
         later_audio_ready.set()
+        # Browser-rendered speech must mask the neural image to the mouth only.
+        assert await page.locator('#reignAvatar').evaluate("""canvas => {
+            const style = getComputedStyle(canvas);
+            const mask = style.webkitMaskImage || style.maskImage || '';
+            return canvas.dataset.speaking === 'true'
+                && canvas.dataset.composite === 'sharp-original-mouth-only'
+                && style.opacity === '1'
+                && canvas.dataset.maskReady === 'true'
+              && mask.includes('radial-gradient')
+              && mask.includes('px');
+        }"""), 'Speech may not replace the entire clear face with a 256px frame'
+
+        # The full-size face was already mounted before the spoken segment.
+        await page.wait_for_function("""() => {
+            const canvas = document.querySelector('#reignAvatar');
+            const box = canvas.getBoundingClientRect();
+            const expected = box.height / 2 + .11 * Math.max(box.width, box.height);
+            const actual = parseFloat(canvas.style.getPropertyValue('--reign-mouth-center-y'));
+            return canvas.dataset.maskReady === 'true'
+                && Math.abs(actual - expected) < 1;
+        }"""), 'Mouth mask did not track object-fit cover cropping'
+        await page.evaluate("document.getElementById('callspaceModeChat').click()")
+
         await page.wait_for_function("""() => __speechOutput.sources.length === 2 &&
             __speechOutput.sources.every(source => source.ended) &&
             document.querySelector('#reignAvatar').dataset.speaking === 'false'""")

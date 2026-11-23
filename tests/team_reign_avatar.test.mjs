@@ -30,7 +30,8 @@ function harness({hold = false} = {}) {
     now += ms;
     for (const [id, callback] of [...frames]) { frames.delete(id); callback(now); }
   }
-  return {create, advance, frames, document, listeners, urls, statuses, resolve,
+  return {mouthGeometry: (w,h) => realm.mouthOverlayGeometry(w,h),
+    create, advance, frames, document, listeners, urls, statuses, resolve,
     crispAxis: weights => realm.crispAxis(weights), get images() { return images; }};
 }
 
@@ -171,4 +172,28 @@ test('listening energy drives bounded nod and tilt without opening speaking audi
   assert.equal(canvas.dataset.nod,'0.000');
   assert.equal(canvas.dataset.tilt,'0.000');
   avatar.destroy();
+});
+
+// The low-resolution atlas must be used only for center-aligned lip shapes.
+test('sharp original face stays primary and neural mouth has no yaw mixing', async () => {
+  const h=harness(), {avatar, canvas, draws}=h.create(); await avatar.ready;
+  avatar.setPlaybackState({active:true,level:.8,clockMs:1000,expression:'neutral'});
+  h.advance(50);
+  assert.equal(canvas.dataset.composite, 'sharp-original-mouth-only');
+  const frames=draws.filter(row=>row.length===9&&row[0]?.naturalWidth===768);
+  assert.ok(frames.length>0);
+  assert.ok(frames.every(row=>row[1]===256),
+    'source atlas x must always select the center-column mouth frames');
+  avatar.stop();avatar.destroy();
+});
+
+test('mouth overlay follows object-fit cover crop in portrait and landscape', () => {
+  const h = harness();
+  const tall = h.mouthGeometry(390,884), wide = h.mouthGeometry(1280,720);
+  assert.ok(tall && wide);
+  assert.ok(Math.abs(tall.centerY - (884/2 + 884*.11))<.01);
+  assert.ok(Math.abs(wide.centerY - (720/2 + 1280*.11))<.01);
+  assert.ok(wide.centerY>720*.62, 'wide fullscreen mouth must not mask the nose');
+  assert.ok(wide.radiusY < wide.radiusX/2, 'keep neural patch tightly on lips');
+  assert.equal(h.mouthGeometry(0,100), null);
 });
