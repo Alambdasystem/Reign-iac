@@ -162,6 +162,10 @@ async def simulated_team_speech_ui(browser, storage_state, origin, evidence):
                     pass
                 visible = [event for event in events if event['seq'] > after] if room_id in path else []
             result = {'events': visible, 'presence': [], 'assistant': {'status': 'idle'}}
+        elif path.endswith('/voice') and request.method == 'GET':
+            # Room boot preflights voice capability without opening a mic or
+            # provider session. This fixture has no live voice provider.
+            result = {'configured': False, 'transport': 'webrtc'}
         elif '/presence' in path:
             result = {'presence': []}
         elif path in ['/api/team/rooms/' + room['id'] for room in rooms]:
