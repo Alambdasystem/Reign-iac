@@ -418,3 +418,15 @@ body.callspace-ready {
       radial-gradient(ellipse var(--reign-mouth-rx, 23px) var(--reign-mouth-ry, 11px) at 50% var(--reign-mouth-center-y, 62%), black 55%, transparent 100%);
   }
 }
+
+/* The localized compositor already blends the eye and lip crops in source
+   coordinates. Leave the old masked layer available as a static fallback. */
+.reign-portrait > canvas.reign-head-motion {
+  opacity: 1;
+  -webkit-mask-image: none;
+  mask-image: none;
+  transition: none;
+}
+.reign-portrait:has(> .reign-head-motion:not([hidden])) > canvas:not(.reign-head-motion) {
+  visibility: hidden;
+}

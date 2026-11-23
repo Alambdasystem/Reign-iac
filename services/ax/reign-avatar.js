@@ -41,8 +41,7 @@ export function crispAxis(weights, exponent = 1.8) {
 }
 
 // Speech-controlled yaw uses the actual output clock. It holds while playback
-// is suspended and never claims a pose outside the atlas' +/-3-degree range.
-// This is a bounded head gesture, not a phoneme/word-driven 3D head model.
+// is suspended and stays within the compositor's gentle yaw range.
 export function speechHeadYaw({active = false, level = 0, clockMs = null, now = 0} = {}) {
   if (!active) return Math.sin(now / 2600) * .55;
   const time = Number.isFinite(clockMs) && clockMs >= 0 ? clockMs : now;
@@ -71,8 +70,145 @@ export function speechEnvelope(samples) {
   return Math.min(.9, Math.max(0, Math.sqrt(sum / samples.length) - .008) * 5.5);
 }
 
+// The team portrait is a square source. Inverse-warp the face and the
+// neural eye/lip samples together, with zero displacement at the shoulders,
+// background edges, and frame boundary.
+const headVertex = `
+attribute vec2 position;
+varying vec2 portraitUV;
+void main() {
+  portraitUV = vec2(position.x, -position.y) * .5 + .5;
+  gl_Position = vec4(position, 0.0, 1.0);
+}`;
+const headFragment = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+varying vec2 portraitUV;
+uniform sampler2D poster;
+uniform sampler2D face;
+uniform vec3 pose;
+uniform float speaking;
+
+float feather(vec2 p, vec2 center, vec2 radius, float inner) {
+  return 1.0 - smoothstep(inner, 1.0, length((p - center) / radius));
+}
+
+void main() {
+  vec2 p = portraitUV;
+  float halfWidth = mix(.28, .41, smoothstep(.04, .31, p.y));
+  float head = 1.0 - smoothstep(halfWidth - .12, halfWidth, abs(p.x - .5));
+  head *= smoothstep(0.0, .10, p.y) * (1.0 - smoothstep(.72, .84, p.y));
+  vec2 neck = p - vec2(.5, .79);
+  vec2 shift = vec2(pose.x * (.004 + (.48 - p.y) * .008), pose.y / 256.0);
+  shift += pose.z * vec2(-neck.y, neck.x);
+  vec2 uv = p - shift * head;
+  float eyes = feather(uv, vec2(.5, 93.0 / 256.0), vec2(.245, .095), .65);
+  float lips = feather(uv, vec2(.5, .61), vec2(.115, .052), .55) * speaking;
+  gl_FragColor = mix(texture2D(poster, uv), texture2D(face, uv), max(eyes, lips));
+}`;
+
+function createLocalizedHead(source) {
+  if (!source.parentElement?.classList?.contains('reign-portrait')) return null;
+  const layer = document.createElement('canvas');
+  const gl = layer.getContext('webgl', {alpha: false, antialias: false, depth: false});
+  if (!gl) return null;
+  const program = gl.createProgram();
+  const buffer = gl.createBuffer();
+  const textures = [gl.createTexture(), gl.createTexture()];
+  const shaders = [];
+  const image = new Image();
+  const reducedMotion = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)');
+  let pose, speaking, ready = false, disposed = false;
+
+  function destroy() {
+    if (disposed) return;
+    disposed = true;
+    image.onload = image.onerror = null;
+    layer.removeEventListener('webglcontextlost', destroy);
+    layer.remove();
+    gl.deleteProgram(program);
+    gl.deleteBuffer(buffer);
+    textures.forEach(texture => gl.deleteTexture(texture));
+    shaders.forEach(shader => gl.deleteShader(shader));
+  }
+
+  try {
+    for (const [type, code] of [[gl.VERTEX_SHADER, headVertex], [gl.FRAGMENT_SHADER, headFragment]]) {
+      const shader = gl.createShader(type);
+      shaders.push(shader);
+      gl.shaderSource(shader, code);
+      gl.compileShader(shader);
+      gl.attachShader(program, shader);
+    }
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw Error('Head compositor unavailable');
+    gl.useProgram(program);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    const position = gl.getAttribLocation(program, 'position');
+    gl.enableVertexAttribArray(position);
+    gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+    pose = gl.getUniformLocation(program, 'pose');
+    speaking = gl.getUniformLocation(program, 'speaking');
+    for (const [index, name] of ['poster', 'face'].entries()) {
+      gl.activeTexture(gl.TEXTURE0 + index);
+      gl.bindTexture(gl.TEXTURE_2D, textures[index]);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.uniform1i(gl.getUniformLocation(program, name), index);
+    }
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, SIZE, SIZE, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  } catch {
+    destroy();
+    return null;
+  }
+
+  layer.className = 'reign-head-motion';
+  layer.hidden = true;
+  layer.setAttribute('aria-hidden', 'true');
+  layer.addEventListener('webglcontextlost', destroy, {once: true});
+  source.after(layer);
+  image.onload = () => {
+    gl.activeTexture(gl.TEXTURE0);
+    try {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+      if (gl.getError() !== gl.NO_ERROR) throw Error('Poster texture unavailable');
+      ready = true;
+    } catch {
+      destroy();
+    }
+  };
+  image.onerror = destroy;
+  image.src = '/assets/team-avatar-assets/idle-portrait.png';
+  return {
+    paint(yaw, nod, tilt, active, width, height) {
+      if (!ready || disposed || !width || !height) return;
+      const size = Math.min(image.naturalWidth,
+        Math.max(384, Math.ceil(Math.max(width, height) * (globalThis.devicePixelRatio || 1) / 64) * 64));
+      if (layer.width !== size || layer.height !== size) {
+        layer.width = layer.height = size;
+        gl.viewport(0, 0, size, size);
+      }
+      gl.activeTexture(gl.TEXTURE1);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, source);
+      if (reducedMotion?.matches) gl.uniform3f(pose, 0, 0, 0);
+      else gl.uniform3f(pose, yaw, nod, tilt * Math.PI / 180);
+      gl.uniform1f(speaking, active ? 1 : 0);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      layer.hidden = false;
+    },
+    destroy,
+  };
+}
+
 export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel = null, getPlaybackState = null}) {
   const ctx = canvas.getContext('2d', {alpha: false});
+  let head = null;
   let atlas = null, loaded = false, dead = false, speaking = false, level = 0, mouth = 0;
   let animation = null, lastPaint = -Infinity, lastTime = 0, paints = 0;
   let expression = 0, previousExpression = 0, expressionChanged = 0;
@@ -154,23 +290,16 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
     // mouth, and stop/barged-in playback closes it synchronously.
     const articulated = desired > .02 ? Math.min(.9, desired * 1.27 + .045) : 0;
     mouth += (articulated - mouth) * (1 - Math.exp(-dt / (articulated > mouth ? 28 : 76)));
-    headYaw = speechHeadYaw({active: speaking, level: desired, clockMs: playbackClock, now});
+    headYaw = speaking ? speechHeadYaw({active: true, level: desired, clockMs: playbackClock, now}) : 0;
     // Small acknowledgement nods follow *incoming* speech activity while
     // REIGN listens. These are display-only 2D gestures, not invented 3D
     // rotations or an assertion that REIGN understood untranscribed words.
     const recentlyListening = !speaking && now - listeningUpdatedAt < 240;
     const listening = recentlyListening ? Math.min(1, listeningLevel * 2.2) : 0;
     headNod = speaking ? Math.sin((playbackClock ?? now) / 270) * Math.min(2.4, desired * 2.7)
-      : listening > .05 ? Math.sin(now / 390) * listening * 2.2 : Math.sin(now / 2000) * .18;
+      : listening > .05 ? Math.sin(now / 390) * listening * 2.2 : 0;
     headTilt = speaking ? Math.sin((playbackClock ?? now) / 1600) * 1.8
-      : listening > .05 ? Math.sin(now / 850) * listening * 1.6 : Math.sin(now / 3500) * .35;
-    // The static poster and animated canvas share a single transform, keeping
-    // the head alive even when the lips are closed or audio is unavailable.
-    const media = canvas.parentElement;
-    if (media?.style?.setProperty) {
-      media.style.setProperty('--reign-nod', headNod.toFixed(2) + 'px');
-      media.style.setProperty('--reign-tilt', headTilt.toFixed(2) + 'deg');
-    }
+      : listening > .05 ? Math.sin(now / 850) * listening * 1.6 : 0;
     const expressionTime = expressionClock && playbackClock !== null ? playbackClock : now;
     const transition = Math.min(1, Math.max(0, (expressionTime - expressionChanged) / 260));
     expressionProgress = transition;
@@ -192,7 +321,9 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
       const dominant = transition < .5 ? previousExpression : expression;
       for (const [col, weight] of yawWeights) stamp(dominant, 3, col, weight * blink, {top: 66, height: 54});
     }
-    ctx.globalAlpha = 1; paints++; diagnostics(); schedule();
+    ctx.globalAlpha = 1;
+    head?.paint(headYaw, headNod, headTilt, speaking, maskWidth, maskHeight);
+    paints++; diagnostics(); schedule();
   }
   function setListeningLevel(value) {
     if (dead) return;
@@ -250,9 +381,6 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
   }
   function stop() {
     listeningLevel = 0; listeningUpdatedAt = -Infinity; headNod = headTilt = 0;
-    const media = canvas.parentElement;
-    media?.style?.setProperty?.('--reign-nod', '0px');
-    media?.style?.setProperty?.('--reign-tilt', '0deg');
     setPlaybackState({active: false, expression: 'neutral'});
   }
   function visibility() {
@@ -265,6 +393,7 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
     if (animation !== null) cancelAnimationFrame(animation);
     animation = null;
     document.removeEventListener('visibilitychange', visibility);
+    head?.destroy(); head = null;
     canvas.width = canvas.height = 0;
     diagnostics('destroyed');
   }
@@ -273,6 +402,9 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
   const ready = preloadReignAvatar().then(image => {
     if (dead) return false;
     atlas = image; loaded = true;
+    // An optional WebGL path must never prevent the existing blink/lip
+    // overlay or audio from functioning on a device without it.
+    try { head = createLocalizedHead(canvas); } catch { head = null; }
     // Draw before exposing ready so an opaque, still-empty canvas never hides
     // the matching CSS poster. The first paint needs no microphone or audio.
     paint(performance.now(), true);
