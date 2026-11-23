@@ -32,6 +32,25 @@ export function mixAxis(value, minimum, maximum, steps) {
   return [[low, 1 - (scaled - low)], [low + 1, scaled - low]];
 }
 
+// Concentrate interpolation toward the nearest genuine neural frame. A
+// four-way average of slightly different eyes/teeth is visibly blurry.
+export function crispAxis(weights, exponent = 1.8) {
+  const adjusted = weights.map(([index, weight]) => [index, Math.pow(Math.max(0, weight), exponent)]);
+  const sum = adjusted.reduce((total, [, weight]) => total + weight, 0);
+  return adjusted.map(([index, weight]) => [index, sum ? weight / sum : 0]);
+}
+
+// Speech-controlled yaw uses the actual output clock. It holds while playback
+// is suspended and never claims a pose outside the atlas' +/-3-degree range.
+// This is a bounded head gesture, not a phoneme/word-driven 3D head model.
+export function speechHeadYaw({active = false, level = 0, clockMs = null, now = 0} = {}) {
+  if (!active) return Math.sin(now / 2600) * .55;
+  const time = Number.isFinite(clockMs) && clockMs >= 0 ? clockMs : now;
+  const energy = Number.isFinite(level) ? Math.max(0, Math.min(.9, level)) : 0;
+  const turn = (Math.sin(time / 1050) * 2.05 + Math.sin(time / 2450 + .75) * .9);
+  return Math.max(-3, Math.min(3, turn * (.45 + .55 * energy / .9)));
+}
+
 export function speechEnvelope(samples) {
   if (!samples?.length) return 0;
   let sum = 0;
@@ -45,13 +64,14 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
   let animation = null, lastPaint = -Infinity, lastTime = 0, paints = 0;
   let expression = 0, previousExpression = 0, expressionChanged = 0;
   let playbackClock = null, lastPlaybackClock = null, expressionClock = false;
-  let expressionSource = 'neutral', segment = 0, expressionProgress = 1;
+  let expressionSource = 'neutral', segment = 0, expressionProgress = 1, headYaw = 0;
   canvas.width = canvas.height = SIZE;
   function diagnostics(state) {
     canvas.dataset.ready = String(loaded && !dead);
     if (state) canvas.dataset.state = state;
     canvas.dataset.speaking = String(speaking && !dead);
     canvas.dataset.mouth = mouth.toFixed(3);
+    canvas.dataset.yaw = headYaw.toFixed(3);
     canvas.dataset.expression = EXPRESSIONS[expression];
     canvas.dataset.expressionSource = expressionSource;
     canvas.dataset.expressionProgress = expressionProgress.toFixed(3);
@@ -91,14 +111,18 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
       const sampled = getSpeechLevel ? getSpeechLevel() : level;
       desired = Number.isFinite(sampled) ? Math.min(.9, Math.max(0, sampled)) : 0;
     }
-    mouth += (desired - mouth) * (1 - Math.exp(-dt / (desired > mouth ? 35 : 90)));
-    const yaw = Math.sin(now / 2200) * 1.65;
+    // Stronger but bounded jaw motion. Audio silence still settles to a closed
+    // mouth, and stop/barged-in playback closes it synchronously.
+    const articulated = desired > .02 ? Math.min(.9, desired * 1.27 + .045) : 0;
+    mouth += (articulated - mouth) * (1 - Math.exp(-dt / (articulated > mouth ? 28 : 76)));
+    headYaw = speechHeadYaw({active: speaking, level: desired, clockMs: playbackClock, now});
     const expressionTime = expressionClock && playbackClock !== null ? playbackClock : now;
     const transition = Math.min(1, Math.max(0, (expressionTime - expressionChanged) / 260));
     expressionProgress = transition;
     const expressions = previousExpression === expression ? [[expression, 1]] :
       [[previousExpression, 1 - transition], [expression, transition]];
-    const yawWeights = mixAxis(yaw, -3, 3, 3), mouthWeights = mixAxis(mouth, 0, .9, 3);
+    const yawWeights = crispAxis(mixAxis(headYaw, -3, 3, 3));
+    const mouthWeights = crispAxis(mixAxis(mouth, 0, .9, 3));
     ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
     ctx.fillStyle = '#000'; ctx.fillRect(0, 0, SIZE, SIZE);
     ctx.globalCompositeOperation = 'lighter';
@@ -117,7 +141,7 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
     speaking = value === true;
     // Barge-in, end and logout close the mouth immediately, even if the next
     // browser animation frame is suspended. Never retain a previous speaker.
-    if (!speaking) { level = 0; mouth = 0; }
+    if (!speaking) { level = 0; mouth = 0; headYaw = 0; }
     diagnostics(); schedule();
   }
   function setSpeechLevel(value) {
@@ -136,13 +160,13 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
     if (dead) return;
     speaking = value.active === true;
     if (!speaking && value.expression === 'neutral') {
-      level = mouth = 0; expression = previousExpression = 0; expressionChanged = 0;
+      level = mouth = headYaw = 0; expression = previousExpression = 0; expressionChanged = 0;
       playbackClock = lastPlaybackClock = null; expressionClock = false;
       expressionSource = 'neutral'; expressionProgress = 1; segment = 0;
       diagnostics(); if (redraw) schedule(); return;
     }
     level = speaking && Number.isFinite(value.level) ? Math.min(.9, Math.max(0, value.level)) : 0;
-    if (!speaking) mouth = 0;
+    if (!speaking) { mouth = 0; headYaw = 0; }
     playbackClock = Number.isFinite(value.clockMs) && value.clockMs >= 0 ? value.clockMs : null;
     segment = Number.isInteger(value.segment) && value.segment >= 1 && value.segment <= 4 ? value.segment : 0;
     // Expressions enter on the verified audio cue, never on a server response
