@@ -6,6 +6,9 @@ from pathlib import Path
 from scripts.portrait_quality import inspect,contact_sheet,stage
 
 ROOT=Path(__file__).resolve().parents[1]
+# Keep the original quality threshold. Only reduce nonzero pose angles when
+# the real model output fails; never substitute a neutral frame for a pose.
+POSE_SCALES=(1.0, 0.75, 0.5, 0.25)
 POSES=(
  ("neutral",0,0,0,0),("yaw_left_3",-3,0,0,0),
  ("yaw_right_3",3,0,0,0),("yaw_left_4",-4,0,0,0),
@@ -28,6 +31,25 @@ def model_paths(directory):
         result[name]=path
     return result
 
+def choose_sharp_pose(name, angles, mouth, source, render):
+    """Return the first genuine model pose meeting the unchanged blur gate.
+
+    A failed nonzero pose cannot be replaced with neutral or post-sharpened pixels.
+    Mouth-only expressions are evaluated once at their requested strength.
+    """
+    yaw, pitch, roll = angles
+    moving = any((yaw, pitch, roll))
+    for scale in (POSE_SCALES if moving else (1.0,)):
+        actual = (yaw * scale, pitch * scale, roll * scale)
+        frame = render(*actual, mouth)
+        report = inspect([(name, frame)], source)
+        if report["pass"]:
+            return frame, {"name": name, "requested_degrees": list(angles),
+                           "actual_degrees": list(actual), "scale": scale,
+                           "sharpness": report["frames"][0]["sharpness"]}
+    raise ValueError(name + ": no nonzero model pose meets the original blur threshold")
+
+
 def generate(directory):
     import numpy as np
     import onnxruntime as ort
@@ -43,8 +65,7 @@ def generate(directory):
         source=original.convert("RGB").crop((x,y,x+side,y+side)).resize((256,256),Image.Resampling.LANCZOS)
     rgb=np.asarray(source,dtype=np.float32).transpose(2,0,1)[None]/255
     feature=enc.run(None,{"img":rgb})[0]
-    frames=[]
-    for name,yaw,pitch,roll,mouth in POSES:
+    def render(yaw, pitch, roll, mouth):
         expr=np.zeros((1,30),dtype=np.float32)
         for i,m in {25:.4375,28:-.2875,23:.1125,16:-.0625}.items():
             expr[0,i]=m*mouth
@@ -52,10 +73,14 @@ def generate(directory):
         result=model.run(None,{"feature_3d":feature,"pose_control_vector":pose,
                                "input_rgb":rgb,"expression_control_vector":expr})[0]
         if result.shape!=(1,3,256,256) or not np.isfinite(result).all():
-            raise ValueError(name+": bad inference")
-        frame=Image.fromarray(np.clip(result[0].transpose(1,2,0)*255,0,255).astype(np.uint8))
-        frames.append((name,frame))
-    return source,frames,{k:hashlib.sha256(p.read_bytes()).hexdigest() for k,p in paths.items()}
+            raise ValueError("bad model inference")
+        return Image.fromarray(np.clip(result[0].transpose(1,2,0)*255,0,255).astype(np.uint8))
+
+    frames=[];adjustments=[]
+    for name,yaw,pitch,roll,mouth in POSES:
+        frame, detail=choose_sharp_pose(name,(yaw,pitch,roll),mouth,source,render)
+        frames.append((name,frame));adjustments.append(detail)
+    return source,frames,{k:hashlib.sha256(p.read_bytes()).hexdigest() for k,p in paths.items()},adjustments
 
 def main():
     p=argparse.ArgumentParser()
@@ -64,10 +89,11 @@ def main():
     p.add_argument("--output",required=True)
     a=p.parse_args()
     if Path(a.review).resolve()==Path(a.output).resolve():p.error("review and output must differ")
-    original,frames,hashes=generate(a.models)
+    original,frames,hashes,adjustments=generate(a.models)
     review=Path(a.review);review.mkdir(parents=True,exist_ok=True)
     contact_sheet(frames,review/"raw-poses.png")
     report=inspect(frames,original)
+    report["pose_adjustments"]=adjustments
     (review/"quality.json").write_text(json.dumps(report,indent=2)+"\n")
     if not report["pass"]:
         raise SystemExit("FAIL: blurry facial frames detected; no candidate published")
