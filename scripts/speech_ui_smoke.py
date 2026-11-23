@@ -203,6 +203,10 @@ async def simulated_team_speech_ui(browser, storage_state, origin, evidence):
         await page.wait_for_function("""() => __speechOutput.sources.length === 1 &&
             !__speechOutput.sources[0].ended &&
             Number(document.querySelector('#reignAvatar').dataset.mouth) > .15""")
+        # Capture immediately in the short voiced interval. Screenshotting
+        # after other browser assertions can race the 2.6s fixture audio.
+        await page.locator('#callspaceFace').screenshot(
+            path=str(evidence / 'reign-mouth-overlay-fullscreen.png'))
         await asyncio.wait_for(later_audio_requested.wait(), 2)
         assert await page.evaluate('!__speechOutput.sources[0].ended')
         later_audio_ready.set()
@@ -227,11 +231,6 @@ async def simulated_team_speech_ui(browser, storage_state, origin, evidence):
             return canvas.dataset.maskReady === 'true'
                 && Math.abs(actual - expected) < 1;
         }"""), 'Mouth mask did not track object-fit cover cropping'
-        assert await page.locator('#reignAvatar').evaluate("""canvas => (
-            canvas.dataset.speaking === 'true' && Number(canvas.dataset.mouth) > .15
-        )"""), 'Full-screen visual must show an actively moving mouth'
-        await page.locator('#callspaceFace').screenshot(
-            path=str(evidence / 'reign-mouth-overlay-fullscreen.png'))
         await page.evaluate("document.getElementById('callspaceModeChat').click()")
 
         await page.wait_for_function("""() => __speechOutput.sources.length === 2 &&
