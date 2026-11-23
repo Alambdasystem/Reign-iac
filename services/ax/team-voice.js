@@ -10,6 +10,29 @@ export function createTeamVoice(deps = {}) {
   const ownSessions = new Map();
   let session = null, disposed = false, lastState = {active: false, phase: 'idle', muted: false};
   let controller, stopping = null, intent = 0;
+  let prepared = null;
+  // Warm only the room-scoped capability endpoint: never create a provider
+  // call, request microphone permission, or leave an unowned media track.
+  async function prepare({roomId, connectionId} = {}) {
+    if (disposed || !roomId || !connectionId || lastState.active) return false;
+    const now = Date.now();
+    if (prepared?.roomId === roomId && prepared.connectionId === connectionId && prepared.until > now)
+      return true;
+    if (prepared?.pending && prepared.roomId === roomId && prepared.connectionId === connectionId)
+      return prepared.pending;
+    const current = {roomId, connectionId, until: 0, config: null, pending: null};
+    prepared = current;
+    current.pending = api(roomPath(roomId) + '/voice', 'GET', undefined, {timeout: 10000}).then(config => {
+      if (prepared !== current || disposed) return false;
+      if (!config || config.configured !== true) { prepared = null; return false; }
+      current.config = config; current.until = Date.now() + 25000;
+      return true;
+    }).catch(() => {
+      if (prepared === current) prepared = null;
+      return false;
+    }).finally(() => { current.pending = null; });
+    return current.pending;
+  }
   const aborted = () => Object.assign(new Error('Live microphone session ended.'), {name: 'AbortError'});
   const canonical = value => typeof value === 'string' ? value.replace(/\s+/gu, ' ').trim() : '';
   const roomPath = roomId => '/api/team/rooms/' + encodeURIComponent(roomId);
@@ -84,6 +107,10 @@ export function createTeamVoice(deps = {}) {
         connection_id: value.connectionId, in_call: false, microphone: false, camera: false, screen: false},
       {signal: options.signal, timeout: 12000});
       if (!current(value)) throw aborted();
+      // Reuse a recent, authorized capability response when the room has
+      // already been primed. Presence admission above remains mandatory.
+      if (prepared?.roomId === value.roomId && prepared.connectionId === value.connectionId
+          && prepared.until > Date.now() && prepared.config) return prepared.config;
       return api(roomPath(value.roomId) + '/voice', 'GET', undefined, {...options, timeout: 15000});
     }
     if (path === '/api/voice/offer' && method === 'POST') {
@@ -201,12 +228,12 @@ export function createTeamVoice(deps = {}) {
     return cleanup;
   }
   return {
-    start, stop, acceptEvents,
+    start, stop, prepare, acceptEvents,
     mute() { return controller?.mute(); },
     enableSpeaker() { return controller?.enableSpeaker(); },
     retry() { if (session?.uncertain) return submit(session.uncertain); },
     suppressPlayback(roomId, event) { return ownSessions.get(event?.data?.voice_session_id) === roomId; },
     snapshot() { return {...lastState, voiceSessionId: session?.id || null}; },
-    dispose() { disposed = true; return stop({reason: 'Live microphone off. Workspace closed.'}); },
+    dispose() { disposed = true; prepared = null; return stop({reason: 'Live microphone off. Workspace closed.'}); },
   };
 }

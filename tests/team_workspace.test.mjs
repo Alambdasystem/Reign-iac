@@ -504,6 +504,12 @@ test('opt-in camera Ask attaches one authorized local frame and retains the draf
   assert.equal(attachment.body.connection_id,'call-owned');
   assert.deepEqual(sent.body.attachment_ids,['consented-frame']);
   assert.equal(sent.body.ask_reign,true);
+  await until(() => h.node('messageInput').value === '');
+  h.input('messageInput', 'Follow-up without a camera frame.');
+  h.submit('chatForm', 'askReign');
+  await until(() => h.requests.filter(request => request.url.endsWith('/messages')).length === 2);
+  assert.equal(h.requests.filter(request => request.url.endsWith('/attachments')).length, 1);
+  assert.deepEqual(h.requests.filter(request => request.url.endsWith('/messages'))[1].body.attachment_ids, []);
   h.app.destroy();
 });
 

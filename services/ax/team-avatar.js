@@ -255,5 +255,6 @@ export function createTeamAvatar({canvas, api, onStatus = () => {}}) {
     }
     audioContext = null; ready = false;
   }
-  return {play, stop, unlock, destroy, startLivePlayback, setLivePlayback, endLivePlayback};
+  return {play, stop, unlock, destroy, startLivePlayback, setLivePlayback, endLivePlayback,
+    setListeningLevel: value => portrait.setListeningLevel?.(value)};
 }

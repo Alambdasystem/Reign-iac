@@ -19,7 +19,7 @@ jobs:
         with:
           node-version: '22'
       - name: Install application and test dependencies
-        run: pip install -r services/core/requirements.txt -r services/computer/requirements.txt -r services/ax/requirements.txt
+        run: pip install -r services/core/requirements.txt -r services/computer/requirements.txt -r services/ax/requirements.txt Pillow==13.0.0
       - run: python -m compileall -q reign scripts tests
       - run: python -m unittest discover -s tests -v
       - name: Voice controller lifecycle and delegation (simulated media/provider)

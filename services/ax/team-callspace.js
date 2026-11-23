@@ -245,12 +245,16 @@ export function createCallspaceWorkspace(deps = {}) {
   visionToggle.setAttribute('aria-pressed', 'false');
   visionToggle.setAttribute('aria-label', 'Include one frame from my shared camera when I next ask REIGN');
   panels.settings.body.append(visionToggle);
-  listen(visionToggle, 'click', () => {
-    const enabled = visionToggle.getAttribute('aria-pressed') !== 'true';
+  function renderVisionConsent(enabled) {
     visionToggle.setAttribute('aria-pressed', String(enabled));
     visionToggle.textContent = `Include my camera with my next Ask REIGN: ${enabled ? 'on' : 'off'}`;
-    win.dispatchEvent?.(new CustomEvent('reign:team-vision-consent', {detail:{enabled}}));
+  }
+  listen(visionToggle, 'click', () => {
+    const enabled = visionToggle.getAttribute('aria-pressed') !== 'true';
+    renderVisionConsent(enabled);
+    win.dispatchEvent?.(new CustomEvent('reign:team-vision-consent', {detail: {enabled}}));
   });
+  listen(win, 'reign:team-vision-consent-reset', () => renderVisionConsent(false));
   function updateGroupStage() {
     const active = groupView && mode === 'call';
     shell.dataset.groupView = String(active);

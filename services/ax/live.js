@@ -10,10 +10,10 @@ let chatOwner=null, chatPending=null, chatGeneration=0, chatInfo=null;
 let accountsVisible=false, accountsLoading=false, accountsMutation=false, accountsGeneration=0, accountsLoadId=0;
 let accountsReadAbort=null, accountsFocus=null, accountRemovalId=null, savedAccounts=[];
 let accountsVault={ready:false,durable:false,code:'vault_not_ready'};
-let accountRole=null, loggingOut=false, logoutFailed=false;
+let accountRole=null, consoleGranted=false, browserAllowed=false, loggingOut=false, logoutFailed=false;
 const SIGNOUT_KEY='reign:ax:signed-out';
 function mountReignPortrait(){
-  if(!authenticated||accountRole!=='owner'||loggingOut||reignPortrait||!window.REIGNAvatar)return;
+  if(!authenticated||!(accountRole==='owner'||consoleGranted)||loggingOut||reignPortrait||!window.REIGNAvatar)return;
   const generation=++portraitGeneration;
   reignPortrait=window.REIGNAvatar.createReignAvatar({canvas:$('reignAvatar'),onStatus(value){
     if(generation!==portraitGeneration)return;
@@ -122,9 +122,9 @@ function accountErrorMessage(error,mutation=false){
 function showAccountError(message){$('accountsError').textContent=message||'';$('accountsError').hidden=!message}
 function accountStoreReady(){return accountsVault.ready===true&&accountsVault.durable===true}
 function refreshAccountsControls(){
-  const blocked=!authenticated||loggingOut||logoutFailed||restoringWorkspace||accountsLoading||accountsMutation;
+  const blocked=!authenticated||accountRole!=='owner'||loggingOut||logoutFailed||restoringWorkspace||accountsLoading||accountsMutation;
   const secureInput=accountStoreReady()&&!blocked&&(!voiceUi.active||voiceUi.muted===true);
-  $('accountsOpen').disabled=!authenticated||loggingOut||logoutFailed||restoringWorkspace;
+  $('accountsOpen').disabled=!authenticated||accountRole!=='owner'||loggingOut||logoutFailed||restoringWorkspace;
   for(const id of ['accountLabel','accountOrigin','accountUsername','accountPassword','accountSave'])$(id).disabled=!secureInput;
   $('accountsRefresh').disabled=blocked;
   const useBlocked=!secureInput||busy||!sid||!connected||!agentReady||chatOccupied()||!!accountRemovalId;
@@ -244,7 +244,7 @@ async function useSavedAccount(id){
   try{await startChatRun('',{owner:'account-'+id,accountId:id})}
   catch(error){if(error.name!=='AbortError')entry('ACCOUNTS',accountErrorMessage(error,true),true)}
 }
-function refreshControls(){const blocked=busy||restoringWorkspace||loggingOut||logoutFailed;const human=connected&&controller==='human'&&!blocked;const agent=connected&&controller==='agent'&&!blocked;$('open').disabled=!!sid||blocked||!authenticated;for(const id of ['take','takeExpanded'])$(id).disabled=!agent;for(const id of ['return','returnExpanded','tabKey','enterKey','scroll','scrollUp','send','text'])$(id).disabled=!human;$('close').disabled=!sid||blocked;$('expandRemote').disabled=!sid||!connected||restoringWorkspace||loggingOut||logoutFailed;$('reconnect').hidden=!sid||connected;$('reconnect').disabled=blocked;$('logout').disabled=loggingOut;$('logout').hidden=!authenticated&&!loggingOut&&!logoutFailed;$('sendCommand').disabled=blocked||chatOccupied();$('resumeAgent').hidden=chatState!=='paused';$('resumeAgent').disabled=controller!=='agent'||restoringWorkspace||loggingOut||logoutFailed;$('cancelAgent').hidden=!threadId&&!chatPending;$('cancelAgent').disabled=restoringWorkspace||loggingOut||logoutFailed;$('session').textContent=sid||'None';$('controller').textContent=controller||'—';$('epoch').textContent=epoch??'—';$('controlLabel').textContent=!sid?'No active session':!connected?'Connection interrupted':human||controller==='human'?'You have control':'REIGN has control';$('remoteStatus').textContent=$('controlLabel').textContent;$('connection').textContent=!authenticated?'SIGN IN':connected?'CONNECTED':'WORKSPACE';$('liveLabel').textContent=connected?'● LIVE BROWSER':sid?'CONNECTION INTERRUPTED':'COMPUTER · NOT CONNECTED';refreshVoiceControls();refreshAccountsControls()}
+function refreshControls(){const blocked=busy||restoringWorkspace||loggingOut||logoutFailed;const human=connected&&controller==='human'&&!blocked;const agent=connected&&controller==='agent'&&!blocked;$('open').disabled=!browserAllowed||!!sid||blocked||!authenticated;for(const id of ['take','takeExpanded'])$(id).disabled=!agent;for(const id of ['return','returnExpanded','tabKey','enterKey','scroll','scrollUp','send','text'])$(id).disabled=!human;$('close').disabled=!sid||blocked;$('expandRemote').disabled=!sid||!connected||restoringWorkspace||loggingOut||logoutFailed;$('reconnect').hidden=!sid||connected;$('reconnect').disabled=blocked;$('logout').disabled=loggingOut;$('logout').hidden=!authenticated&&!loggingOut&&!logoutFailed;$('sendCommand').disabled=blocked||chatOccupied();$('resumeAgent').hidden=chatState!=='paused';$('resumeAgent').disabled=controller!=='agent'||restoringWorkspace||loggingOut||logoutFailed;$('cancelAgent').hidden=!threadId&&!chatPending;$('cancelAgent').disabled=restoringWorkspace||loggingOut||logoutFailed;$('session').textContent=sid||'None';$('controller').textContent=controller||'—';$('epoch').textContent=epoch??'—';$('controlLabel').textContent=!sid?'No active session':!connected?'Connection interrupted':human||controller==='human'?'You have control':'REIGN has control';$('remoteStatus').textContent=$('controlLabel').textContent;$('connection').textContent=!authenticated?'SIGN IN':connected?'CONNECTED':'WORKSPACE';$('liveLabel').textContent=connected?'● LIVE BROWSER':sid?'CONNECTION INTERRUPTED':'COMPUTER · NOT CONNECTED';refreshVoiceControls();refreshAccountsControls()}
 function clearFrame(){for(const id of ['screen','fullScreen'])$(id).removeAttribute('src');$('screen').hidden=true;$('emptyScreen').hidden=false;if(frameURL)URL.revokeObjectURL(frameURL);frameURL=null;frameSequence=0;$('frameStatus').textContent='Waiting for a session'}
 function pausePolling(){if(poll)clearTimeout(poll);poll=null}
 function stop(){pausePolling();sid=null;epoch=null;controller=null;connected=false;remember(null);clearFrame();closeExpanded();refreshControls()}
@@ -344,8 +344,11 @@ async function signedIn(profile){
   if(loggingOut)return;
   if(!profile?.authenticated||!['owner','avatar','employee'].includes(profile.role))throw Error('Your account could not be verified. Reload and sign in again.');
   accountRole=profile.role;logoutFailed=false;
-  // Restricted accounts must leave before any Core, browser, chat or voice read.
-  const destination=accountRole==='avatar'?'/avatar-lab':accountRole==='employee'?'/team':avatarReturnPath(window.location?.search||'');
+  consoleGranted=accountRole==='employee'&&profile.landing_path==='/'&&profile.capabilities?.ai_chat===true;
+  browserAllowed=accountRole==='owner';
+  // Unprivileged employees stay in Team. A server-verified grant permits the
+  // console but never changes their account into the owner identity.
+  const destination=accountRole==='avatar'?'/avatar-lab':accountRole==='employee'&&!consoleGranted?'/team':avatarReturnPath(window.location?.search||'');
   if(destination){
     authenticated=true;$('loginMessage').textContent=destination==='/team'?'Opening your team workspace…':'Opening Avatar Lab…';
     window.location.replace(destination);return;
@@ -354,7 +357,8 @@ async function signedIn(profile){
   mountReignPortrait();
   refreshControls();entry('WORKSPACE','Signed in. Reconnecting to your existing workspace…');
   try{
-    await recoverBrowserSession();if(!authenticated||loggingOut)return;
+    if(browserAllowed)await recoverBrowserSession();
+    if(!authenticated||loggingOut)return;
     await restoreChat();if(!authenticated||loggingOut)return;
     await loadVoiceCapability();if(!authenticated||loggingOut)return;
     try{await checkStatus()}
@@ -365,7 +369,7 @@ async function signedIn(profile){
 }
 function announceSignout(){try{localStorage.setItem(SIGNOUT_KEY,`${Date.now()}:${Math.random()}`)}catch{}}
 function leaveWorkspace(message){
-  authenticated=false;accountRole=null;logoutFailed=false;closeAccounts();
+  authenticated=false;accountRole=null;consoleGranted=false;browserAllowed=false;logoutFailed=false;closeAccounts();
   releaseReignPortrait();
   // Local teardown must not depend on cancellation or other server cleanup.
   voiceController?.stop({reason:message}).catch(()=>{});

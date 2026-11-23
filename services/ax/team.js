@@ -30,7 +30,7 @@ export function createTeamWorkspace(deps = {}) {
     dictation: 'idle', dictationGeneration: 0, dictationAbort: null,
     liveVoice: {active: false, phase: 'idle', muted: false, uncertain: false},
     camera: {phase: 'idle', active: false}, cameraBusy: false, cameraRevision: 0, cameraAbort: null,
-    includeCameraInAsk: false, visionCaptureBusy: false};
+    includeCameraInAsk: false, visionCapture: null};
   const callMe = {};
   let call, layout = null;
   call = (deps.createCall || createTeamCall)({api: request, me: callMe, onState: renderCall,
@@ -50,7 +50,10 @@ export function createTeamWorkspace(deps = {}) {
   const liveVoice = (deps.createLiveVoice || createTeamVoice)({api: request, audio: $('reignLiveAudio'), uuid, timers: clock,
     onState(value) {
       const wasActive = state.liveVoice.active; state.liveVoice = value;
-      if (!value.active && wasActive) avatar.endLivePlayback?.();
+      if (!value.active && wasActive) {
+        avatar.endLivePlayback?.();
+        avatar.setListeningLevel?.(0);
+      }
       notice('liveVoiceStatus', value.status || 'Microphone off. Turn it on to talk naturally with REIGN.', value.phase === 'failed');
       $('liveVoiceDiagnostics').dataset.phase = value.phase || 'idle';
       $('liveVoiceDiagnostics').dataset.active = String(!!value.active);
@@ -71,7 +74,11 @@ export function createTeamWorkspace(deps = {}) {
       caption.textContent = (value.role === 'user' ? 'You said: ' : 'REIGN: ') + caption.dataset.text;
       caption.hidden = !caption.dataset.text;
     },
-    onLevel(level) { $('liveVoiceLevel').value = Math.max(0, Math.min(1, level || 0)); },
+    onLevel(level) {
+      const value = Math.max(0, Math.min(1, level || 0));
+      $('liveVoiceLevel').value = value;
+      if (state.liveVoice.active && !state.liveVoice.muted) avatar.setListeningLevel?.(value);
+    },
     onUserSpeechStart() { avatar.startLivePlayback?.(); },
     onOutputLevel(level, playback) {
       const active = usable() && playback?.active === true;
@@ -217,9 +224,13 @@ export function createTeamWorkspace(deps = {}) {
       }
       if (!owner()) continue;
       const row = element('div', 'managed-member'), text = element('div');
-      text.append(element('strong', '', member.display_name), element('small', '', `${member.username} · ${member.active === false ? 'Access revoked' : member.role === 'owner' ? 'Owner' : 'Employee'}`));
+      text.append(element('strong', '', member.display_name), element('small', '', `${member.username} · ${member.active === false ? 'Access revoked' : member.role === 'owner' ? 'Owner' : member.console_access ? 'REIGN + Genesis collaborator' : 'Employee'}`));
       row.append(text);
       if (member.role !== 'owner' && member.active !== false && member.id !== state.profile.me.id) {
+        const access = element('button', 'quiet', member.console_access ? 'Remove console access' : 'Grant REIGN + Genesis');
+        access.type = 'button'; access.disabled = state.memberBusy;
+        access.addEventListener('click', () => setConsoleAccess(member, !member.console_access));
+        row.append(access);
         const revoke = element('button', 'danger', 'Revoke access'); revoke.type = 'button'; revoke.disabled = state.memberBusy;
         revoke.addEventListener('click', () => revokeMember(member)); row.append(revoke);
       }
@@ -351,9 +362,17 @@ export function createTeamWorkspace(deps = {}) {
   function rememberComposer() {
     if (state.roomId) composers.set(state.roomId, {text: $('messageInput').value, speak: $('speakReply').checked, attachments: state.attachments});
   }
+  function clearAskCameraConsent() {
+    const wasEnabled = state.includeCameraInAsk;
+    state.includeCameraInAsk = false;
+    state.visionCapture?.abort();
+    state.visionCapture = null;
+    if (wasEnabled) win.dispatchEvent(new CustomEvent('reign:team-vision-consent-reset'));
+  }
   async function selectRoom(roomId, {force = false} = {}) {
     if (state.closed || state.accessLost || state.loggingOut || state.logoutFailed || (!force && roomId === state.roomId)) return;
     if (!state.rooms.some(room => room.id === roomId)) return;
+    clearAskCameraConsent();
     rememberComposer(); clearCapture(); closeDialog('shareDialog'); stopCamera(); closeDialog('cameraDialog'); cancelDictation(); sharedBrowser.setRoom(null);
     void liveVoice.stop({reason: 'Microphone off. You changed rooms.'});
     avatar.stop();
@@ -405,7 +424,12 @@ export function createTeamWorkspace(deps = {}) {
     try {
       const result = await request(roomPath(roomId) + '/presence', 'POST', {connection_id: state.connectionId,
         microphone: false, camera: false, screen: false, in_call: false}, {timeout: 12000});
-      if (generation === state.roomGeneration && !state.closed) applyPresence(result.presence || []);
+      if (generation === state.roomGeneration && !state.closed) {
+        applyPresence(result.presence || []);
+        // Prepare a room-scoped voice capability response in the background.
+        // This does not connect a microphone or a paid realtime provider.
+        void liveVoice.prepare?.({roomId, connectionId: state.connectionId});
+      }
     } catch (error) {
       if (generation === state.roomGeneration && !state.accessLost) connection('Reconnecting', 'error');
     } finally {
@@ -460,42 +484,44 @@ export function createTeamWorkspace(deps = {}) {
   async function sendMessage(askReign = false, retry = false, prepared = null) {
     if (!usable()) return;
     const roomId = state.roomId, generation = state.roomGeneration;
-    if (state.visionCaptureBusy) return;
+    if (state.visionCapture) return;
     let pending = outgoing.get(roomId);
     if (pending && !retry) { notice('messageStatus', 'Confirm the previous send with Retry before sending another message.', true); return; }
     if (!pending && prepared) { pending = prepared; outgoing.set(roomId, pending); }
     if (!pending) {
       const text = $('messageInput').value.trim(); if (!text) return;
-      // This is one explicitly opted-in frame per Ask, never an unattended camera feed.
-      // The existing room-bound attachment endpoint validates camera ownership.
-      if (askReign && state.includeCameraInAsk && state.call.active && state.call.camera
-          && state.streams.local.camera && !state.attachments.length) {
-        state.visionCaptureBusy = true;
-        const visionRoom = roomId, visionGeneration = generation;
-        try {
-          notice('messageStatus', 'Capturing your shared camera for this question…');
-          const frame = await call.captureFrame({connectionId: state.call.connectionId, source:'camera'});
-          if (!usable() || state.roomId !== visionRoom || state.roomGeneration !== visionGeneration
-              || !state.includeCameraInAsk || !state.call.camera || $('messageInput').value.trim() !== text) return;
-          const data_url = await blobDataUrl(frame.blob);
-          if (!usable() || state.roomId !== visionRoom || state.roomGeneration !== visionGeneration
-              || !state.includeCameraInAsk || !state.call.camera) return;
-          const uploaded = await request(roomPath(visionRoom) + '/attachments', 'POST', {
-            data_url, source:'camera', connection_id: state.call.connectionId, captured_at: frame.capturedAt
-          });
-          if (!usable() || state.roomId !== visionRoom || state.roomGeneration !== visionGeneration
-              || !state.includeCameraInAsk || $('messageInput').value.trim() !== text) return;
-          if (!uploaded.attachment?.id) throw Error('Camera frame was not confirmed.');
-          state.attachments.push(uploaded.attachment); renderAttachments();
-        } catch (error) {
-          notice('messageStatus', 'The camera frame could not be shared. Your question is kept. ' + (error.message || ''), true);
-          return; // Fail closed: don't silently send a question without the selected frame.
-        } finally {
-          state.visionCaptureBusy = false;
-        }
-      }
       if (state.attachments.length && !askReign) { notice('messageStatus', 'Choose Ask REIGN to send this question with the images you selected, or remove the images to send a room message.', true); return; }
       if (text.length > 4000 || new TextEncoder().encode(text).length > 16384) { notice('messageStatus', 'This message is too long. Split it into smaller messages before sending.', true); return; }
+      if (askReign && state.includeCameraInAsk && state.call.active && state.call.camera
+          && state.streams.local.camera && !state.attachments.length) {
+        const capture = new AbortController();
+        const connectionId = state.call.connectionId;
+        state.visionCapture = capture;
+        const current = () => !capture.signal.aborted && usable() && state.roomGeneration === generation
+          && state.call.connectionId === connectionId && $('messageInput').value.trim() === text;
+        try {
+          notice('messageStatus', 'Capturing your shared camera for this question…');
+          const frame = await call.captureFrame({connectionId, source: 'camera'});
+          if (!current()) return;
+          const data_url = await blobDataUrl(frame.blob);
+          if (!current()) return;
+          const uploaded = await request(roomPath(roomId) + '/attachments', 'POST', {
+            data_url, source: 'camera', connection_id: connectionId, captured_at: frame.capturedAt,
+          }, {signal: capture.signal});
+          if (!current()) return;
+          if (!uploaded.attachment?.id) throw Error('Camera frame was not confirmed.');
+          state.attachments.push(uploaded.attachment);
+          renderAttachments();
+          clearAskCameraConsent();
+        } catch (error) {
+          if (!capture.signal.aborted) notice('messageStatus', 'The camera frame could not be shared. Your question is kept. ' + (error.message || ''), true);
+          return;
+        } finally {
+          if (state.visionCapture === capture) state.visionCapture = null;
+        }
+      } else if (askReign && state.includeCameraInAsk) {
+        clearAskCameraConsent();
+      }
       pending = {phase: 'sending', payload: {client_message_id: uuid(), text, ask_reign: !!askReign,
         speak: !!askReign && $('speakReply').checked && state.capabilities.speech === true,
         attachment_ids: state.attachments.map(item => item.id)}};
@@ -680,6 +706,19 @@ export function createTeamWorkspace(deps = {}) {
       notice('memberStatus', state.memberUncertain ? 'Creation wasn’t confirmed. Refresh the team before trying again. A generated password cannot be retrieved later.' : error.message, true);
     } finally { state.memberBusy = false; $('createMember').disabled = state.memberUncertain; renderMembers(); }
   }
+  async function setConsoleAccess(member, enabled) {
+    if (!owner() || state.memberBusy || member.active === false ||
+        !confirm(`${enabled ? 'Grant' : 'Remove'} REIGN and Genesis console access ${enabled ? 'to' : 'from'} ${member.display_name}? Owner credentials and security administration remain restricted.`)) return;
+    state.memberBusy = true; renderMembers();
+    try {
+      const result = await request('/api/team/members/' + escapedId(member.id) + '/console-access', 'PATCH', {enabled});
+      const index = state.members.findIndex(value => value.id === member.id);
+      if (index >= 0 && result.member?.id === member.id) state.members[index] = result.member;
+      else throw Error('The change was not confirmed. Refresh members to verify access.');
+      notice('memberStatus', `${member.display_name}: ${enabled ? 'REIGN and Genesis access granted' : 'console access removed'}.`);
+    } catch (error) { notice('memberStatus', error.message, true); }
+    finally { state.memberBusy = false; renderMembers(); }
+  }
   async function revokeMember(member) {
     if (!owner() || state.memberBusy || !confirm(`Revoke ${member.display_name}’s access to Workspace? Their saved messages and documents will remain.`)) return;
     state.memberBusy = true; renderMembers();
@@ -701,6 +740,7 @@ export function createTeamWorkspace(deps = {}) {
   function renderCall(value = {}) {
     const previous = state.call;
     state.call = {...state.call, ...value};
+    if (previous.camera && (!state.call.camera || previous.connectionId !== state.call.connectionId)) clearAskCameraConsent();
     if (previous.active && previous.connectionId && !state.call.active) {
       // Tracks stop before the best-effort DELETE. A delayed heartbeat/poll
       // response must not turn this retired connection's indicators back on.
@@ -943,7 +983,7 @@ export function createTeamWorkspace(deps = {}) {
     const roomId = state.roomId, connectionId = state.connectionId;
     state.connectionId = null;
     releasePresence(roomId, connectionId);
-    state.includeCameraInAsk = false; state.visionCaptureBusy = false;
+    clearAskCameraConsent();
     clearCapture(); stopCamera(); clearCredential(); cancelDictation(); sharedBrowser.setRoom(null);
     for (const id of ['shareDialog', 'cameraDialog', 'credentialDialog', 'membersDialog']) closeDialog(id);
     // Media shutdown is immediate. Its best-effort presence DELETE must never
@@ -1067,7 +1107,8 @@ export function createTeamWorkspace(deps = {}) {
   listen($('shareDialog'), 'close', clearCapture);
   listen(win, 'beforeunload', event => { if (!state.closed && !state.loggingOut && [...drafts.values()].some(draft => draft.dirty)) { event.preventDefault(); event.returnValue = ''; } });
   listen(win, 'reign:team-vision-consent', event => {
-    state.includeCameraInAsk = event.detail?.enabled === true;
+    if (event.detail?.enabled === true) state.includeCameraInAsk = true;
+    else clearAskCameraConsent();
   });
   listen(win, 'storage', event => { if (event.key === 'reign:ax:signed-out' && event.newValue) { destroy(); win.location.replace('/?next=%2Fteam'); } });
   // A page restored from the back/forward cache has deliberately disposed all
