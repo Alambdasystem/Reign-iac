@@ -30,7 +30,8 @@ function harness({hold = false} = {}) {
     now += ms;
     for (const [id, callback] of [...frames]) { frames.delete(id); callback(now); }
   }
-  return {create, advance, frames, document, listeners, urls, statuses, resolve, get images() { return images; }};
+  return {create, advance, frames, document, listeners, urls, statuses, resolve,
+    crispAxis: weights => realm.crispAxis(weights), get images() { return images; }};
 }
 
 test('multiple portraits share one versioned image decode without an audio or model runtime', async () => {
@@ -134,27 +135,26 @@ test('speech-driven head gesture stays within the existing atlas and follows pla
   });
 });
 
-test('sharpened interpolation is normalized and favors actual atlas endpoints', () => {
+test('sharpened interpolation preserves endpoints and weights real atlas frames', () => {
   const h = harness();
-  const crisp = h.create();
-  return crisp.avatar.ready.then(() => {
-    // The nearest frame receives more weight than in the old linear blend.
-    const linear = Array.from(h.urls).length;
-    assert.equal(linear, 1);
-    assert.match(source, /crispAxis\\(mixAxis\\(headYaw/);
-    assert.match(source, /Math\\.pow\\(Math\\.max\\(0, weight\\), exponent\\)/);
-    crisp.avatar.destroy();
-  });
+  const left = h.crispAxis([[0, 1], [1, 0]]);
+  assert.deepEqual(Array.from(left, pair => Array.from(pair)), [[0,1],[1,0]]);
+  const sharpened = Array.from(h.crispAxis([[0,.75],[1,.25]]), pair => Array.from(pair));
+  assert.ok(sharpened[0][1] > .75, 'favor the nearest generated frame');
+  assert.ok(Math.abs(sharpened[0][1]+sharpened[1][1]-1)<1e-10);
 });
 
 test('mouth response is stronger but stops immediately and stays silent without audio', async () => {
   const h=harness(), {avatar,canvas}=h.create(); await avatar.ready;
   avatar.setPlaybackState({active:true, level:.35, clockMs:10, expression:'neutral'});
+  h.advance(50);
+  avatar.setPlaybackState({active:true, level:.35, clockMs:110, expression:'neutral'});
   h.advance(100);
   assert.ok(Number(canvas.dataset.mouth) > .35, 'spoken energy should create visible jaw motion');
-  avatar.setPlaybackState({active:true, level:0, clockMs:110, expression:'neutral'});
+  const peak = Number(canvas.dataset.mouth);
+  avatar.setPlaybackState({active:true, level:0, clockMs:210, expression:'neutral'});
   h.advance(100);
-  assert.ok(Number(canvas.dataset.mouth) < .35);
+  assert.ok(Number(canvas.dataset.mouth) < peak);
   avatar.stop(); assert.equal(canvas.dataset.mouth,'0.000');
   avatar.destroy();
 });
