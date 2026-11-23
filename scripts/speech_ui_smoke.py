@@ -183,16 +183,20 @@ async def simulated_team_speech_ui(browser, storage_state, origin, evidence):
     try:
         await page.goto(origin + '/team')
         await expect(page.locator('#reignAvatar')).to_have_attribute('data-ready', 'true')
-        # The high-resolution poster paints immediately; wait for the responsive
-        # cover-cropped neural mask geometry before testing its visible overlay.
-        await expect(page.locator('#reignAvatar')).to_have_attribute('data-mask-ready', 'true')
-        # Idle means the original high-resolution photo, never the neural face.
-        assert await page.locator('#reignAvatar').evaluate("""canvas => {
+        # Wait through the canvas opacity transition after the mask geometry
+        # initializes. The original poster and the idle eye overlay must coexist.
+        await page.wait_for_function("""() => {
+            const canvas = document.querySelector('#reignAvatar');
             const poster = canvas.parentElement.querySelector('.reign-poster');
-            return getComputedStyle(poster).backgroundImage.includes('idle-portrait.png')
-                && getComputedStyle(canvas).opacity === '1'
-                && canvas.dataset.composite === 'sharp-original-eyes-and-mouth';
-        }"""), 'Original portrait must remain visible before speech'
+            const style = getComputedStyle(canvas);
+            const mask = style.webkitMaskImage || style.maskImage || '';
+            return canvas.dataset.maskReady === 'true'
+                && canvas.dataset.speaking === 'false'
+                && getComputedStyle(poster).backgroundImage.includes('idle-portrait.png')
+                && style.opacity === '1'
+                && canvas.dataset.composite === 'sharp-original-eyes-and-mouth'
+                && (mask.match(/radial-gradient/g) || []).length === 1;
+        }""", timeout=10000)
         await expect(page.locator('#speakReply')).to_be_checked()
         assert await page.evaluate('__speechOutput.contexts.length') == 0
         await (await callspace_control(page, '#messageInput')).fill('Synthetic audio synchronization check.')
@@ -221,8 +225,8 @@ async def simulated_team_speech_ui(browser, storage_state, origin, evidence):
                 && canvas.dataset.composite === 'sharp-original-eyes-and-mouth'
                 && style.opacity === '1'
                 && canvas.dataset.maskReady === 'true'
-              && mask.includes('radial-gradient')
-              && mask.includes('px');
+                && (mask.match(/radial-gradient/g) || []).length === 2
+                && mask.includes('px');
         }"""), 'Speech may not replace the entire clear face with a 256px frame'
 
         # The full-size face was already mounted before the spoken segment.
