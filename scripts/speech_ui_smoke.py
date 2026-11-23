@@ -187,8 +187,8 @@ async def simulated_team_speech_ui(browser, storage_state, origin, evidence):
         assert await page.locator('#reignAvatar').evaluate("""canvas => {
             const poster = canvas.parentElement.querySelector('.reign-poster');
             return getComputedStyle(poster).backgroundImage.includes('idle-portrait.png')
-                && getComputedStyle(canvas).opacity === '0'
-                && canvas.dataset.composite === 'sharp-original-mouth-only';
+                && getComputedStyle(canvas).opacity === '1'
+                && canvas.dataset.composite === 'sharp-original-eyes-and-mouth';
         }"""), 'Original portrait must remain visible before speech'
         await expect(page.locator('#speakReply')).to_be_checked()
         assert await page.evaluate('__speechOutput.contexts.length') == 0
@@ -215,7 +215,7 @@ async def simulated_team_speech_ui(browser, storage_state, origin, evidence):
             const style = getComputedStyle(canvas);
             const mask = style.webkitMaskImage || style.maskImage || '';
             return canvas.dataset.speaking === 'true'
-                && canvas.dataset.composite === 'sharp-original-mouth-only'
+                && canvas.dataset.composite === 'sharp-original-eyes-and-mouth'
                 && style.opacity === '1'
                 && canvas.dataset.maskReady === 'true'
               && mask.includes('radial-gradient')
