@@ -58,7 +58,14 @@ async def login(page, username, password):
 
 
 async def provider_picker_check(page):
+    # The responsive callspace moves the header into its workspace menu.
+    # Exercise the visible keyboard navigation instead of focusing a hidden button.
+    menu = page.locator("#callspaceMenu")
+    await menu.focus()
+    await menu.press("Enter")
+    await expect(page.locator("#callspaceMenuPanel")).to_be_visible()
     opener = page.locator("[data-provider-picker]")
+    await expect(opener).to_be_visible()
     await opener.focus()
     await opener.press("Enter")
     dialog = page.get_by_role("dialog", name="Account connections")
@@ -74,6 +81,9 @@ async def provider_picker_check(page):
     await page.keyboard.press("Escape")
     await expect(dialog).to_be_hidden()
     await expect(opener).to_be_focused()
+    await expect(page.locator("#callspaceMenuPanel")).to_be_visible()
+    await page.locator("#callspaceCloseMenu").click()
+    await expect(page.locator("#callspaceMenuPanel")).to_be_hidden()
 
 
 async def shared_browser_check(page, room_id):
