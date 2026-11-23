@@ -206,7 +206,9 @@ async def simulated_team_speech_ui(browser, storage_state, origin, evidence):
             return canvas.dataset.speaking === 'true'
                 && canvas.dataset.composite === 'sharp-original-mouth-only'
                 && style.opacity === '1'
-                && mask.includes('radial-gradient') && mask.includes('62%');
+                && canvas.dataset.maskReady === 'true'
+              && mask.includes('radial-gradient')
+              && mask.includes('var(--reign-mouth-center-y');
         }"""), 'Speech may not replace the entire clear face with a 256px frame'
         await page.locator('#reignMedia').screenshot(
             path=str(evidence / 'reign-mouth-overlay-speaking.png'))
@@ -214,6 +216,14 @@ async def simulated_team_speech_ui(browser, storage_state, origin, evidence):
         # Changing view mode must not restart or interrupt WebRTC playback.
         await page.evaluate("document.getElementById('callspaceModeCall').click()")
         await page.wait_for_function("""() => document.querySelector('.callspace-shell').dataset.mode === 'call'""")
+        await page.wait_for_function("""() => {
+            const canvas = document.querySelector('#reignAvatar');
+            const box = canvas.getBoundingClientRect();
+            const expected = box.height / 2 + .11 * Math.max(box.width, box.height);
+            const actual = parseFloat(canvas.style.getPropertyValue('--reign-mouth-center-y'));
+            return canvas.dataset.maskReady === 'true'
+                && Math.abs(actual - expected) < 1;
+        }"""), 'Mouth mask did not track object-fit cover cropping'
         await page.locator('#callspaceFace').screenshot(
             path=str(evidence / 'reign-mouth-overlay-fullscreen.png'))
         await page.evaluate("document.getElementById('callspaceModeChat').click()")

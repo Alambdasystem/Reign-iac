@@ -364,11 +364,11 @@ body.callspace-ready {
 @supports ((-webkit-mask-image: radial-gradient(ellipse, black, transparent)) or
            (mask-image: radial-gradient(ellipse, black, transparent))) {
   .reign-portrait canvas {
-    -webkit-mask-image: radial-gradient(ellipse 19% 11% at 50% 62%, black 35%, transparent 100%);
-    mask-image: radial-gradient(ellipse 19% 11% at 50% 62%, black 35%, transparent 100%);
+    -webkit-mask-image: radial-gradient(ellipse var(--reign-mouth-rx, 15px) var(--reign-mouth-ry, 6px) at 50% var(--reign-mouth-center-y, 62%), black 35%, transparent 100%);
+    mask-image: radial-gradient(ellipse var(--reign-mouth-rx, 15px) var(--reign-mouth-ry, 6px) at 50% var(--reign-mouth-center-y, 62%), black 35%, transparent 100%);
   }
-  .reign-portrait canvas[data-ready="true"][data-speaking="true"],
-  .callspace-ready .reign-portrait canvas[data-ready="true"][data-speaking="true"] {
+   .reign-portrait canvas[data-ready="true"][data-speaking="true"][data-mask-ready="true"],
+  .callspace-ready .reign-portrait canvas[data-ready="true"][data-speaking="true"][data-mask-ready="true"] {
     opacity: 1;
   }
 }
