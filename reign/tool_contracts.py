@@ -53,13 +53,8 @@ class LinkedInPreviewArgs(EmptyArgs):
     text: str = Field(min_length=1, max_length=3000)
 
 
-class LinkedInPublishArgs(LinkedInPreviewArgs):
-    approved: bool = False
-
-
 CATALOG = {
     "linkedin_preview_post": ("Preview a text-only LinkedIn post without publishing or exposing tokens.", LinkedInPreviewArgs),
-    "linkedin_publish_post": ("Publish an owner-approved text-only post to the server-configured LinkedIn author. Never invoke without explicit current-turn owner authorization. Check LinkedIn before any retry.", LinkedInPublishArgs),
     "workspace_status": ("Check actual Core, Temporal and browser worker readiness.", EmptyArgs),
     "browser_status": ("Read the current browser URL, title, control owner and epoch.", EmptyArgs),
     "open_browser": ("Open an allowed HTTPS site, or reuse the current browser without navigating.", URLArgs),
@@ -76,7 +71,7 @@ CATALOG = {
     "vault_use_account": ("Fill a saved account into the current unambiguous same-origin login/signup form using a fresh observation. Passwords stay outside the agent and workflow history. This does not submit the form or prove authentication.", UseAccountArgs),
 }
 
-EFFECT_TOOLS = frozenset({"linkedin_publish_post", "open_browser", "navigate_browser", "browser_click", "browser_fill", "browser_press", "browser_scroll", "vault_use_account"})
+EFFECT_TOOLS = frozenset({"open_browser", "navigate_browser", "browser_click", "browser_fill", "browser_press", "browser_scroll", "vault_use_account"})
 READ_TOOLS = frozenset({"linkedin_preview_post", "workspace_status", "browser_status", "browser_observe", "vault_status", "vault_list_accounts", "vault_request_account"})
 
 

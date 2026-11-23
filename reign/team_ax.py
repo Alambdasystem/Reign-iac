@@ -77,6 +77,31 @@ class TeamBridge:
         except (ValueError, UnicodeError):
             raise failure() from None
 
+    async def console_access(self, session):
+        if session.identity.role != "employee" or not session.identity.user_id:
+            return False
+        if not enabled():
+            raise failure()
+        try:
+            response = await self.app.state.http.request(
+                "POST", self.core_origin() + "/internal/team/console-access",
+                json={"id": session.identity.user_id, "credential_revision": int(session.identity.revision)},
+                headers={"Authorization": "Bearer " + self.configured("CORE_TOKEN")},
+                timeout=10, follow_redirects=False)
+        except (httpx.HTTPError, TimeoutError, ValueError):
+            raise failure() from None
+        if response.status_code in {401, 403, 404}:
+            raise failure(401, "Sign in again to use this workspace.")
+        if response.status_code != 200 or len(response.content) > 2048:
+            raise failure()
+        try:
+            value = response.json()
+            if not isinstance(value, dict) or set(value) != {"console_access"} or type(value["console_access"]) is not bool:
+                raise ValueError()
+            return value["console_access"]
+        except (ValueError, UnicodeError):
+            raise failure() from None
+
     async def authenticate(self, username, password):
         return await self.directory("/internal/team/authenticate", {
             "username": username.strip().lower(), "password": password})

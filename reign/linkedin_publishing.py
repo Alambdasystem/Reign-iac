@@ -1,8 +1,8 @@
 """Opt-in LinkedIn text posting through the official Posts API.
 
 Tokens and author identity are server-side configuration, never model input.
-Only explicit owner-authorized requests may set approved=True. No automatic
-retry after submission because the outcome may be uncertain.
+The owner console confirms an exact, single-use preview before requesting
+publication. A provider submission is never automatically retried.
 """
 import os
 import re
@@ -23,26 +23,28 @@ def configuration():
             "version": version if re.fullmatch(r"20[0-9]{4}", version) else ""}
 
 
-def preview(text):
+def preview(text, *, draft_only=False):
     if not isinstance(text, str) or not 1 <= len(text.strip()) <= 3000:
         return {"error": "Post must have 1–3000 characters", "code": "invalid_post", "status": 422}
+    if draft_only:
+        return {"status": "draft", "text": text.strip(), "media_supported": False}
     config = configuration()
     return {"status": "preview", "text": text.strip(), "author": config["author"],
             "ready": config["ready"], "media_supported": False,
             "note": "No post has been made. Owner approval is required before publishing."}
 
 
-async def publish(text, approved):
+async def publish(text, *, expected_author):
     candidate = preview(text)
     if "error" in candidate:
         return candidate
-    if approved is not True:
-        return {"error": "Owner approval required before publishing",
-                "code": "approval_required", "status": 403}
     config = configuration()
     if not config["ready"]:
         return {"error": "LinkedIn publishing is not configured or enabled",
                 "code": "linkedin_unavailable", "status": 503}
+    if not isinstance(expected_author, str) or expected_author != config["author"]:
+        return {"error": "The configured LinkedIn author changed. Preview the post again.",
+                "code": "author_changed", "status": 409}
     payload = {"author": config["author"], "commentary": candidate["text"],
                "visibility": "PUBLIC",
                "distribution": {"feedDistribution": "MAIN_FEED",
@@ -56,6 +58,9 @@ async def publish(text, approved):
         async with httpx.AsyncClient(timeout=20, trust_env=False, follow_redirects=False) as client:
             response = await client.post(POSTS_URL, headers=headers, json=payload)
     except httpx.RequestError:
+        return {"error": "Publishing outcome is uncertain; check LinkedIn before retrying",
+                "code": "publish_uncertain", "status": 502}
+    if response.status_code >= 500:
         return {"error": "Publishing outcome is uncertain; check LinkedIn before retrying",
                 "code": "publish_uncertain", "status": 502}
     if response.status_code != 201:

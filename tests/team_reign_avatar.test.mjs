@@ -30,7 +30,9 @@ function harness({hold = false} = {}) {
     now += ms;
     for (const [id, callback] of [...frames]) { frames.delete(id); callback(now); }
   }
-  return {create, advance, frames, document, listeners, urls, statuses, resolve, get images() { return images; }};
+  return {mouthGeometry: (w,h) => realm.mouthOverlayGeometry(w,h),
+    create, advance, frames, document, listeners, urls, statuses, resolve,
+    crispAxis: weights => realm.crispAxis(weights), get images() { return images; }};
 }
 
 test('multiple portraits share one versioned image decode without an audio or model runtime', async () => {
@@ -108,4 +110,90 @@ test('an explicit inactive neutral state clears an interrupted sentence and its 
   assert.equal(canvas.dataset.segment, '0'); assert.equal(canvas.dataset.audioTime, '0.000');
   h.advance(500); assert.equal(canvas.dataset.expression, 'neutral');
   avatar.destroy();
+});
+
+test('speech-driven head gesture stays within the existing atlas and follows playback time', () => {
+  const h = harness(), yaw = h.create(); // Same implementation, no extra model runtime.
+  const pose = h => h.canvas.dataset.yaw;
+  return yaw.avatar.ready.then(() => {
+    yaw.avatar.setPlaybackState({active:true, level:.8, clockMs:1000, expression:'neutral'});
+    h.advance(50);
+    const first = Number(pose(yaw));
+    h.advance(300);
+    assert.equal(Number(pose(yaw)), first, 'a stopped playback clock must not advance the head');
+    yaw.avatar.setPlaybackState({active:true, level:.8, clockMs:1600, expression:'neutral'});
+    h.advance(50);
+    const second = Number(pose(yaw));
+    assert.notEqual(first, second);
+    for (const time of [0, 250, 1000, 2500, 5000, 10000]) {
+      const value = yaw.avatar.setPlaybackState({active:true, level:.9, clockMs:time, expression:'neutral'});
+      h.advance(50);
+      assert.ok(Math.abs(Number(pose(yaw))) <= 3, 'yaw must remain inside precomputed frames');
+    }
+    yaw.avatar.stop();
+    assert.equal(yaw.canvas.dataset.yaw, '0.000');
+    yaw.avatar.destroy();
+  });
+});
+
+test('sharpened interpolation preserves endpoints and weights real atlas frames', () => {
+  const h = harness();
+  const left = h.crispAxis([[0, 1], [1, 0]]);
+  assert.deepEqual(Array.from(left, pair => Array.from(pair)), [[0,1],[1,0]]);
+  const sharpened = Array.from(h.crispAxis([[0,.75],[1,.25]]), pair => Array.from(pair));
+  assert.ok(sharpened[0][1] > .75, 'favor the nearest generated frame');
+  assert.ok(Math.abs(sharpened[0][1]+sharpened[1][1]-1)<1e-10);
+});
+
+test('mouth response is stronger but stops immediately and stays silent without audio', async () => {
+  const h=harness(), {avatar,canvas}=h.create(); await avatar.ready;
+  avatar.setPlaybackState({active:true, level:.35, clockMs:10, expression:'neutral'});
+  h.advance(50);
+  avatar.setPlaybackState({active:true, level:.35, clockMs:110, expression:'neutral'});
+  h.advance(100);
+  assert.ok(Number(canvas.dataset.mouth) > .35, 'spoken energy should create visible jaw motion');
+  const peak = Number(canvas.dataset.mouth);
+  avatar.setPlaybackState({active:true, level:0, clockMs:210, expression:'neutral'});
+  h.advance(100);
+  assert.ok(Number(canvas.dataset.mouth) < peak);
+  avatar.stop(); assert.equal(canvas.dataset.mouth,'0.000');
+  avatar.destroy();
+});
+
+test('listening energy drives bounded nod and tilt without opening speaking audio', async () => {
+  const h=harness(), {avatar,canvas}=h.create(); await avatar.ready;
+  avatar.setListeningLevel(.7); h.advance(50);
+  assert.equal(canvas.dataset.speaking,'false');
+  assert.equal(canvas.dataset.mouth,'0.000');
+  const nod=Number(canvas.dataset.nod), tilt=Number(canvas.dataset.tilt);
+  assert.ok(Number.isFinite(nod) && Math.abs(nod) <= 2.2);
+  assert.ok(Number.isFinite(tilt) && Math.abs(tilt) <= 1.6);
+  avatar.stop();
+  assert.equal(canvas.dataset.nod,'0.000');
+  assert.equal(canvas.dataset.tilt,'0.000');
+  avatar.destroy();
+});
+
+// The low-resolution atlas must be used only for center-aligned lip shapes.
+test('sharp original face stays primary and neural mouth has no yaw mixing', async () => {
+  const h=harness(), {avatar, canvas, draws}=h.create(); await avatar.ready;
+  avatar.setPlaybackState({active:true,level:.8,clockMs:1000,expression:'neutral'});
+  h.advance(50);
+  assert.equal(canvas.dataset.composite, 'sharp-original-mouth-only');
+  const frames=draws.filter(row=>row.length===9&&row[0]?.naturalWidth===768);
+  assert.ok(frames.length>0);
+  assert.ok(frames.every(row=>row[1]===256),
+    'source atlas x must always select the center-column mouth frames');
+  avatar.stop();avatar.destroy();
+});
+
+test('mouth overlay follows object-fit cover crop in portrait and landscape', () => {
+  const h = harness();
+  const tall = h.mouthGeometry(390,884), wide = h.mouthGeometry(1280,720);
+  assert.ok(tall && wide);
+  assert.ok(Math.abs(tall.centerY - (884/2 + 884*.11))<.01);
+  assert.ok(Math.abs(wide.centerY - (720/2 + 1280*.11))<.01);
+  assert.ok(wide.centerY>720*.62, 'wide fullscreen mouth must not mask the nose');
+  assert.ok(wide.radiusY < wide.radiusX/2, 'keep neural patch tightly on lips');
+  assert.equal(h.mouthGeometry(0,100), null);
 });

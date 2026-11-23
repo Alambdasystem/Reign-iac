@@ -5,6 +5,7 @@ import json
 import os
 import re
 import secrets
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -50,7 +51,8 @@ async def account_error_response(request, error):
 
 def account_authorize(request, write=False):
     try:
-        csrf(request) if write else user(request)
+        (session_csrf(request, principal(request)) if write else None)
+        owner_user(request)
     except HTTPException as error:
         error.headers = {**(error.headers or {}), "Cache-Control": "no-store"}
         raise
@@ -147,6 +149,17 @@ def principal(request: Request):
 
 def user(request: Request):
     session = principal(request)
+    if session.identity.role == "owner":
+        return "admin"
+    # Middleware checks the member's live Core grant for every protected request.
+    # This flag is never sourced from cookies, query parameters or a browser claim.
+    if session.identity.role == "employee" and getattr(request.state, "console_access", False):
+        return session.identity.user_id
+    raise HTTPException(403, "Console access required", headers={"Cache-Control": "no-store"})
+
+
+def owner_user(request: Request):
+    session = principal(request)
     if session.identity.role != "owner":
         raise HTTPException(403, "Owner access required", headers={"Cache-Control": "no-store"})
     return "admin"
@@ -173,6 +186,7 @@ def csrf(request: Request):
 @asynccontextmanager
 async def lifespan(app):
     app.state.auth = ax_auth.AuthState()
+    app.state.linkedin_previews = {}
     # Browser startup/Temporal dispatch can take longer than a normal API call.
     app.state.http = httpx.AsyncClient(timeout=120, trust_env=False)
     sweeper = asyncio.create_task(openstl.sweeper())
@@ -246,7 +260,7 @@ app.mount("/assets", AXStaticFiles(directory=ASSETS), name="assets")
 async def console(request: Request):
     try:
         role = principal(request).identity.role
-        if role in {"avatar", "employee"}:
+        if role == "avatar" or (role == "employee" and not getattr(request.state, "console_access", False)):
             return RedirectResponse("/team" if role == "employee" else "/avatar-lab", status_code=303,
                                     headers={"Cache-Control": "no-store"})
     except HTTPException as error:
@@ -368,7 +382,11 @@ async def health():
 
 @app.get("/api/me")
 async def me(request: Request):
-    return JSONResponse(ax_auth.profile(await team.current(request)), headers={"Cache-Control": "no-store"})
+    profile = ax_auth.profile(await team.current(request))
+    if profile["role"] == "employee" and getattr(request.state, "console_access", False):
+        profile["landing_path"] = "/"
+        profile["capabilities"].update(voice=True, ai_chat=True, genesis=True, managed_browser=False)
+    return JSONResponse(profile, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/status")
@@ -437,7 +455,11 @@ async def login(request: Request):
     finally:
         if reserved:
             state.pending_logins -= 1
-    response = JSONResponse({"status": "authenticated", **ax_auth.profile(session)},
+    profile = ax_auth.profile(session)
+    if identity.role == "employee" and await team.console_access(session):
+        profile["landing_path"] = "/"
+        profile["capabilities"].update(voice=True, ai_chat=True, genesis=True, managed_browser=False)
+    response = JSONResponse({"status": "authenticated", **profile},
                             headers={"Cache-Control": "no-store"})
     response.set_cookie("ax_session", signed, httponly=True, secure=True, samesite="strict", max_age=ax_auth.SESSION_SECONDS)
     response.set_cookie("ax_csrf", token, httponly=False, secure=True, samesite="strict", max_age=ax_auth.SESSION_SECONDS)
@@ -455,6 +477,7 @@ async def logout(request: Request):
     if session is not None:
         session_csrf(request, session)
         request.app.state.auth.revoke(session)
+        request.app.state.linkedin_previews.pop(session.nonce, None)
         if session.identity.role == "owner":
             openstl.pending.clear()
             for grant in list(openstl.grants.values()):
@@ -672,6 +695,79 @@ async def voice_offer(request: Request):
     sdp = await read_offer(request)
     return JSONResponse((await core("POST", "/api/voice/offer", {"sdp": sdp}, voice_errors=True)).json(),
                         headers={"Cache-Control": "no-store"})
+
+
+LINKEDIN_PREVIEW_SECONDS = 300
+LINKEDIN_BODY_LIMIT = 20000
+
+
+async def linkedin_body(request: Request):
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > LINKEDIN_BODY_LIMIT:
+            raise HTTPException(413, "LinkedIn request is too large")
+        data.extend(chunk)
+    try:
+        value = json.loads(data)
+    except (ValueError, UnicodeError):
+        raise HTTPException(422, "Invalid LinkedIn request") from None
+    if type(value) is not dict:
+        raise HTTPException(422, "Invalid LinkedIn request")
+    return value
+
+
+def linkedin_owner(request: Request):
+    session = principal(request)
+    if session.identity.role != "owner":
+        raise HTTPException(403, "Owner access required", headers={"Cache-Control": "no-store"})
+    session_csrf(request, session)
+    return session
+
+
+@app.post("/api/linkedin/preview")
+async def linkedin_preview(request: Request):
+    session = linkedin_owner(request)
+    body = await linkedin_body(request)
+    draft = body.get("text")
+    if set(body) != {"text"} or type(draft) is not str or not 1 <= len(draft.strip()) <= 3000:
+        raise HTTPException(422, "Post must have 1–3000 characters")
+    draft = draft.strip()
+    try:
+        draft.encode("utf-8")
+    except UnicodeError:
+        raise HTTPException(422, "Invalid post text") from None
+    candidate = (await core("POST", "/internal/linkedin/preview", {"text": draft})).json()
+    linkedin_owner(request)
+    previews = request.app.state.linkedin_previews
+    now = time.monotonic()
+    for nonce, (_, expiry, _) in list(previews.items()):
+        if expiry <= now or nonce not in request.app.state.auth.sessions:
+            del previews[nonce]
+    previews.pop(session.nonce, None)
+    if candidate.get("ready") is True:
+        receipt = secrets.token_urlsafe(32)
+        previews[session.nonce] = (receipt, now + LINKEDIN_PREVIEW_SECONDS,
+                                   {"text": candidate["text"], "author": candidate["author"]})
+        candidate["receipt"] = receipt
+    return JSONResponse(candidate, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/linkedin/publish")
+async def linkedin_publish(request: Request):
+    session = linkedin_owner(request)
+    body = await linkedin_body(request)
+    linkedin_owner(request)
+    value = body.get("receipt")
+    previews = request.app.state.linkedin_previews
+    pending = previews.get(session.nonce)
+    if (set(body) != {"receipt"} or type(value) is not str or not ax_auth.TOKEN.fullmatch(value)
+            or pending is None or pending[1] <= time.monotonic()
+            or not secrets.compare_digest(value, pending[0])):
+        raise HTTPException(409, "Preview expired or already used. Review the post again.")
+    # Consume before any await. Concurrent submissions cannot reuse this approval.
+    del previews[session.nonce]
+    result = (await core("POST", "/internal/linkedin/publish", pending[2])).json()
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/chat")
@@ -1005,15 +1101,37 @@ async def avatar_scope(request: Request, call_next):
         try:
             session = principal(request)
         except HTTPException:
-            # Individual authenticated routes reject invalid sessions. Independent
-            # machine credentials and public login/static routes keep their policy.
             session = None
         if session is not None and session.identity.role != "owner":
             path = request.url.path
+            # Public assets and ordinary page redirects must not hit Core.
+            sensitive = path in {"/", "/genesis", "/guardrails", "/nodes", "/connect/openstl", "/api/me"} or path == "/api" or path.startswith("/api/")
+            if not sensitive:
+                return await call_next(request)
             team_allowed = (session.identity.role == "employee"
                             and (path == "/api/team" or path.startswith("/api/team/")))
-            if ((path == "/api" or path.startswith("/api/")) and path != "/api/me" and not team_allowed
-                    or path in {"/genesis", "/guardrails", "/nodes", "/connect/openstl"}):
+            if session.identity.role == "employee" and not team_allowed:
+                try:
+                    await team.current(request, session=session)
+                    request.state.console_access = await team.console_access(session)
+                except HTTPException as error:
+                    return JSONResponse({"detail": "Console access could not be verified"},
+                                        status_code=error.status_code, headers={"Cache-Control": "no-store"})
+            permitted = (
+                path in {"/", "/genesis", "/guardrails", "/nodes", "/api/me", "/api/status",
+                         "/api/agent", "/api/voice", "/api/security/status", "/api/nodes"}
+                or path.startswith("/api/genesis/")
+                or path.startswith("/api/chat")
+                or path.startswith("/api/voice/")
+            )
+            # Work surfaces are separate from owner-only vault, browser session
+            # control, node administration and external computer credentials.
+            if path.startswith("/api/genesis/policies") and request.method not in {"GET", "HEAD"}:
+                permitted = False
+            if path in {"/", "/api/me"}:
+                return await call_next(request)
+            if not team_allowed and not (session.identity.role == "employee" and
+                                         getattr(request.state, "console_access", False) and permitted):
                 return JSONResponse({"detail": "Owner access required"}, status_code=403,
                                     headers={"Cache-Control": "no-store"})
     return await call_next(request)

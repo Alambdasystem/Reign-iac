@@ -10,10 +10,10 @@ let chatOwner=null, chatPending=null, chatGeneration=0, chatInfo=null;
 let accountsVisible=false, accountsLoading=false, accountsMutation=false, accountsGeneration=0, accountsLoadId=0;
 let accountsReadAbort=null, accountsFocus=null, accountRemovalId=null, savedAccounts=[];
 let accountsVault={ready:false,durable:false,code:'vault_not_ready'};
-let accountRole=null, loggingOut=false, logoutFailed=false;
+let accountRole=null, consoleGranted=false, browserAllowed=false, loggingOut=false, logoutFailed=false;
 const SIGNOUT_KEY='reign:ax:signed-out';
 function mountReignPortrait(){
-  if(!authenticated||accountRole!=='owner'||loggingOut||reignPortrait||!window.REIGNAvatar)return;
+  if(!authenticated||!(accountRole==='owner'||consoleGranted)||loggingOut||reignPortrait||!window.REIGNAvatar)return;
   const generation=++portraitGeneration;
   reignPortrait=window.REIGNAvatar.createReignAvatar({canvas:$('reignAvatar'),onStatus(value){
     if(generation!==portraitGeneration)return;
@@ -113,6 +113,91 @@ async function request(path,method='GET',body,options={}){
   }finally{clearTimeout(timeout);options.signal?.removeEventListener('abort',cancel)}
 }
 async function api(path,method='GET',body,options){return (await request(path,method,body,options)).json()}
+let linkedinReceipt = null;
+let linkedinRequest = null;
+
+function resetLinkedInPublishing(enabled) {
+  const publishing = $('linkedinPublishing');
+  if (!publishing) return;
+  linkedinRequest?.abort();
+  linkedinRequest = null;
+  linkedinReceipt = null;
+  publishing.hidden = !enabled;
+  publishing.open = false;
+  $('linkedinDraft').reset();
+  $('linkedinDraft').querySelector('button').disabled = false;
+  $('linkedinText').readOnly = false;
+  $('linkedinAuthor').textContent = '';
+  $('linkedinPostPreview').textContent = '';
+  $('linkedinStatus').textContent = '';
+  $('linkedinReview').hidden = true;
+}
+if ($('linkedinPublishing')) {
+  const form = $('linkedinDraft'), input = $('linkedinText');
+  const review = $('linkedinReview'), publish = $('linkedinPublish'), status = $('linkedinStatus');
+  const preview = form.querySelector('button');
+  input.addEventListener('input', () => {
+    linkedinReceipt = null;
+    review.hidden = true;
+    status.textContent = '';
+  });
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (linkedinRequest || !authenticated || accountRole !== 'owner') return;
+    const operation = new AbortController();
+    linkedinRequest = operation;
+    linkedinReceipt = null;
+    review.hidden = true;
+    preview.disabled = input.readOnly = true;
+    status.textContent = 'Preparing LinkedIn preview…';
+    try {
+      const result = await api('/api/linkedin/preview', 'POST', {text: input.value}, {signal: operation.signal});
+      if (operation.signal.aborted) return;
+      if (!result.receipt) {
+        status.textContent = result.error || 'LinkedIn publishing is unavailable.';
+        return;
+      }
+      linkedinReceipt = result.receipt;
+      $('linkedinAuthor').textContent = 'Publish as ' + result.author;
+      $('linkedinPostPreview').textContent = result.text;
+      review.hidden = false;
+      status.textContent = 'Review the text and author before publishing publicly.';
+    } catch (error) {
+      if (!operation.signal.aborted) status.textContent = error.message;
+    } finally {
+      if (linkedinRequest === operation) {
+        linkedinRequest = null;
+        preview.disabled = input.readOnly = false;
+      }
+    }
+  });
+  publish.addEventListener('click', async () => {
+    if (linkedinRequest || !linkedinReceipt || !authenticated || accountRole !== 'owner') return;
+    const receipt = linkedinReceipt, operation = new AbortController();
+    linkedinRequest = operation;
+    linkedinReceipt = null;
+    review.hidden = true;
+    preview.disabled = input.readOnly = true;
+    status.textContent = 'Publishing to LinkedIn…';
+    try {
+      const result = await api('/api/linkedin/publish', 'POST', {receipt}, {signal: operation.signal});
+      if (operation.signal.aborted) return;
+      if (result.status === 'published') {
+        input.value = '';
+        status.textContent = 'Published to LinkedIn · ' + result.post_id;
+      } else {
+        status.textContent = result.error || 'Publication could not be confirmed. Check LinkedIn before trying again.';
+      }
+    } catch {
+      if (!operation.signal.aborted) status.textContent = 'Publication could not be confirmed. Check LinkedIn before trying again.';
+    } finally {
+      if (linkedinRequest === operation) {
+        linkedinRequest = null;
+        preview.disabled = input.readOnly = false;
+      }
+    }
+  });
+}
 function accountErrorMessage(error,mutation=false){
   if(typeof error?.code==='string'&&Object.hasOwn(ACCOUNT_MESSAGES,error.code))return ACCOUNT_MESSAGES[error.code];
   if(error?.status===401)return 'Your sign-in expired. Sign in again.';
@@ -122,9 +207,9 @@ function accountErrorMessage(error,mutation=false){
 function showAccountError(message){$('accountsError').textContent=message||'';$('accountsError').hidden=!message}
 function accountStoreReady(){return accountsVault.ready===true&&accountsVault.durable===true}
 function refreshAccountsControls(){
-  const blocked=!authenticated||loggingOut||logoutFailed||restoringWorkspace||accountsLoading||accountsMutation;
+  const blocked=!authenticated||accountRole!=='owner'||loggingOut||logoutFailed||restoringWorkspace||accountsLoading||accountsMutation;
   const secureInput=accountStoreReady()&&!blocked&&(!voiceUi.active||voiceUi.muted===true);
-  $('accountsOpen').disabled=!authenticated||loggingOut||logoutFailed||restoringWorkspace;
+  $('accountsOpen').disabled=!authenticated||accountRole!=='owner'||loggingOut||logoutFailed||restoringWorkspace;
   for(const id of ['accountLabel','accountOrigin','accountUsername','accountPassword','accountSave'])$(id).disabled=!secureInput;
   $('accountsRefresh').disabled=blocked;
   const useBlocked=!secureInput||busy||!sid||!connected||!agentReady||chatOccupied()||!!accountRemovalId;
@@ -244,11 +329,11 @@ async function useSavedAccount(id){
   try{await startChatRun('',{owner:'account-'+id,accountId:id})}
   catch(error){if(error.name!=='AbortError')entry('ACCOUNTS',accountErrorMessage(error,true),true)}
 }
-function refreshControls(){const blocked=busy||restoringWorkspace||loggingOut||logoutFailed;const human=connected&&controller==='human'&&!blocked;const agent=connected&&controller==='agent'&&!blocked;$('open').disabled=!!sid||blocked||!authenticated;for(const id of ['take','takeExpanded'])$(id).disabled=!agent;for(const id of ['return','returnExpanded','tabKey','enterKey','scroll','scrollUp','send','text'])$(id).disabled=!human;$('close').disabled=!sid||blocked;$('expandRemote').disabled=!sid||!connected||restoringWorkspace||loggingOut||logoutFailed;$('reconnect').hidden=!sid||connected;$('reconnect').disabled=blocked;$('logout').disabled=loggingOut;$('logout').hidden=!authenticated&&!loggingOut&&!logoutFailed;$('sendCommand').disabled=blocked||chatOccupied();$('resumeAgent').hidden=chatState!=='paused';$('resumeAgent').disabled=controller!=='agent'||restoringWorkspace||loggingOut||logoutFailed;$('cancelAgent').hidden=!threadId&&!chatPending;$('cancelAgent').disabled=restoringWorkspace||loggingOut||logoutFailed;$('session').textContent=sid||'None';$('controller').textContent=controller||'—';$('epoch').textContent=epoch??'—';$('controlLabel').textContent=!sid?'No active session':!connected?'Connection interrupted':human||controller==='human'?'You have control':'REIGN has control';$('remoteStatus').textContent=$('controlLabel').textContent;$('connection').textContent=!authenticated?'SIGN IN':connected?'CONNECTED':'WORKSPACE';$('liveLabel').textContent=connected?'● LIVE BROWSER':sid?'CONNECTION INTERRUPTED':'COMPUTER · NOT CONNECTED';refreshVoiceControls();refreshAccountsControls()}
+function refreshControls(){const blocked=busy||restoringWorkspace||loggingOut||logoutFailed;const human=connected&&controller==='human'&&!blocked;const agent=connected&&controller==='agent'&&!blocked;$('open').disabled=!browserAllowed||!!sid||blocked||!authenticated;for(const id of ['take','takeExpanded'])$(id).disabled=!agent;for(const id of ['return','returnExpanded','tabKey','enterKey','scroll','scrollUp','send','text'])$(id).disabled=!human;$('close').disabled=!sid||blocked;$('expandRemote').disabled=!sid||!connected||restoringWorkspace||loggingOut||logoutFailed;$('reconnect').hidden=!sid||connected;$('reconnect').disabled=blocked;$('logout').disabled=loggingOut;$('logout').hidden=!authenticated&&!loggingOut&&!logoutFailed;$('sendCommand').disabled=blocked||chatOccupied();$('resumeAgent').hidden=chatState!=='paused';$('resumeAgent').disabled=controller!=='agent'||restoringWorkspace||loggingOut||logoutFailed;$('cancelAgent').hidden=!threadId&&!chatPending;$('cancelAgent').disabled=restoringWorkspace||loggingOut||logoutFailed;$('session').textContent=sid||'None';$('controller').textContent=controller||'—';$('epoch').textContent=epoch??'—';$('controlLabel').textContent=!sid?'No active session':!connected?'Connection interrupted':human||controller==='human'?'You have control':'REIGN has control';$('remoteStatus').textContent=$('controlLabel').textContent;$('connection').textContent=!authenticated?'SIGN IN':connected?'CONNECTED':'WORKSPACE';$('liveLabel').textContent=connected?'● LIVE BROWSER':sid?'CONNECTION INTERRUPTED':'COMPUTER · NOT CONNECTED';refreshVoiceControls();refreshAccountsControls()}
 function clearFrame(){for(const id of ['screen','fullScreen'])$(id).removeAttribute('src');$('screen').hidden=true;$('emptyScreen').hidden=false;if(frameURL)URL.revokeObjectURL(frameURL);frameURL=null;frameSequence=0;$('frameStatus').textContent='Waiting for a session'}
 function pausePolling(){if(poll)clearTimeout(poll);poll=null}
 function stop(){pausePolling();sid=null;epoch=null;controller=null;connected=false;remember(null);clearFrame();closeExpanded();refreshControls()}
-function lost(error){connected=false;controller=null;epoch=null;pausePolling();clearFrame();$('frameStatus').textContent='No live frame';refreshControls();say(error.message,'Disconnected');entry('CONNECTION',error.message,true);if(error.status===404){if(sid)expiredSessions.add(sid);stop();say('Session expired. Open Git High to start again.','Ready')}if(error.status===401){closeAccounts();releaseReignPortrait();voiceController?.stop({reason:'Your sign-in expired. Sign in before calling again.',failed:true});stop();authenticated=false;$('console').hidden=true;$('loginPanel').hidden=false;$('loginMessage').textContent=error.message;refreshControls()}}
+function lost(error){connected=false;controller=null;epoch=null;pausePolling();clearFrame();$('frameStatus').textContent='No live frame';refreshControls();say(error.message,'Disconnected');entry('CONNECTION',error.message,true);if(error.status===404){if(sid)expiredSessions.add(sid);stop();say('Session expired. Open Git High to start again.','Ready')}if(error.status===401){resetLinkedInPublishing(false);closeAccounts();releaseReignPortrait();voiceController?.stop({reason:'Your sign-in expired. Sign in before calling again.',failed:true});stop();authenticated=false;$('console').hidden=true;$('loginPanel').hidden=false;$('loginMessage').textContent=error.message;refreshControls()}}
 async function sync(){
   const activeId=sid;if(!activeId)return;
   // Recovery may replace a tab's stale session while its last frame is still
@@ -344,8 +429,12 @@ async function signedIn(profile){
   if(loggingOut)return;
   if(!profile?.authenticated||!['owner','avatar','employee'].includes(profile.role))throw Error('Your account could not be verified. Reload and sign in again.');
   accountRole=profile.role;logoutFailed=false;
-  // Restricted accounts must leave before any Core, browser, chat or voice read.
-  const destination=accountRole==='avatar'?'/avatar-lab':accountRole==='employee'?'/team':avatarReturnPath(window.location?.search||'');
+  consoleGranted=accountRole==='employee'&&profile.landing_path==='/'&&profile.capabilities?.ai_chat===true;
+  browserAllowed=accountRole==='owner';
+  resetLinkedInPublishing(browserAllowed);
+  // Unprivileged employees stay in Team. A server-verified grant permits the
+  // console but never changes their account into the owner identity.
+  const destination=accountRole==='avatar'?'/avatar-lab':accountRole==='employee'&&!consoleGranted?'/team':avatarReturnPath(window.location?.search||'');
   if(destination){
     authenticated=true;$('loginMessage').textContent=destination==='/team'?'Opening your team workspace…':'Opening Avatar Lab…';
     window.location.replace(destination);return;
@@ -354,7 +443,8 @@ async function signedIn(profile){
   mountReignPortrait();
   refreshControls();entry('WORKSPACE','Signed in. Reconnecting to your existing workspace…');
   try{
-    await recoverBrowserSession();if(!authenticated||loggingOut)return;
+    if(browserAllowed)await recoverBrowserSession();
+    if(!authenticated||loggingOut)return;
     await restoreChat();if(!authenticated||loggingOut)return;
     await loadVoiceCapability();if(!authenticated||loggingOut)return;
     try{await checkStatus()}
@@ -365,7 +455,8 @@ async function signedIn(profile){
 }
 function announceSignout(){try{localStorage.setItem(SIGNOUT_KEY,`${Date.now()}:${Math.random()}`)}catch{}}
 function leaveWorkspace(message){
-  authenticated=false;accountRole=null;logoutFailed=false;closeAccounts();
+  authenticated=false;accountRole=null;consoleGranted=false;browserAllowed=false;logoutFailed=false;closeAccounts();
+  resetLinkedInPublishing(false);
   releaseReignPortrait();
   // Local teardown must not depend on cancellation or other server cleanup.
   voiceController?.stop({reason:message}).catch(()=>{});
@@ -376,7 +467,7 @@ function leaveWorkspace(message){
 async function logout(){
   if(loggingOut)return;
   reignPortrait?.stop();
-  loggingOut=true;logoutFailed=false;closeAccounts();pausePolling();clearTimeout(chatPoll);chatPoll=null;
+  loggingOut=true;logoutFailed=false;resetLinkedInPublishing(false);closeAccounts();pausePolling();clearTimeout(chatPoll);chatPoll=null;
   $('loginForm').querySelector('button').disabled=true;
   $('logout').textContent='Logging out…';refreshControls();
   let cleanupTimeout,cleanupComplete=false;

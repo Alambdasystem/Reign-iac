@@ -75,10 +75,7 @@ async def dispatch(name, arguments, meta):
     try:
         if name == "linkedin_preview_post":
             from reign.linkedin_publishing import preview
-            result = preview(args["text"])
-        elif name == "linkedin_publish_post":
-            from reign.linkedin_publishing import publish
-            result = await publish(args["text"], args["approved"])
+            result = preview(args["text"], draft_only=True)
         elif name == "workspace_status":
             result = await backend.status()
         elif name == "browser_status":

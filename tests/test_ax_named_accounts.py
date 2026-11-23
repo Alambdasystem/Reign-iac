@@ -138,6 +138,42 @@ class NamedAccountTests(unittest.TestCase):
         for path in ("/genesis", "/guardrails", "/nodes", "/connect/openstl"):
             self.assertEqual(self.client.get(path, follow_redirects=False).status_code, 403)
 
+    def test_linkedin_publish_requires_the_same_owner_sessions_exact_preview(self):
+        preview_path = "/api/linkedin/preview"
+        publish_path = "/api/linkedin/publish"
+        author = "urn:li:person:test-author"
+        self.login("owner", OWNER_PASSWORD)
+        owner_cookies = self.cookies()
+
+        async def fake_core(method, path, data):
+            if path == "/internal/linkedin/preview":
+                return httpx.Response(200, json={"text": data["text"].strip(), "author": author,
+                                                 "status": "preview", "ready": True})
+            self.assertEqual(path, "/internal/linkedin/publish")
+            self.assertEqual(data, {"text": "Draft for review", "author": author})
+            return httpx.Response(200, json={"status": "published", "post_id": "urn:li:share:42"})
+
+        with patch.object(ax, "core", side_effect=fake_core) as relay:
+            draft = {"text": " Draft for review "}
+            self.assertEqual(self.client.post(preview_path, json=draft).status_code, 403)
+            response = self.client.post(preview_path, headers=self.csrf(), json=draft)
+            self.assertEqual(response.status_code, 200, response.text)
+            receipt = {"receipt": response.json()["receipt"]}
+            self.assertEqual(response.json()["text"], "Draft for review")
+            self.assertEqual(self.client.post(publish_path, headers=self.csrf(),
+                                              json={**receipt, "text": "Different"}).status_code, 409)
+
+            self.login()
+            self.assertEqual(self.client.post(publish_path, headers=self.csrf(), json=receipt).status_code, 403)
+            self.login("owner", OWNER_PASSWORD)
+            self.assertEqual(self.client.post(publish_path, headers=self.csrf(), json=receipt).status_code, 409)
+
+            self.restore(owner_cookies)
+            response = self.client.post(publish_path, headers=self.csrf(), json=receipt)
+            self.assertEqual(response.json()["post_id"], "urn:li:share:42")
+            self.assertEqual(self.client.post(publish_path, headers=self.csrf(), json=receipt).status_code, 409)
+            self.assertEqual(relay.await_count, 2)
+
     def test_owner_api_access_still_requires_csrf(self):
         self.login("owner", OWNER_PASSWORD)
         with patch.object(ax, "core", new_callable=AsyncMock) as core:

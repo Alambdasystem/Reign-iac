@@ -45,6 +45,25 @@ class TeamStoreTests(unittest.TestCase):
             self.assertNotIn(secret.encode(), raw)
         self.assertEqual((Path(self.temp.name) / DATABASE_NAME).stat().st_mode & 0o077, 0)
 
+    def test_console_grant_is_per_member_mac_bound_and_revocable(self):
+        self.assertFalse(self.store.console_access(self.member["id"], self.member["credential_revision"]))
+        self.assert_code("team_owner_required", self.store.set_console_access, self.member, self.member["id"], True)
+        self.assert_code("invalid_team_request", self.store.set_console_access, self.owner, self.member["id"], 1)
+        granted = self.store.set_console_access(self.owner, self.member["id"], True)["member"]
+        self.assertTrue(granted["console_access"])
+        fresh = TeamStore(self.temp.name, self.key); fresh.initialize()
+        self.assertTrue(fresh.console_access(self.member["id"], self.member["credential_revision"]))
+        self.assertEqual(fresh.authenticate("fixture-employee", self.password)["role"], "employee")
+        with sqlite3.connect(Path(self.temp.name) / DATABASE_NAME) as db:
+            db.execute("UPDATE memberships SET console_access=0 WHERE user_id=?", (self.member["id"],))
+        self.assert_code("team_unavailable", self.store.console_access, self.member["id"], self.member["credential_revision"])
+        with sqlite3.connect(Path(self.temp.name) / DATABASE_NAME) as db:
+            db.execute("UPDATE memberships SET console_access=1 WHERE user_id=?", (self.member["id"],))
+        self.assertFalse(self.store.set_console_access(self.owner, self.member["id"], False)["member"]["console_access"])
+        self.store.set_console_access(self.owner, self.member["id"], True)
+        self.store.disable_member(self.owner, self.member["id"])
+        self.assert_code("team_identity_required", self.store.console_access, self.member["id"], self.member["credential_revision"])
+
     def test_only_owner_creates_members_and_disabled_accounts_cannot_resolve_or_read(self):
         self.assert_code("invalid_team_request", self.store.create_member, self.owner, "control-character", "Cannot\tSign In")
         self.assert_code("team_owner_required", self.store.create_member, self.member, "other", "Other")

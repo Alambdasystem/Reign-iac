@@ -387,6 +387,28 @@ async def voice_offer(request: Request):
                         headers={"Cache-Control": "no-store"})
 
 
+class LinkedInDraft(BaseModel):
+    text: str = Field(min_length=1, max_length=3000)
+
+
+class LinkedInApprovedPost(LinkedInDraft):
+    author: str = Field(min_length=1, max_length=128)
+
+
+@app.post("/internal/linkedin/preview", dependencies=[Depends(authorize)])
+async def linkedin_preview(data: LinkedInDraft):
+    from reign.linkedin_publishing import preview
+
+    return preview(data.text)
+
+
+@app.post("/internal/linkedin/publish", dependencies=[Depends(authorize)])
+async def linkedin_publish(data: LinkedInApprovedPost):
+    from reign.linkedin_publishing import publish
+
+    return await publish(data.text, expected_author=data.author)
+
+
 @app.post("/api/chat", dependencies=[Depends(authorize)])
 async def chat(data: ChatRequest):
     return app.state.agent.submit(data.message, str(data.thread_id) if data.thread_id else None,
