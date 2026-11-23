@@ -194,6 +194,10 @@ async def simulated_team_speech_ui(browser, storage_state, origin, evidence):
         assert await page.evaluate('__speechOutput.contexts.length') == 0
         await (await callspace_control(page, '#messageInput')).fill('Synthetic audio synchronization check.')
         await callspace_click(page, '#askReign')
+        # Expand the face BEFORE the audio starts, so the screenshot captures
+        # actual lip motion rather than a slow 400ms layout transition.
+        await page.evaluate("document.getElementById('callspaceModeCall').click()")
+        await page.wait_for_function("""() => document.querySelector('.callspace-shell').dataset.mode === 'call'""")
         # A pending later segment must not delay already available first audio.
         # Release it only after real playback and mouth movement are observed.
         await page.wait_for_function("""() => __speechOutput.sources.length === 1 &&
@@ -213,12 +217,8 @@ async def simulated_team_speech_ui(browser, storage_state, origin, evidence):
               && mask.includes('radial-gradient')
               && mask.includes('px');
         }"""), 'Speech may not replace the entire clear face with a 256px frame'
-        await page.locator('#reignMedia').screenshot(
-            path=str(evidence / 'reign-mouth-overlay-speaking.png'))
-        # Inspect the large Call view as well as the tiny chat thumbnail.
-        # Changing view mode must not restart or interrupt WebRTC playback.
-        await page.evaluate("document.getElementById('callspaceModeCall').click()")
-        await page.wait_for_function("""() => document.querySelector('.callspace-shell').dataset.mode === 'call'""")
+
+        # The full-size face was already mounted before the spoken segment.
         await page.wait_for_function("""() => {
             const canvas = document.querySelector('#reignAvatar');
             const box = canvas.getBoundingClientRect();
@@ -227,6 +227,9 @@ async def simulated_team_speech_ui(browser, storage_state, origin, evidence):
             return canvas.dataset.maskReady === 'true'
                 && Math.abs(actual - expected) < 1;
         }"""), 'Mouth mask did not track object-fit cover cropping'
+        assert await page.locator('#reignAvatar').evaluate("""canvas => (
+            canvas.dataset.speaking === 'true' && Number(canvas.dataset.mouth) > .15
+        )"""), 'Full-screen visual must show an actively moving mouth'
         await page.locator('#callspaceFace').screenshot(
             path=str(evidence / 'reign-mouth-overlay-fullscreen.png'))
         await page.evaluate("document.getElementById('callspaceModeChat').click()")
