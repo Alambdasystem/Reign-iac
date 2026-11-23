@@ -492,7 +492,14 @@ export function createCallspaceWorkspace(deps = {}) {
     else if (event.key === 'Enter' || event.key === ' ') next = mode === 'chat' ? 'split' : mode === 'split' ? 'call' : 'chat';
     if (next) { event.preventDefault(); setMode(next); }
   });
-  listen(doc, 'keydown', event => { if (event.key === 'Escape' && activePanel) { event.preventDefault(); closePanel(); } });
+  listen(doc, 'keydown', event => {
+    if (event.key !== 'Escape' || !activePanel) return;
+    // A nested account picker is the topmost modal: let it handle Escape.
+    // Closing the workspace menu here would also hide its focus return target.
+    if (event.target instanceof Element && !panels[activePanel].dialog.contains(event.target)) return;
+    event.preventDefault();
+    closePanel();
+  });
   listen(win, 'reign:team-room', () => {
     roomRevision++;
     savedFeedScroll = null;
