@@ -183,6 +183,9 @@ async def simulated_team_speech_ui(browser, storage_state, origin, evidence):
     try:
         await page.goto(origin + '/team')
         await expect(page.locator('#reignAvatar')).to_have_attribute('data-ready', 'true')
+        # The high-resolution poster paints immediately; wait for the responsive
+        # cover-cropped neural mask geometry before testing its visible overlay.
+        await expect(page.locator('#reignAvatar')).to_have_attribute('data-mask-ready', 'true')
         # Idle means the original high-resolution photo, never the neural face.
         assert await page.locator('#reignAvatar').evaluate("""canvas => {
             const poster = canvas.parentElement.querySelector('.reign-poster');
