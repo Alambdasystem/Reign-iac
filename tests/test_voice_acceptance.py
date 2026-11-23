@@ -111,6 +111,17 @@ class ProbeHelperTests(unittest.TestCase):
         error = RuntimeError("private handshake message")
         self.assertIs(PinnedConnect.process_redirect(None, error), error)
 
+    def test_internal_exception_diagnostic_is_class_only(self):
+        output = io.StringIO()
+        with patch("reign.voice_acceptance.run_acceptance", side_effect=RuntimeError(
+                "private credential and transcript must not appear")), contextlib.redirect_stdout(output):
+            self.assertEqual(main(), 1)
+        receipt = json.loads(output.getvalue().split(" ", 1)[1])
+        self.assertEqual(receipt["error_code"], "probe_internal_error")
+        self.assertEqual(receipt["internal_error_type"], "RuntimeError")
+        self.assertNotIn("private credential", output.getvalue())
+        self.assertNotIn("transcript must not appear", output.getvalue())
+
     def test_cli_failure_emits_one_sanitized_receipt(self):
         output = io.StringIO()
         with patch.dict(os.environ, {"OPENAI_API_KEY": ""}), contextlib.redirect_stdout(output):
