@@ -174,6 +174,12 @@ class NamedAccountTests(unittest.TestCase):
             self.assertEqual(self.client.post(publish_path, headers=self.csrf(), json=receipt).status_code, 409)
             self.assertEqual(relay.await_count, 2)
 
+            with patch.object(ax, "LINKEDIN_PREVIEW_SECONDS", 0):
+                expired = self.client.post(preview_path, headers=self.csrf(), json=draft).json()
+            self.assertEqual(self.client.post(publish_path, headers=self.csrf(),
+                                              json={"receipt": expired["receipt"]}).status_code, 409)
+            self.assertEqual(relay.await_count, 3)
+
     def test_owner_api_access_still_requires_csrf(self):
         self.login("owner", OWNER_PASSWORD)
         with patch.object(ax, "core", new_callable=AsyncMock) as core:
