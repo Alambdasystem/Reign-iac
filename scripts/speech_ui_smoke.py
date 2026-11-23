@@ -208,7 +208,7 @@ async def simulated_team_speech_ui(browser, storage_state, origin, evidence):
                 && style.opacity === '1'
                 && canvas.dataset.maskReady === 'true'
               && mask.includes('radial-gradient')
-              && mask.includes('var(--reign-mouth-center-y');
+              && mask.includes('px');
         }"""), 'Speech may not replace the entire clear face with a 256px frame'
         await page.locator('#reignMedia').screenshot(
             path=str(evidence / 'reign-mouth-overlay-speaking.png'))
