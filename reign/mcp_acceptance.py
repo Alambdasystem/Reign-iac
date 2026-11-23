@@ -17,7 +17,7 @@ from reign.genesis_pilot import GenesisPilot
 from reign.sovereign_registry import RegistryDenied
 
 EXPECTED = frozenset({
-    "workspace_status", "browser_status", "open_browser", "navigate_browser",
+    "linkedin_preview_post", "workspace_status", "browser_status", "open_browser", "navigate_browser",
     "browser_observe", "browser_click", "browser_fill", "browser_press",
     "browser_scroll", "vault_status", "vault_list_accounts",
     "vault_request_account", "vault_prepare_signup", "vault_use_account"
@@ -30,7 +30,7 @@ async def main():
         cases.append({"case": name, "status": "PASS", "source": "real_local_stdio_mcp_and_core_disk"})
     async with WorkspaceMCP().connect() as mcp:
         assert frozenset(mcp.tool_names) == EXPECTED == frozenset(CATALOG)
-        record("M01 stdio handshake and complete 14-tool schema parity")
+        record(f"M01 stdio handshake and complete {len(EXPECTED)}-tool schema parity")
         readiness = await mcp.invoke("workspace_status")
         assert readiness.get("components") == {
             "core": "ready", "temporal": "ready", "computer": "ready"}, readiness
@@ -69,6 +69,9 @@ async def main():
         requested = await mcp.invoke("vault_request_account", {"origin": "", "label": ""})
         assert isinstance(requested, dict) and "error" not in requested, requested
         record("M10 secure account form request does not expose credentials")
+        draft = await mcp.invoke("linkedin_preview_post", {"text": "Disposable LinkedIn draft"})
+        assert draft == {"status": "draft", "text": "Disposable LinkedIn draft", "media_supported": False}, draft
+        record("M11 LinkedIn drafting returns text without a publishing tool")
     # Genesis is intentionally NOT connected to the MCP executor.
     # Its persisted records must remain draft/non-provisioned, with only a
     # narrow read-only capability allowlist; no new agent is created here.
