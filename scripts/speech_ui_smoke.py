@@ -210,6 +210,14 @@ async def simulated_team_speech_ui(browser, storage_state, origin, evidence):
         }"""), 'Speech may not replace the entire clear face with a 256px frame'
         await page.locator('#reignMedia').screenshot(
             path=str(evidence / 'reign-mouth-overlay-speaking.png'))
+        # Inspect the large Call view as well as the tiny chat thumbnail.
+        # Changing view mode must not restart or interrupt WebRTC playback.
+        await page.evaluate("document.getElementById('callspaceModeCall').click()")
+        await page.wait_for_function("""() => document.querySelector('.callspace-shell').dataset.mode === 'call'""")
+        await page.locator('#callspaceFace').screenshot(
+            path=str(evidence / 'reign-mouth-overlay-fullscreen.png'))
+        await page.evaluate("document.getElementById('callspaceModeChat').click()")
+
         await asyncio.wait_for(later_audio_requested.wait(), 2)
         assert await page.evaluate('!__speechOutput.sources[0].ended')
         later_audio_ready.set()
