@@ -49,7 +49,12 @@ class UseAccountArgs(ObservationArgs):
     account_id: str = Field(pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
+class LinkedInPreviewArgs(EmptyArgs):
+    text: str = Field(min_length=1, max_length=3000)
+
+
 CATALOG = {
+    "linkedin_preview_post": ("Preview a text-only LinkedIn post without publishing or exposing tokens.", LinkedInPreviewArgs),
     "workspace_status": ("Check actual Core, Temporal and browser worker readiness.", EmptyArgs),
     "browser_status": ("Read the current browser URL, title, control owner and epoch.", EmptyArgs),
     "open_browser": ("Open an allowed HTTPS site, or reuse the current browser without navigating.", URLArgs),
@@ -67,7 +72,7 @@ CATALOG = {
 }
 
 EFFECT_TOOLS = frozenset({"open_browser", "navigate_browser", "browser_click", "browser_fill", "browser_press", "browser_scroll", "vault_use_account"})
-READ_TOOLS = frozenset({"workspace_status", "browser_status", "browser_observe", "vault_status", "vault_list_accounts", "vault_request_account"})
+READ_TOOLS = frozenset({"linkedin_preview_post", "workspace_status", "browser_status", "browser_observe", "vault_status", "vault_list_accounts", "vault_request_account"})
 
 
 def tool_specs():

@@ -443,3 +443,34 @@ test('access loss closes moved controls and leaves the original account logout r
   assert.equal(h.node('callspaceSettingsPanel').open, false, 'access loss allowed reopening stale room controls');
   h.controller.destroy();
 });
+
+test('Everyone and spotlight reuse participant video and preserve room call media', () => {
+  const h=harness(), original=snapshotMedia(h), rail=h.node('callParticipants');
+  const tile=h.doc.createElement('figure'); tile.className='media-tile';
+  const caption=h.doc.createElement('figcaption'); caption.textContent='Mayur';
+  tile.append(h.node('remoteParticipant'),caption); rail.append(tile);
+  h.sync(rail);
+  h.node('callspaceModeGroup').click();
+  assert.equal(h.node('callspaceShell').dataset.groupView,'true');
+  assert.equal(h.controller.getMode(),'call');
+  tile.click();
+  assert.equal(h.node('callspaceShell').dataset.featured,'human');
+  assert.equal(tile.dataset.featured,'true');
+  tile.click();
+  assert.equal(h.node('callspaceShell').dataset.featured,'');
+  assertPreserved(h,original);
+  h.controller.setMode('chat');
+  assert.equal(h.node('callspaceShell').dataset.groupView,'false');
+  h.controller.destroy();
+});
+
+test('vision frames default off and settings expose explicit consent control', () => {
+  const h=harness();
+  const consent=h.node('callspaceVisionToggle');
+  assert.equal(consent.getAttribute('aria-pressed'),'false');
+  consent.click();
+  assert.equal(consent.getAttribute('aria-pressed'),'true');
+  consent.click();
+  assert.equal(consent.getAttribute('aria-pressed'),'false');
+  h.controller.destroy();
+});

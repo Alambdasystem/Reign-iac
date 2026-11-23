@@ -59,8 +59,8 @@ export function mouthOverlayGeometry(width, height) {
   const cover = Math.max(width, height);
   return {
     centerY: height / 2 + cover * .11,  // mouth near source-image y=.61
-    radiusX: cover * .075,             // lips only, not cheek/eye skin
-    radiusY: cover * .028
+    radiusX: cover * .115,            // include the full lips and jaw opening
+    radiusY: cover * .052
   };
 }
 
@@ -90,6 +90,12 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
     canvas.style.setProperty('--reign-mouth-center-y', layout.centerY.toFixed(2) + 'px');
     canvas.style.setProperty('--reign-mouth-rx', layout.radiusX.toFixed(2) + 'px');
     canvas.style.setProperty('--reign-mouth-ry', layout.radiusY.toFixed(2) + 'px');
+    // Blink crop is source y=66..120 in the 256px atlas. Map its center
+    // through object-fit:cover so both eyes remain visible in call mode.
+    const cover = Math.max(width, height);
+    canvas.style.setProperty('--reign-eyes-center-y', (height / 2 + cover * (93 / 256 - .5)).toFixed(2) + 'px');
+    canvas.style.setProperty('--reign-eyes-rx', (cover * .245).toFixed(2) + 'px');
+    canvas.style.setProperty('--reign-eyes-ry', (cover * .095).toFixed(2) + 'px');
   }
   let listeningLevel = 0, listeningUpdatedAt = -Infinity, headNod = 0, headTilt = 0;
   canvas.width = canvas.height = SIZE;
@@ -108,7 +114,7 @@ export function createReignAvatar({canvas, onStatus = () => {}, getSpeechLevel =
     canvas.dataset.audioTime = (Number.isFinite(playbackClock) ? playbackClock / 1000 : 0).toFixed(3);
     canvas.dataset.segment = String(segment);
     canvas.dataset.mode = 'precomputed-neural';
-    canvas.dataset.composite = 'sharp-original-mouth-only';
+    canvas.dataset.composite = 'sharp-original-eyes-and-mouth';
     canvas.dataset.maskReady = String(maskReady);
     canvas.dataset.frames = String(paints);
   }

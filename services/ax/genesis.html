@@ -37,6 +37,7 @@ code{font-size:.9rem;color:#edc8df}
 <form id="agentForm" autocomplete="off">
 <label for="agentId">Agent ID<input id="agentId" required maxlength="63" pattern="[a-z][a-z0-9-]{1,62}" placeholder="research-agent"></label>
 <label for="agentName">Display name<input id="agentName" required maxlength="120" placeholder="Research Assistant"></label>
+<label for="agentType">Agent type<select id="agentType"><option value="knowledge">Knowledge Agent (read-only draft)</option><option value="action">Action Agent (draft, execution unavailable)</option></select></label>
 <fieldset><legend>Permitted read-only capabilities</legend>
 <label class="check"><input type="checkbox" name="cap" value="workspace_status" checked>Workspace status</label>
 <label class="check"><input type="checkbox" name="cap" value="browser_status">Browser session status</label>
@@ -57,6 +58,7 @@ code{font-size:.9rem;color:#edc8df}
 <h2 id="detailHeading">Edit draft</h2>
 <p id="detailMeta" class="note"></p>
 <label for="editName">Display name<input id="editName" maxlength="120" required></label>
+<label for="editType">Agent type<select id="editType"><option value="knowledge">Knowledge Agent</option><option value="action">Action Agent (not executable)</option></select></label>
 <fieldset><legend>Draft read-only capabilities</legend>
 <label class="check"><input type="checkbox" class="editCap" value="workspace_status">Workspace status</label>
 <label class="check"><input type="checkbox" class="editCap" value="browser_status">Browser status</label>
@@ -153,7 +155,7 @@ async function call(path,method='GET',data){
   if(!r.ok)throw Error(body.detail||'Request unavailable');
   return body;
 }
-function readForm(){return {agent_id:el('agentId').value.trim(),name:el('agentName').value.trim(),capabilities:[...document.querySelectorAll('input[name="cap"]:checked')].map(c=>c.value)}}
+function readForm(){return {agent_id:el('agentId').value.trim(),name:el('agentName').value.trim(),agent_type:el('agentType').value,capabilities:[...document.querySelectorAll('input[name="cap"]:checked')].map(c=>c.value)}}
 function showStatus(msg){el('formStatus').textContent=msg}
 async function refresh(){
  try{
@@ -162,7 +164,7 @@ async function refresh(){
  const node=el('agents');node.replaceChildren();
  if(!result.agents.length){node.textContent='No drafts registered yet.';showStatus('Draft registration ready.');return}
  const list=document.createElement('ul');
- for(const agent of result.agents){const li=document.createElement('li');const item=document.createElement('div');item.className='draft-row';const label=document.createElement('strong');label.textContent=agent.name+' ('+agent.agent_id+')';const open=document.createElement('button');open.type='button';open.className='secondary';open.textContent='Manage';open.onclick=()=>openDraft(agent.agent_id);item.append(label,open);const tag=document.createElement('span');tag.className='badge';tag.textContent='DRAFT';li.append(item,tag);const details=document.createElement('p');details.textContent=(agent.capabilities.join(', ')||'No capabilities')+' · revision '+(agent.revision||1);li.append(details);list.append(li)}
+ for(const agent of result.agents){const li=document.createElement('li');const item=document.createElement('div');item.className='draft-row';const label=document.createElement('strong');label.textContent=agent.name+' ('+agent.agent_id+')';const open=document.createElement('button');open.type='button';open.className='secondary';open.textContent='Manage';open.onclick=()=>openDraft(agent.agent_id);item.append(label,open);const tag=document.createElement('span');tag.className='badge';tag.textContent='DRAFT';li.append(item,tag);const details=document.createElement('p');details.textContent=(agent.agent_type||'knowledge')+' · '+(agent.capabilities.join(', ')||'No capabilities')+' · revision '+(agent.revision||1);li.append(details);list.append(li)}
  node.append(list);showStatus('Draft registration ready.');
  }catch(error){el('guardrails').textContent='Unavailable';el('agents').textContent='Registration service unavailable';showStatus(error.message)}
 }
@@ -177,6 +179,7 @@ async function openDraft(id){
  el('detailHeading').textContent='Manage '+draft.agent_id;
  el('detailMeta').textContent='Status: DRAFT · Revision '+draft.revision+' · Provisioned: No';
  el('editName').value=draft.name;
+ el('editType').value=draft.agent_type||'knowledge';
  document.querySelectorAll('.editCap').forEach(check=>check.checked=draft.capabilities.includes(check.value));
  el('cloneId').value='';
  el('confirmDelete').checked=false;
@@ -208,7 +211,7 @@ el('saveDraft').onclick=async()=>{
  if(!selectedDraft)return;
  const name=el('editName').value.trim();
  if(!name){el('detailStatus').textContent='Display name required';return}
- await performDraftAction('','PUT',{name,capabilities:[...document.querySelectorAll('.editCap:checked')].map(x=>x.value),expected_revision:selectedDraft.revision},'Draft saved');
+ await performDraftAction('','PUT',{name,agent_type:el('editType').value,capabilities:[...document.querySelectorAll('.editCap:checked')].map(x=>x.value),expected_revision:selectedDraft.revision},'Draft saved');
 };
 el('cloneDraft').onclick=async()=>{
  if(!selectedDraft)return;

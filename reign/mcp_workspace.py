@@ -73,7 +73,10 @@ async def dispatch(name, arguments, meta):
     except (ValueError, TypeError, HTTPException):
         return error_result("Invalid tool arguments or workspace context", "invalid_tool_context", 403)
     try:
-        if name == "workspace_status":
+        if name == "linkedin_preview_post":
+            from reign.linkedin_publishing import preview
+            result = preview(args["text"], draft_only=True)
+        elif name == "workspace_status":
             result = await backend.status()
         elif name == "browser_status":
             result = await backend.session(sid) if sid else {"status": "no_session"}

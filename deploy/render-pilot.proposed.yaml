@@ -116,6 +116,9 @@ services:
     value: tag:reign-render-core
   - key: REIGN_TAILSCALE_AUTHKEY
     sync: false
+  # Enable the diagnostic only after verifying the backend and tailnet grant.
+  - key: REIGN_OLLAMA_PROBE_ENABLED
+    value: '0'
   # Existing private Core mount stores encrypted transcript records. The
   # Render generates/preserves a random 256-bit key; no secret enters Git.
   - key: REIGN_HISTORY_MODE
