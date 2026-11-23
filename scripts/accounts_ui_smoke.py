@@ -225,7 +225,8 @@ async def accounts_ui_smoke(browser, storage_state, *, origin="https://ax:10000"
     try:
         await page.goto(origin)
         await expect(page.locator("#console")).to_be_visible()
-        assert await page.locator(".tabs button").all_text_contents() == ["Chat", "Work"], "Only Chat and Work belong in the top navigation"
+        assert await page.locator(".tabs button[data-tab]").all_text_contents() == ["Chat", "Work"], "Only Chat and Work are workspace tabs"
+        assert await page.locator(".tabs button[data-provider-picker]").all_text_contents() == ["Account connections"], "Connections picker must be a separate navigation action"
         assert await page.locator('[data-tab="Agents"],[data-tab="Tools"]').count() == 0, "Removed navigation is still present"
         assert not any("MCP" in text or "Agents" in text for text in await page.locator(".nav button").all_text_contents()), "Removed bottom navigation is still present"
         if phase == "restart":

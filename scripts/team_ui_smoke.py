@@ -57,6 +57,35 @@ async def login(page, username, password):
     await expect(page.locator("#accountName")).not_to_have_text("Checking sign-in…")
 
 
+async def provider_picker_check(page):
+    # The responsive callspace moves the header into its workspace menu.
+    # Exercise the visible keyboard navigation instead of focusing a hidden button.
+    menu = page.locator("#callspaceMenu")
+    await menu.focus()
+    await menu.press("Enter")
+    await expect(page.locator("#callspaceMenuPanel")).to_be_visible()
+    opener = page.locator("[data-provider-picker]")
+    await expect(opener).to_be_visible()
+    await opener.focus()
+    await opener.press("Enter")
+    dialog = page.get_by_role("dialog", name="Account connections")
+    await expect(dialog).to_be_visible()
+    await expect(dialog.get_by_role("button", name="Close")).to_be_focused()
+    for provider in ("Gmail", "Outlook"):
+        card = dialog.get_by_role("listitem").filter(has_text=provider)
+        await expect(card.get_by_role("heading", name=provider)).to_be_visible()
+        await expect(card.get_by_text("Unavailable", exact=True)).to_be_visible()
+    bounds = await dialog.bounding_box()
+    assert bounds and 0 <= bounds["x"] < bounds["x"] + bounds["width"] <= page.viewport_size["width"]
+    assert 0 <= bounds["y"] < bounds["y"] + bounds["height"] <= page.viewport_size["height"]
+    await page.keyboard.press("Escape")
+    await expect(dialog).to_be_hidden()
+    await expect(opener).to_be_focused()
+    await expect(page.locator("#callspaceMenuPanel")).to_be_visible()
+    await page.locator("#callspaceCloseMenu").click()
+    await expect(page.locator("#callspaceMenuPanel")).to_be_hidden()
+
+
 async def shared_browser_check(page, room_id):
     """Run after the baseline restart phase has released its private slot."""
     path = f"/api/team/rooms/{room_id}/browser"
@@ -326,6 +355,12 @@ async def main():
         try:
             await login(page, "owner", os.environ["AX_ADMIN_PASSWORD"])
             passed("T01 owner enters protected shared workspace through the fixed return path")
+            await provider_picker_check(page)
+            desktop = page.viewport_size
+            await page.set_viewport_size({"width": 320, "height": 720})
+            await provider_picker_check(page)
+            await page.set_viewport_size(desktop)
+            passed("T17 mobile and desktop account connections support keyboard access and independent provider availability")
             profile = await api(page, "/api/team")
             assert profile["status"] == 200 and profile["data"]["workspace"]["durable"] is True
             assert profile["data"]["workspace"]["name"] == "Workspace"

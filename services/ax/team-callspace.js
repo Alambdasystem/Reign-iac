@@ -183,7 +183,10 @@ export function createCallspaceWorkspace(deps = {}) {
     listen(close, 'click', () => closePanel());
     listen(dialog, 'cancel', event => { event.preventDefault(); closePanel(); });
     listen(dialog, 'click', event => { if (event.target === dialog) closePanel(); });
-    listen(dialog, 'close', () => { if (activePanel === name) finishPanelClose(); });
+    listen(dialog, 'close', () => {
+      // A queued close event can arrive after the same panel has reopened.
+      if (!dialog.open && activePanel === name) finishPanelClose();
+    });
   }
 
   const menuNav = element('nav', 'callspace-menu-nav');
@@ -492,7 +495,14 @@ export function createCallspaceWorkspace(deps = {}) {
     else if (event.key === 'Enter' || event.key === ' ') next = mode === 'chat' ? 'split' : mode === 'split' ? 'call' : 'chat';
     if (next) { event.preventDefault(); setMode(next); }
   });
-  listen(doc, 'keydown', event => { if (event.key === 'Escape' && activePanel) { event.preventDefault(); closePanel(); } });
+  listen(doc, 'keydown', event => {
+    if (event.key !== 'Escape' || !activePanel) return;
+    // A nested account picker is the topmost modal: let it handle Escape.
+    // Closing the workspace menu here would also hide its focus return target.
+    if (doc.querySelector('dialog.provider-picker[open]')) return;
+    event.preventDefault();
+    closePanel();
+  });
   listen(win, 'reign:team-room', () => {
     roomRevision++;
     savedFeedScroll = null;

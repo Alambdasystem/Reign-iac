@@ -1,3 +1,4 @@
+import './provider-picker.js';
 import { createTeamCall } from '/assets/team-call.js';
 import { createTeamAvatar } from '/assets/team-avatar.js';
 import { createTeamRecorder } from '/assets/team-recorder.js';
