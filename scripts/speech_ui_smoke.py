@@ -18,6 +18,76 @@ from playwright.async_api import expect
 from team_callspace_smoke import callspace_click, callspace_control
 
 
+async def localized_head_motion(page):
+    result = await page.evaluate("""async () => {
+      const fixture = document.createElement('div');
+      fixture.className = 'reign-portrait';
+      Object.assign(fixture.style, {position: 'fixed', left: '-2000px',
+        top: '0', width: '390px', height: '780px', maxWidth: 'none'});
+      const source = document.createElement('canvas');
+      fixture.append(source);
+      document.body.append(fixture);
+      const proto = WebGLRenderingContext.prototype;
+      const draw = proto.drawArrays;
+      let nextFrame, playback = {active: false};
+      const renderer = window.REIGNAvatar.createReignAvatar({canvas: source, getPlaybackState: () => playback});
+      proto.drawArrays = function(...args) {
+        draw.apply(this, args);
+        if (this.canvas.parentElement !== fixture || !nextFrame) return;
+        const resolve = nextFrame;
+        nextFrame = null;
+        const size = this.drawingBufferWidth;
+        const rgba = new Uint8Array(size * this.drawingBufferHeight * 4);
+        this.readPixels(0, 0, size, this.drawingBufferHeight, this.RGBA, this.UNSIGNED_BYTE, rgba);
+        resolve({size, rgba});
+      };
+      async function frame(value, width, height) {
+        fixture.style.width = width + 'px';
+        fixture.style.height = height + 'px';
+        playback = value;
+        return new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(Error('Head compositor frame not painted')), 5000);
+          nextFrame = sample => { clearTimeout(timeout); resolve(sample); };
+        });
+      }
+      function changed(a, b, left, top, right, bottom) {
+        if (a.size !== b.size) throw Error('Portrait backing store changed during a pose');
+        const size = a.size;
+        let count = 0;
+        for (let y = Math.round(top * size); y < Math.round(bottom * size); y += 3) {
+          for (let x = Math.round(left * size); x < Math.round(right * size); x += 3) {
+            const i = ((size - 1 - y) * size + x) * 4;
+            if (Math.abs(a.rgba[i] - b.rgba[i]) > 3 ||
+                Math.abs(a.rgba[i + 1] - b.rgba[i + 1]) > 3 ||
+                Math.abs(a.rgba[i + 2] - b.rgba[i + 2]) > 3) count++;
+          }
+        }
+        return count;
+      }
+      try {
+        await renderer.ready;
+        const comparisons = [];
+        for (const [width, height] of [[390, 780], [800, 490]]) {
+          const start = await frame({active: true, clockMs: 0, level: .65}, width, height);
+          const end = await frame({active: true, clockMs: 1100, level: .65}, width, height);
+          comparisons.push({
+            forehead: changed(start, end, .4, .23, .6, .31),
+            background: changed(start, end, .01, .15, .075, .68),
+            shoulders: changed(start, end, .06, .89, .94, .97),
+          });
+        }
+        return comparisons;
+      } finally {
+        proto.drawArrays = draw;
+        renderer.destroy();
+        fixture.remove();
+      }
+    }""")
+    assert all(pixels["forehead"] > 24 and pixels["background"] == pixels["shoulders"] == 0
+               for pixels in result), result
+    return result
+
+
 AUDIO_OBSERVER = r"""(() => {
   const NativeAudio = window.AudioContext;
   const probe = window.__speechOutput = {contexts: [], sources: [], frames: [],
@@ -197,6 +267,7 @@ async def simulated_team_speech_ui(browser, storage_state, origin, evidence):
                 && canvas.dataset.composite === 'sharp-original-eyes-and-mouth'
                 && (mask.match(/radial-gradient/g) || []).length === 1;
         }""", timeout=10000)
+        result['localized_head_motion'] = await localized_head_motion(page)
         await expect(page.locator('#speakReply')).to_be_checked()
         assert await page.evaluate('__speechOutput.contexts.length') == 0
         await (await callspace_control(page, '#messageInput')).fill('Synthetic audio synchronization check.')
