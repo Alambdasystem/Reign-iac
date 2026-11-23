@@ -95,6 +95,32 @@ class TeamAXTests(unittest.TestCase):
         self.assertEqual(self.client.get("/team").status_code, 403)
         self.assertEqual(self.client.get("/api/team").status_code, 403)
 
+    def test_owner_can_grant_named_console_workspaces_without_vault_or_admin_access(self):
+        self.login("owner", OWNER_PASSWORD)
+        target = self.member["id"]
+        result = self.client.patch(f"/api/team/members/{target}/console-access", headers=self.csrf(), json={"enabled": True})
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertTrue(result.json()["member"]["console_access"])
+        self.login()
+        profile = self.client.get("/api/me").json()
+        self.assertEqual(profile["landing_path"], "/")
+        self.assertTrue(profile["capabilities"]["ai_chat"])
+        self.assertFalse(profile["capabilities"]["managed_browser"])
+        self.assertEqual(self.client.get("/", follow_redirects=False).status_code, 200)
+        self.assertEqual(self.client.get("/genesis").status_code, 200)
+        self.assertEqual(self.client.get("/guardrails").status_code, 200)
+        self.assertEqual(self.client.get("/nodes").status_code, 200)
+        for forbidden in ("/api/accounts", "/api/sessions/active", "/api/nodes/enroll", "/api/unknown-owner-route"):
+            self.assertEqual(self.client.get(forbidden, follow_redirects=False).status_code, 403)
+        self.assertEqual(self.client.patch(f"/api/team/members/{target}/console-access",
+                         headers=self.csrf(), json={"enabled": False}).status_code, 403)
+        self.login("owner", OWNER_PASSWORD)
+        result = self.client.patch(f"/api/team/members/{target}/console-access", headers=self.csrf(), json={"enabled": False})
+        self.assertEqual(result.status_code, 200)
+        self.login()
+        self.assertEqual(self.client.get("/genesis", follow_redirects=False).status_code, 403)
+        self.assertEqual(self.client.get("/", follow_redirects=False).headers["location"], "/team")
+
     def test_employee_denied_every_legacy_api_before_any_core_forwarding(self):
         self.login(); before = len(self.forwarded)
         with patch.object(ax, "core", new_callable=AsyncMock) as legacy, patch.object(ax.openstl, "core", new_callable=AsyncMock) as external:
@@ -109,7 +135,9 @@ class TeamAXTests(unittest.TestCase):
             for path in ("/api", "/api/unknown-future-owner-route", "/api/me/", "/genesis", "/guardrails", "/nodes", "/connect/openstl"):
                 self.assertEqual(self.client.get(path, follow_redirects=False).status_code, 403)
             legacy.assert_not_awaited(); external.assert_not_awaited()
-        self.assertEqual(len(self.forwarded), before)
+        self.assertTrue(all(url.endswith(("/internal/team/identity", "/internal/team/console-access"))
+                            for _, url, _ in self.forwarded[before:]),
+                        "ungranted employees must never forward legacy requests to Core")
 
     def test_team_csrf_and_server_signed_actor_ignore_browser_credentials(self):
         self.login(); before = len(self.forwarded)

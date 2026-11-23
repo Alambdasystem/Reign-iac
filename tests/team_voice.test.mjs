@@ -176,3 +176,24 @@ test('matching run ID without this voice session provenance cannot authorize nar
   assert.equal(finished, false);
   h.voice.acceptEvents(room, [event]); await reply; assert.equal(finished, true); await h.voice.stop();
 });
+
+test('room voice capability can be warmed without microphone capture or a provider offer', async () => {
+  const h = harness();
+  assert.equal(await h.voice.prepare({roomId: room, connectionId: connection}), true);
+  assert.equal(h.starts, 0);
+  assert.equal(h.requests.filter(request => request.path.endsWith('/voice/offer')).length, 0);
+  assert.equal(h.requests.filter(request => request.path.endsWith('/voice')).length, 1);
+  await h.voice.start({roomId: room, connectionId: connection});
+  assert.equal(h.starts, 1);
+  assert.equal(h.requests.filter(request => request.path.endsWith('/voice')).length, 1, 'reuse the primed capability');
+  assert.equal(h.requests.filter(request => request.path.endsWith('/voice/offer')).length, 1);
+  await h.voice.dispose();
+});
+
+test('preparing voice never auto-starts an audible session or microphone', async () => {
+  const h=harness();
+  await h.voice.prepare({roomId:room,connectionId:connection});
+  assert.equal(h.states.some(s=>s.active),false);
+  assert.equal(h.starts,0);
+  await h.voice.dispose();
+});

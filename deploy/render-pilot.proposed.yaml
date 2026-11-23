@@ -11,7 +11,7 @@ services:
   region: oregon
   numInstances: 1
   image:
-    url: ghcr.io/alambdasystem/reign-temporal@sha256:afbae0626e74adbb7f1b4fab54b11342bc11af12df184b0847a5d6c55089aeb4
+    url: ghcr.io/alambdasystem/reign-temporal@sha256:47ae69225d2f058de9b00a39d6d39698404f97d7f33b5d3c06eb8b51a529d2ef
   envVars:
   - key: PORT
     value: '7233'
@@ -26,7 +26,7 @@ services:
   region: oregon
   numInstances: 1
   image:
-    url: ghcr.io/alambdasystem/reign-computer@sha256:97ce9f567da44aa65069e3a442754b4fa93a61bc3a5d19051911d25c0eb5b5c1
+    url: ghcr.io/alambdasystem/reign-computer@sha256:ab7d77a635637eee241da233bc8a16163ccc8346abd050b6b9fecbb6a939bf47
   envVars:
   - key: PORT
     value: '10000'
@@ -64,7 +64,7 @@ services:
   region: oregon
   numInstances: 1
   image:
-    url: ghcr.io/alambdasystem/reign-core@sha256:e05987e4e92adc68548ecc3c0f641feb58e8a642ac428fb2ac7cb850c04ad31a
+    url: ghcr.io/alambdasystem/reign-core@sha256:ee05d8117cc6728856203aa799498e8d974391d5ad60c7e6091f02659e664e71
   envVars:
   - key: PORT
     value: '10000'
@@ -116,9 +116,9 @@ services:
     value: tag:reign-render-core
   - key: REIGN_TAILSCALE_AUTHKEY
     sync: false
-  # One-shot bounded outbound SSH/Ollama probe. No active model or voice change.
+  # Enable the diagnostic only after verifying the backend and tailnet grant.
   - key: REIGN_OLLAMA_PROBE_ENABLED
-    value: '1'
+    value: '0'
   # Existing private Core mount stores encrypted transcript records. The
   # Render generates/preserves a random 256-bit key; no secret enters Git.
   - key: REIGN_HISTORY_MODE
@@ -154,7 +154,7 @@ services:
   region: oregon
   numInstances: 1
   image:
-    url: ghcr.io/alambdasystem/reign-ax@sha256:1cccbcc4036f2a78bd122e7452799f87317c2c0513623435d31ffdea3070b068
+    url: ghcr.io/alambdasystem/reign-ax@sha256:1f8d4007f73a0b6bc990b20ed647015cda04ed90115bc56a48b54a532916d134
   envVars:
   - key: PORT
     value: '10000'

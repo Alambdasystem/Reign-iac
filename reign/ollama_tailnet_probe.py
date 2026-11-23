@@ -61,7 +61,7 @@ async def probe():
         port = _free_port()
         proxy = f"/usr/local/bin/tailscale --socket={SOCKET} nc %h %p"
         args = [
-            "/usr/bin/ssh", "-N", "-T",
+            "/usr/bin/ssh", "-F", "/dev/null", "-N", "-T",
             "-i", str(keyfile), "-p", "22",
             "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
             "-o", "StrictHostKeyChecking=yes", "-o", f"UserKnownHostsFile={knownhosts}",
@@ -110,12 +110,11 @@ async def probe():
                 try:
                     payload = response.json()
                     answer = payload["response"]
-                    if not isinstance(answer, str) or not answer.strip():
+                    if not isinstance(answer, str) or answer.strip() != "READY":
                         raise ValueError()
                 except (ValueError, KeyError, TypeError):
                     return {**result, "error_code": "ollama_invalid_answer"}
                 result["inference"] = "passed"
-                result["answer"] = answer[:120]
                 result["elapsed_ms"] = round((time.monotonic() - sent) * 1000)
                 for metric in ("eval_count", "prompt_eval_count", "total_duration", "eval_duration"):
                     if isinstance(payload.get(metric), int) and not isinstance(payload[metric], bool):
