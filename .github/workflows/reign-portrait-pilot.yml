@@ -1,6 +1,8 @@
 name: REIGN portrait clarity pilot - manual, never deploy
 on:
   workflow_dispatch:
+  push:
+    branches: [feat/reign-pose-clarity-pilot]
 permissions:
   contents: read
 jobs:
