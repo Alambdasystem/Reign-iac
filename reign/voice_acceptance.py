@@ -273,33 +273,44 @@ class StatusOnlyTools:
 
 
 async def run_graph(message, receipt):
-    from reign.core import app, lifespan
-    async with lifespan(app):
-        runtime = app.state.agent
-        adapter = StatusOnlyTools(runtime.adapter)
-        runtime.adapter = adapter
-        initial = runtime.submit(message, input_source="voice")
-        thread = runtime.get(initial["thread_id"])
-        await asyncio.wait_for(asyncio.shield(thread.task), 120)
-        result = thread.snapshot()
-        tools = [event.get("tool") for event in result["events"] if event.get("kind") == "tool_started"]
-        known_tools = {"workspace_status", "browser_status", "open_browser", "navigate_browser"}
-        receipt["graph"] = {"model": model_name("OPENAI_MODEL", "gpt-6-astra"),
-                            "input_source": "voice",
-                            "tools": [tool for tool in tools if tool in known_tools],
-                            "usage": {key: max(0, int(result["usage"].get(key, 0)))
-                                      for key in ("input_tokens", "output_tokens")}}
-        success = any(event.get("kind") == "tool_completed" and event.get("tool") == "workspace_status"
-                      and event.get("ok") is True for event in result["events"])
-        if (result["status"] != "completed" or not success or adapter.denied
-                or any(tool != "workspace_status" for tool in tools)):
-            raise ProbeFailure("graph_status_tool_failed")
-        answer = result.get("answer")
-        if not isinstance(answer, str) or not 1 <= len(answer.strip()) <= 16000:
-            raise ProbeFailure("graph_answer_missing_or_oversized")
-        return {"status": "completed", "answer": answer, "orchestration": "langgraph",
-                "tools": ["workspace_status"]}
+    # Exercise the real MCP-backed LangGraph without starting the entire Core
+    # application (team, disk, voice and browser lifecycle are unrelated to
+    # this read-only voice probe and can fail during shutdown).
+    from reign.agent import AgentRuntime
+    from reign.mcp_client import MCPTools, WorkspaceMCP
+    async with WorkspaceMCP().connect() as connection:
+        adapter = StatusOnlyTools(MCPTools(connection))
+        runtime = AgentRuntime(adapter=adapter)
+        try:
+            initial = runtime.submit(message, input_source="voice")
+            thread = runtime.get(initial["thread_id"])
+            await asyncio.wait_for(asyncio.shield(thread.task), 120)
+            result = thread.snapshot()
+            tools = [event.get("tool") for event in result["events"] if event.get("kind") == "tool_started"]
+            known_tools = {"workspace_status", "browser_status", "open_browser", "navigate_browser"}
+            receipt["graph"] = {"model": model_name("OPENAI_MODEL", "gpt-6-astra"),
+                                "input_source": "voice",
+                                "tools": [tool for tool in tools if tool in known_tools],
+                                "usage": {key: max(0, int(result["usage"].get(key, 0)))
+                                          for key in ("input_tokens", "output_tokens")}}
+            receipt["graph"]["run_status"] = result["status"] if result["status"] in (
+                "completed", "failed", "paused", "cancelled", "running") else "unknown"
+            receipt["graph"]["status_tool_completed"] = any(
+                event.get("kind") == "tool_completed" and event.get("tool") == "workspace_status"
+                for event in result["events"])
+            success = any(event.get("kind") == "tool_completed" and event.get("tool") == "workspace_status"
+                          and event.get("ok") is True for event in result["events"])
+            if (result["status"] != "completed" or not success or adapter.denied
+                    or any(tool != "workspace_status" for tool in tools)):
+                raise ProbeFailure("graph_status_tool_failed")
+            answer = result.get("answer")
+            if not isinstance(answer, str) or not 1 <= len(answer.strip()) <= 16000:
+                raise ProbeFailure("graph_answer_missing_or_oversized")
+            return {"status": "completed", "answer": answer, "orchestration": "langgraph",
+                    "tools": ["workspace_status"]}
 
+        finally:
+            await runtime.shutdown()
 
 def new_receipt():
     return {"verification": "reign_voice_provider", "status": "failed", "stage": "configuration",
@@ -395,8 +406,14 @@ def main():
         receipt["error_code"] = "probe_timeout"
     except ConnectionClosed:
         receipt["error_code"] = "provider_connection_closed"
-    except Exception:
+    except Exception as error:
+        # Never log exception messages or tracebacks: SDK errors can contain
+        # provider responses, credentials, or delegated transcript text.
         receipt["error_code"] = "probe_internal_error"
+        safe_types = {"RuntimeError", "ValueError", "TypeError", "KeyError",
+                      "AttributeError", "OSError", "ExceptionGroup", "McpError"}
+        receipt["internal_error_type"] = (type(error).__name__
+                                          if type(error).__name__ in safe_types else "other")
     if receipt["status"] != "passed":
         receipt["stages"][receipt["stage"]] = "failed"
     receipt["finished_at"] = datetime.now(timezone.utc).isoformat()
