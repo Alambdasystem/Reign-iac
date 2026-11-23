@@ -73,6 +73,37 @@ class TeamAXTests(unittest.TestCase):
         for name, cookie in zip(("ax_session", "ax_csrf"), value):
             self.client.cookies.set(name, cookie, domain="ax.example.com", path="/")
 
+    def test_provider_catalog_requires_workspace_identity_and_exposes_no_tools(self):
+        path = "/api/connections/catalog"
+        self.assertEqual(self.client.get(path).status_code, 401)
+
+        self.login("mayur", AVATAR_PASSWORD)
+        self.assertEqual(self.client.get(path).status_code, 403)
+
+        self.login("owner", OWNER_PASSWORD)
+        owner = self.client.get(path)
+        self.assertEqual(owner.status_code, 200)
+        self.assertEqual(owner.headers["cache-control"], "no-store")
+        providers = owner.json()["providers"]
+        self.assertEqual([entry["id"] for entry in providers], ["gmail", "outlook"])
+        for entry in providers:
+            self.assertEqual(set(entry), {"id", "name", "description", "availability", "tools"})
+            self.assertEqual(entry["availability"], "unavailable")
+            self.assertEqual(entry["tools"], [])
+        self.assertEqual(self.client.post(path, headers=self.csrf()).status_code, 405)
+
+        self.login()
+        self.forwarded.clear()
+        employee = self.client.get(path)
+        self.assertEqual(employee.json(), owner.json())
+        self.assertEqual([urlsplit(url).path for _, url, _ in self.forwarded],
+                         ["/internal/team/identity"])
+        self.assertEqual(self.client.get("/api/accounts").status_code, 403)
+        self.assertEqual(self.client.post(path, headers=self.csrf()).status_code, 403)
+
+        self.store.disable_member(self.owner, self.member["id"])
+        self.assertEqual(self.client.get(path).status_code, 401)
+
     def test_employee_login_profile_and_protected_page_keep_local_owner_and_avatar_accounts(self):
         self.login(" FIXTURE-EMPLOYEE ")
         profile = self.client.get("/api/me").json()
@@ -126,7 +157,9 @@ class TeamAXTests(unittest.TestCase):
         with patch.object(ax, "core", new_callable=AsyncMock) as legacy, patch.object(ax.openstl, "core", new_callable=AsyncMock) as external:
             for route in ax.app.routes:
                 path = getattr(route, "path", "")
-                if not path.startswith("/api/") or path == "/api/me" or path == "/api/team" or path.startswith("/api/team/"): continue
+                if (not path.startswith("/api/") or path.startswith("/api/team/")
+                        or path in {"/api/me", "/api/team", "/api/connections/catalog"}):
+                    continue
                 path = re.sub(r"\{[^}]+\}", "123e4567-e89b-42d3-a456-426614174000", path)
                 for method in route.methods:
                     with self.subTest(path=path, method=method):

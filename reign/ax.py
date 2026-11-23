@@ -15,7 +15,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from itsdangerous import URLSafeTimedSerializer, BadData
-from reign import ax_auth
+from reign import ax_auth, connection_catalog
 from reign import team_ax
 from reign.openstl import OpenSTLBridge
 from reign.config import checked_url
@@ -385,6 +385,16 @@ async def me(request: Request):
         profile["landing_path"] = "/"
         profile["capabilities"].update(voice=True, ai_chat=True, genesis=True, managed_browser=False)
     return JSONResponse(profile, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/connections/catalog")
+async def connections_catalog(request: Request):
+    session = principal(request)
+    if session.identity.role not in {"owner", "employee"}:
+        raise HTTPException(403, "Workspace access required", headers=team_ax.NO_STORE)
+    if session.identity.role == "employee":
+        await team.current(request, session=session)
+    return JSONResponse(connection_catalog.public_catalog(), headers=team_ax.NO_STORE)
 
 
 @app.get("/api/status")
@@ -1034,7 +1044,11 @@ async def avatar_scope(request: Request, call_next):
                 return await call_next(request)
             team_allowed = (session.identity.role == "employee"
                             and (path == "/api/team" or path.startswith("/api/team/")))
-            if session.identity.role == "employee" and not team_allowed:
+            catalog_allowed = (
+                session.identity.role == "employee" and request.method in {"GET", "HEAD"}
+                and path == "/api/connections/catalog"
+            )
+            if session.identity.role == "employee" and not (team_allowed or catalog_allowed):
                 try:
                     await team.current(request, session=session)
                     request.state.console_access = await team.console_access(session)
@@ -1054,8 +1068,9 @@ async def avatar_scope(request: Request, call_next):
                 permitted = False
             if path in {"/", "/api/me"}:
                 return await call_next(request)
-            if not team_allowed and not (session.identity.role == "employee" and
-                                         getattr(request.state, "console_access", False) and permitted):
+            console_allowed = (session.identity.role == "employee"
+                               and getattr(request.state, "console_access", False) and permitted)
+            if not (team_allowed or catalog_allowed or console_allowed):
                 return JSONResponse({"detail": "Owner access required"}, status_code=403,
                                     headers={"Cache-Control": "no-store"})
     return await call_next(request)
