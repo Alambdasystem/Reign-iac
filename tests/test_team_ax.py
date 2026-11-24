@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 import httpx
 
@@ -104,6 +104,69 @@ class TeamAXTests(unittest.TestCase):
 
         self.store.disable_member(self.owner, self.member["id"])
         self.assertEqual(self.client.get(path).status_code, 401)
+
+    def test_only_the_initiating_owner_session_can_complete_unread_mail_consent(self):
+        from urllib.parse import parse_qs
+        from reign.mail_routes import install as install_mail_routes
+
+        def service_auth(request: Request):
+            if request.headers.get("authorization") != "Bearer " + TOKEN:
+                raise HTTPException(401, "Unauthorized")
+
+        install_mail_routes(self.core_app, service_auth)
+        mail = AsyncMock()
+        mail.begin.side_effect = lambda provider, state, verifier: {
+            "url": "https://oauth.example.test/consent?state=" + state, "revision": 3,
+        }
+        mail.connect.return_value = {"status": "connected", "email": "owner@example.test"}
+        self.core_app.state.mail = mail
+        self.core_app.state.mail_mcp = AsyncMock()
+        self.core_app.state.mail_mcp.invoke.return_value = {"sampled_unread": 0, "messages": []}
+        path = "/api/connections/mail"
+        self.assertEqual(self.client.get(path).status_code, 401)
+        self.login()
+        self.assertEqual(self.client.post(path + "/gmail/begin", headers=self.csrf()).status_code, 403)
+        config = {"client_id": "fixture-oauth-client", "client_secret": "fixture-secret",
+                  "mailbox": "owner@example.test", "tenant": ""}
+        self.assertEqual(self.client.put(path + "/gmail/settings", json=config,
+                                        headers=self.csrf()).status_code, 403)
+        self.login("owner", OWNER_PASSWORD)
+        first = self.cookies()
+        self.assertEqual(self.client.post(path + "/gmail/begin").status_code, 403)
+        mail.configure.return_value = {"status": "available", "redirect": ORIGIN + "/connections/mail/gmail/callback"}
+        dest = path + "/gmail/settings"
+        self.assertEqual(self.client.put(dest, json=config).status_code, 403)
+        self.assertEqual(self.client.put(dest, json={**config, "origin": "https://other.test"},
+                                        headers=self.csrf()).status_code, 422)
+        saved = self.client.put(dest, json=config, headers=self.csrf())
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertNotIn(config["client_secret"], saved.text)
+        mail.configure.assert_awaited_once_with("gmail", {**config, "origin": ORIGIN})
+        for provider in ("gmail", "outlook"):
+            start = self.client.post(f"{path}/{provider}/begin", headers=self.csrf())
+            self.assertEqual(start.status_code, 200, start.text)
+            state = parse_qs(urlsplit(start.json()["url"]).query)["state"][0]
+            callback = f"/connections/mail/{provider}/callback"
+            params = {"state": state, "code": "disposable-code"}
+            if provider == "gmail":
+                result = self.client.get(callback, params=params, follow_redirects=False)
+            else:
+                result = self.client.post(callback, data=params, follow_redirects=False)
+            self.assertEqual(result.headers["location"], "/#reign-mail=" + state)
+            self.assertEqual(result.headers["referrer-policy"], "no-referrer")
+            self.login("owner", OWNER_PASSWORD)
+            self.assertEqual(self.client.post(path + "/complete", data={"state": state},
+                                              headers=self.csrf()).status_code, 409)
+            self.restore(first)
+            completed = self.client.post(path + "/complete", data={"state": state}, headers=self.csrf())
+            self.assertEqual(completed.json()["status"], "connected")
+            self.assertEqual(self.client.post(path + "/complete", data={"state": state},
+                                              headers=self.csrf()).status_code, 409)
+            sample = self.client.post(f"{path}/{provider}/preview", headers=self.csrf())
+            self.assertEqual(sample.json()["sampled_unread"], 0)
+            self.core_app.state.mail_mcp.invoke.assert_awaited_with("reign_mail_unread",
+                {"provider": provider, "limit": 5}, mailbox_owner=True)
+        self.assertEqual(mail.connect.await_count, 2)
 
     def test_skills_use_member_identity_csrf_and_conflict_checked_encrypted_storage(self):
         path = "/api/team/skills"

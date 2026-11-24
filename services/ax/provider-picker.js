@@ -7,14 +7,17 @@ function element(tag, text, className) {
   return node;
 }
 
-function providerCard(provider) {
+function providerCard(provider, connection, controls) {
   const card = element('li', '', 'provider-picker-card');
   const icon = element('span', provider.name.slice(0, 1), 'provider-picker-icon');
   icon.setAttribute('aria-hidden', 'true');
   icon.dataset.provider = provider.id;
   const details = element('div');
   details.append(element('h3', provider.name), element('p', provider.description));
-  card.append(icon, details, element('span', 'Unavailable', 'provider-picker-state'));
+  const status = connection?.status === 'connected' ? 'Verified' : connection?.status === 'available' ? 'Available' : 'Unavailable';
+  if (connection?.email) details.append(element('p', connection.email));
+  if (controls) details.append(controls);
+  card.append(icon, details, element('span', status, 'provider-picker-state'));
   return card;
 }
 
@@ -64,11 +67,141 @@ if (opener) {
     return node;
   }
 
-  function showProviders(catalog) {
-    status.textContent = 'Account linking is currently unavailable.';
+  async function mailbox(path, method = 'GET', body, signal) {
+    const token = document.cookie.split(';').map(part => part.trim())
+      .find(part => part.startsWith('ax_csrf='))?.slice(8) || '';
+    const response = await fetch('/api/connections/mail' + path, {
+      method, body, signal, cache: 'no-store', credentials: 'same-origin',
+      headers: method === 'GET' ? {} : {'X-CSRF-Token': token,
+        ...(typeof body === 'string' ? {'Content-Type': 'application/json'} : {})},
+    });
+    if (!response.ok) throw new Error('Mailbox request failed');
+    return response.json();
+  }
+
+  function settingsForm(provider) {
+    const panel = element('form', '', 'mail-settings');
+    panel.method = 'post';
+    panel.append(element('h3', 'Configure ' + provider.name));
+    panel.append(element('p', 'Register this redirect URL in the provider’s OAuth app settings.'));
+    const redirect = element('code', window.location.origin + '/connections/mail/' + provider.id + '/callback');
+    panel.append(redirect);
+
+    function field(label, type, maxLength) {
+      const wrapper = element('label', label);
+      const input = element('input');
+      input.type = type;
+      input.maxLength = maxLength;
+      input.required = true;
+      input.autocomplete = type === 'password' ? 'new-password' : 'off';
+      input.spellcheck = false;
+      wrapper.append(input);
+      panel.append(wrapper);
+      return input;
+    }
+
+    const mailboxAddress = field('Mailbox email', 'email', 255);
+    const clientId = field('OAuth client ID', 'text', 512);
+    const secret = field('OAuth client secret', 'password', 4096);
+    const tenant = provider.id === 'outlook' ? field('Microsoft Entra tenant ID', 'text', 36) : null;
+    const controls = element('div', '', 'mail-controls');
+    const submit = button('Save OAuth settings');
+    submit.type = 'submit';
+    controls.append(submit, button('Cancel', () => load('connections')));
+    panel.append(controls);
+    panel.addEventListener('submit', event => {
+      event.preventDefault();
+      if (busy) return;
+      const payload = JSON.stringify({client_id: clientId.value.trim(), client_secret: secret.value,
+        mailbox: mailboxAddress.value.trim(), tenant: tenant?.value.trim() || ''});
+      secret.value = '';
+      void perform(async request => {
+        await mailbox('/' + provider.id + '/settings', 'PUT', payload, request.signal);
+        if (!request.signal.aborted) await load('connections', provider.name + ' settings saved. Select Connect.');
+      });
+    });
+    content.replaceChildren(panel);
+    status.textContent = 'Saving new settings disconnects this mailbox until you sign in again.';
+    mailboxAddress.focus();
+  }
+
+  function showProviders(catalog, mail = {}, message = '') {
+    status.textContent = message || (Object.values(mail).some(item => item.status !== 'needs_setup') ? 'Read-only mailbox access' : 'Account linking is currently unavailable.');
     const providers = list();
-    providers.append(...catalog.providers.map(providerCard));
+    const preview = element('section', '', 'mail-preview');
+    preview.setAttribute('aria-live', 'polite');
+    async function sample(provider, request) {
+      const section = element('section', '', 'mail-sample');
+      section.append(element('h3', provider.name + ' unread sample'));
+      try {
+        const data = await mailbox('/' + provider.id + '/preview', 'POST', undefined, request.signal);
+        if (data.error) throw new Error('Mailbox preview unavailable');
+        section.append(element('p', data.sampled_unread + ' unread messages sampled'));
+        const messages = list();
+        for (const item of data.messages) {
+          const row = element('li', '', 'mail-message');
+          row.append(element('strong', item.subject || '(No subject)'),
+            element('p', [item.from, item.date].filter(Boolean).join(' · ')));
+          messages.append(row);
+        }
+        section.append(messages);
+      } catch {
+        section.append(element('p', 'Could not read this mailbox. Check the connection and try again.'));
+      }
+      return section;
+    }
+    async function showSamples(selected, request) {
+      preview.replaceChildren();
+      const result = await Promise.all(selected.map(provider => sample(provider, request)));
+      if (request.signal.aborted) return;
+      preview.replaceChildren(...result);
+      status.textContent = 'Mailbox preview finished.';
+    }
+    for (const provider of catalog.providers) {
+      const connection = mail[provider.id];
+      const controls = connection ? element('div', '', 'mail-controls') : null;
+      const path = '/' + provider.id;
+      if (controls) {
+        const connected = connection.status === 'connected';
+        const configure = button(connection.status === 'needs_setup' ? 'Configure' : 'Edit settings',
+          () => { if (!busy) settingsForm(provider); });
+        configure.setAttribute('aria-label', (connection.status === 'needs_setup' ? 'Configure ' : 'Edit settings for ') + provider.name);
+        controls.append(configure);
+        const start = button(connected ? 'Reconnect' : 'Connect', () => perform(async request => {
+          const result = await mailbox(path + '/begin', 'POST', undefined, request.signal);
+          if (!request.signal.aborted) window.location.assign(result.url);
+        }));
+        if (connection.status !== 'needs_setup') controls.append(start);
+        if (connected) {
+          const inspect = button('Preview unread', () => perform(request => showSamples([provider], request)));
+          const disconnect = button('Disconnect', () => perform(async request => {
+            await mailbox(path, 'DELETE', undefined, request.signal);
+            if (!request.signal.aborted) await load('connections', 'Mailbox disconnected from REIGN.');
+          }));
+          controls.append(inspect, disconnect);
+        }
+      }
+      providers.append(providerCard(provider, connection, controls));
+    }
     content.replaceChildren(providers);
+    const connected = catalog.providers.filter(provider => mail[provider.id]?.status === 'connected');
+    if (connected.length === 2) content.append(button('Preview both inboxes', () =>
+      perform(request => showSamples(connected, request))));
+    content.append(preview);
+  }
+
+  async function perform(action) {
+    if (busy || !pending) return;
+    const request = pending;
+    busy = true;
+    status.textContent = 'Working…';
+    try {
+      await action(request);
+    } catch {
+      if (!request.signal.aborted) status.textContent = 'Could not complete the mailbox request. Try again.';
+    } finally {
+      busy = false;
+    }
   }
 
   function showSkills(state, focusSkill = null) {
@@ -219,7 +352,11 @@ if (opener) {
       if (skills) {
         status.textContent = message;
         showSkills(result);
-      } else showProviders(result);
+      } else {
+        let mail = {};
+        try { mail = await mailbox('', 'GET', undefined, request.signal); } catch { /* Catalog remains available. */ }
+        if (!request.signal.aborted) showProviders(result, mail, message);
+      }
     } catch {
       if (request.signal.aborted) return;
       status.textContent = skills ? 'Could not load skills. Try again.' : 'Could not load providers. Try again.';
@@ -230,7 +367,8 @@ if (opener) {
   retry.addEventListener('click', () => load(view));
   connectionsTab.addEventListener('click', () => load('connections'));
   skillsTab.addEventListener('click', () => load('skills'));
-  for (const [trigger, initial] of [[opener, 'connections'], [skillsOpener, 'skills']]) {
+  const accountsEntry = document.querySelector('[data-linked-accounts]');
+  for (const [trigger, initial] of [[opener, 'connections'], [accountsEntry, 'connections'], [skillsOpener, 'skills']]) {
     if (!trigger) continue;
     trigger.setAttribute('aria-haspopup', 'dialog');
     trigger.addEventListener('click', () => {
@@ -252,4 +390,23 @@ if (opener) {
       if (workspace.hidden && dialog.open) dialog.close();
     }).observe(workspace, {attributeFilter: ['hidden']});
   }
+  const returned = window.location.hash;
+  if (returned.startsWith('#reign-mail=') || returned === '#reign-mail-error') {
+    window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    dialog.showModal();
+    returnFocus = opener;
+    void (async () => {
+      let message = 'Mailbox sign-in was not completed. Start again from Connections.';
+      if (returned.startsWith('#reign-mail=')) {
+        status.textContent = 'Verifying mailbox…';
+        try {
+          const body = new URLSearchParams({state: returned.slice('#reign-mail='.length)});
+          const result = await mailbox('/complete', 'POST', body);
+          if (result.status === 'connected') message = 'Mailbox connected and verified.';
+        } catch { /* Restart with a new one-time consent attempt. */ }
+      }
+      if (dialog.open) await load('connections', message);
+    })();
+  }
+
 }

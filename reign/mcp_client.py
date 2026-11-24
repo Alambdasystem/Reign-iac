@@ -17,7 +17,7 @@ from mcp.client.stdio import stdio_client
 from mcp.shared.exceptions import McpError
 
 from reign.session_errors import BrowserOccupied
-from reign.tool_contracts import CATALOG, EFFECT_TOOLS
+from reign.tool_contracts import CATALOG, OWNER_MAIL_TOOLS, EFFECT_TOOLS
 from reign.tool_errors import ACTION_MESSAGES, BrowserActionError
 
 
@@ -56,6 +56,7 @@ class WorkspaceMCP:
     def __init__(self):
         self.session = None
         self.tool_names = []
+        self.mail_key = None
         self._lock = asyncio.Lock()
 
     @contextlib.asynccontextmanager
@@ -66,6 +67,9 @@ class WorkspaceMCP:
                  "COMPUTER_TOKEN", "ALLOWED_HOSTS", "REIGN_VAULT_DIR", "REIGN_VAULT_KEY"}
         env = {name: value for name, value in os.environ.items() if name in names}
         env["REIGN_MCP_OWNER_ID"] = "admin"
+        if self.mail_key:
+            env["REIGN_MAIL_MCP_KEY"] = self.mail_key
+            env["REIGN_MAIL_CORE_PORT"] = os.getenv("PORT", "10000")
         params = StdioServerParameters(command=sys.executable,
             args=["-m", "reign.mcp_workspace"], env=env,
             cwd=str(Path(__file__).resolve().parent.parent))
@@ -86,15 +90,19 @@ class WorkspaceMCP:
                     finally:
                         self.session, self.tool_names = None, []
 
-    async def invoke(self, name, arguments=None, *, sid=None, epoch=None):
+    async def invoke(self, name, arguments=None, *, sid=None, epoch=None, mailbox_owner=False):
         if self.session is None or name not in CATALOG:
             raise HTTPException(503, "Workspace MCP is unavailable")
+        if name in OWNER_MAIL_TOOLS and (mailbox_owner is not True or not self.mail_key):
+            raise HTTPException(403, "Mailbox owner access required")
         schema = CATALOG[name][1]
         try:
             args = schema.model_validate(arguments or {}).model_dump(mode="json")
         except Exception:
             raise HTTPException(422, "Invalid tool arguments") from None
         meta = {"reign_owner": "admin"}
+        if name in OWNER_MAIL_TOOLS:
+            meta["reign_mail_owner"] = True
         if sid is not None:
             meta["reign_session_id"] = sid
         if epoch is not None:

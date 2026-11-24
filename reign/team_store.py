@@ -222,6 +222,8 @@ class TeamStore:
         # Existing test/dev stores retain their records when the surface grows.
         db.execute("CREATE TABLE IF NOT EXISTS browser_bindings (room TEXT PRIMARY KEY REFERENCES rooms(id), session_id TEXT UNIQUE NOT NULL, generation INTEGER NOT NULL, nonce BLOB NOT NULL, body BLOB NOT NULL)")
         db.execute("CREATE TABLE IF NOT EXISTS personal_skills (workspace TEXT NOT NULL, user_id TEXT NOT NULL, revision INTEGER NOT NULL, nonce BLOB NOT NULL, body BLOB NOT NULL, PRIMARY KEY(workspace,user_id))")
+        db.execute("CREATE TABLE IF NOT EXISTS owner_mail (workspace TEXT NOT NULL, user_id TEXT NOT NULL, provider TEXT NOT NULL, revision INTEGER NOT NULL, nonce BLOB NOT NULL, body BLOB NOT NULL, PRIMARY KEY(workspace,user_id,provider))")
+        db.execute("CREATE TABLE IF NOT EXISTS owner_mail_config (workspace TEXT NOT NULL, user_id TEXT NOT NULL, provider TEXT NOT NULL, revision INTEGER NOT NULL, nonce BLOB NOT NULL, body BLOB NOT NULL, PRIMARY KEY(workspace,user_id,provider))")
         # A durable per-member console grant, not a new owner identity. The
         # original membership MAC remains valid for ungranted members.
         if "console_access" not in {row[1] for row in db.execute("PRAGMA table_info(memberships)")}: 
@@ -277,6 +279,48 @@ class TeamStore:
         if not member["active"] or member["role"] != actor.get("role") or member["credential_revision"] != actor.get("credential_revision"):
             raise TeamError("team_identity_required")
         return {key: member[key] for key in ("id", "username", "display_name", "role", "credential_revision")}
+
+    def owner_mail(self, provider, update=None):
+        if provider not in {"gmail", "outlook"}:
+            raise TeamError("invalid_team_request")
+        binding = (WORKSPACE_ID, OWNER_ID, provider)
+        with self._connection() as (db, key):
+            row = db.execute("SELECT revision,nonce,body FROM owner_mail WHERE workspace=? AND user_id=? AND provider=?", binding).fetchone()
+            version = row["revision"] if row else 0
+            if update is None:
+                value = self._open(key, row["nonce"], row["body"], "owner-mail", *binding, version) if row else None
+                return version, value
+            expected, value = update
+            if version != expected:
+                raise TeamError("skills_conflict")
+            nonce, sealed = self._seal(key, value, "owner-mail", *binding, version + 1)
+            self._reserve(db, len(sealed) - (len(row["body"]) if row else 0))
+            db.execute("INSERT INTO owner_mail VALUES (?,?,?,?,?,?) ON CONFLICT(workspace,user_id,provider) "
+                       "DO UPDATE SET revision=excluded.revision,nonce=excluded.nonce,body=excluded.body",
+                       (*binding, version + 1, nonce, sealed))
+
+    def owner_mail_config(self, provider, replacement=None):
+        if provider not in {"gmail", "outlook"}:
+            raise TeamError("invalid_team_request")
+        binding = (WORKSPACE_ID, OWNER_ID, provider)
+        with self._connection() as (db, key):
+            params = "WHERE workspace=? AND user_id=? AND provider=?"
+            row = db.execute("SELECT revision,nonce,body FROM owner_mail_config " + params, binding).fetchone()
+            version = row["revision"] if row else 0
+            if replacement is None:
+                return self._open(key, row["nonce"], row["body"], "mail-config", *binding, version) if row else None
+            nonce, sealed = self._seal(key, replacement, "mail-config", *binding, version + 1)
+            db.execute("INSERT INTO owner_mail_config (workspace,user_id,provider,revision,nonce,body) VALUES (?,?,?,?,?,?) ON CONFLICT(workspace,user_id,provider) "
+                       "DO UPDATE SET revision=excluded.revision,nonce=excluded.nonce,body=excluded.body",
+                       (*binding, version + 1, nonce, sealed))
+            grant = db.execute("SELECT revision,body FROM owner_mail " + params, binding).fetchone()
+            grant_version = grant["revision"] + 1 if grant else 1
+            fence, disconnected = self._seal(key, None, "owner-mail", *binding, grant_version)
+            self._reserve(db, len(sealed) - (len(row["body"]) if row else 0)
+                          + len(disconnected) - (len(grant["body"]) if grant else 0))
+            db.execute("INSERT INTO owner_mail (workspace,user_id,provider,revision,nonce,body) VALUES (?,?,?,?,?,?) ON CONFLICT(workspace,user_id,provider) "
+                       "DO UPDATE SET revision=excluded.revision,nonce=excluded.nonce,body=excluded.body",
+                       (*binding, grant_version, fence, disconnected))
 
     def personal_skills(self, actor, update=None):
         value = None

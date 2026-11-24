@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from itsdangerous import URLSafeTimedSerializer, BadData
+from reign.mail_ax import MailConsent, install as install_mail_ax
 from reign import ax_auth, connection_catalog
 from reign import team_ax
 from reign.openstl import OpenSTLBridge
@@ -187,6 +188,7 @@ def csrf(request: Request):
 async def lifespan(app):
     app.state.auth = ax_auth.AuthState()
     app.state.linkedin_previews = {}
+    app.state.mail_consent = MailConsent()
     # Browser startup/Temporal dispatch can take longer than a normal API call.
     app.state.http = httpx.AsyncClient(timeout=120, trust_env=False)
     sweeper = asyncio.create_task(openstl.sweeper())
@@ -563,6 +565,9 @@ async def core(method, path, data=None, voice_errors=False, account_errors=False
                 raise BrowserOccupied()
         raise HTTPException(result.status_code, "Core request failed")
     return result
+
+
+install_mail_ax(app, principal, session_csrf, core)
 
 
 def account_result(response):

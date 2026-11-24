@@ -30,6 +30,7 @@ OBSERVATION = "synthetic_observation_01"
 URL = "https://alambda-forge.onrender.com/"
 SENSITIVE_FIXTURE = "synthetic-secret-must-not-escape-4387"
 EXPECTED_TOOLS = {
+    "reign_mail_unread",
     "reign_skill_catalog", "reign_skill_plan", "reign_checklist_prepare",
     "linkedin_preview_post",
     "workspace_status", "browser_status", "open_browser", "navigate_browser",
@@ -119,7 +120,10 @@ class WorkspaceMCPProtocolTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(tool=tool.name):
                 self.assertFalse(tool.inputSchema["additionalProperties"])
                 self.assertFalse(forbidden & set(tool.inputSchema.get("properties", {})))
-                self.assertEqual(tool.inputSchema, langchain_tools[tool.name].args_schema.model_json_schema())
+                if tool.name == "reign_mail_unread":
+                    self.assertNotIn(tool.name, langchain_tools)
+                else:
+                    self.assertEqual(tool.inputSchema, langchain_tools[tool.name].args_schema.model_json_schema())
                 self.assertEqual(tool.annotations.readOnlyHint, tool.name in READ_TOOLS)
 
     async def test_missing_or_spoofed_identity_never_reaches_backend(self):
