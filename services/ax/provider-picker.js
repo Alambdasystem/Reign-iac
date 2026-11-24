@@ -7,14 +7,17 @@ function element(tag, text, className) {
   return node;
 }
 
-function providerCard(provider) {
+function providerCard(provider, connection, controls) {
   const card = element('li', '', 'provider-picker-card');
   const icon = element('span', provider.name.slice(0, 1), 'provider-picker-icon');
   icon.setAttribute('aria-hidden', 'true');
   icon.dataset.provider = provider.id;
   const details = element('div');
   details.append(element('h3', provider.name), element('p', provider.description));
-  card.append(icon, details, element('span', 'Unavailable', 'provider-picker-state'));
+  const status = connection?.status === 'connected' ? 'Verified' : connection ? 'Available' : 'Unavailable';
+  if (connection?.email) details.append(element('p', connection.email));
+  if (controls) details.append(controls);
+  card.append(icon, details, element('span', status, 'provider-picker-state'));
   return card;
 }
 
@@ -64,11 +67,90 @@ if (opener) {
     return node;
   }
 
-  function showProviders(catalog) {
-    status.textContent = 'Account linking is currently unavailable.';
+  async function mailbox(path, method = 'GET', body, signal) {
+    const token = document.cookie.split(';').map(part => part.trim())
+      .find(part => part.startsWith('ax_csrf='))?.slice(8) || '';
+    const response = await fetch('/api/connections/mail' + path, {
+      method, body, signal, cache: 'no-store', credentials: 'same-origin',
+      headers: method === 'GET' ? {} : {'X-CSRF-Token': token},
+    });
+    if (!response.ok) throw new Error('Mailbox request failed');
+    return response.json();
+  }
+
+  function showProviders(catalog, mail = {}, message = '') {
+    status.textContent = message || (Object.keys(mail).length ? 'Read-only mailbox access' : 'Account linking is currently unavailable.');
     const providers = list();
-    providers.append(...catalog.providers.map(providerCard));
+    const preview = element('section', '', 'mail-preview');
+    preview.setAttribute('aria-live', 'polite');
+    async function sample(provider, request) {
+      const section = element('section', '', 'mail-sample');
+      section.append(element('h3', provider.name + ' unread sample'));
+      try {
+        const data = await mailbox('/' + provider.id + '/preview', 'POST', undefined, request.signal);
+        if (data.error) throw new Error('Mailbox preview unavailable');
+        section.append(element('p', data.sampled_unread + ' unread messages sampled'));
+        const messages = list();
+        for (const item of data.messages) {
+          const row = element('li', '', 'mail-message');
+          row.append(element('strong', item.subject || '(No subject)'),
+            element('p', [item.from, item.date].filter(Boolean).join(' · ')));
+          messages.append(row);
+        }
+        section.append(messages);
+      } catch {
+        section.append(element('p', 'Could not read this mailbox. Check the connection and try again.'));
+      }
+      return section;
+    }
+    async function showSamples(selected, request) {
+      preview.replaceChildren();
+      const result = await Promise.all(selected.map(provider => sample(provider, request)));
+      if (request.signal.aborted) return;
+      preview.replaceChildren(...result);
+      status.textContent = 'Mailbox preview finished.';
+    }
+    for (const provider of catalog.providers) {
+      const connection = mail[provider.id];
+      const controls = connection ? element('div', '', 'mail-controls') : null;
+      const path = '/' + provider.id;
+      if (controls) {
+        const connected = connection.status === 'connected';
+        const start = button(connected ? 'Reconnect' : 'Connect', () => perform(async request => {
+          const result = await mailbox(path + '/begin', 'POST', undefined, request.signal);
+          if (!request.signal.aborted) window.location.assign(result.url);
+        }));
+        controls.append(start);
+        if (connected) {
+          const inspect = button('Preview unread', () => perform(request => showSamples([provider], request)));
+          const disconnect = button('Disconnect', () => perform(async request => {
+            await mailbox(path, 'DELETE', undefined, request.signal);
+            if (!request.signal.aborted) await load('connections', 'Mailbox disconnected from REIGN.');
+          }));
+          controls.append(inspect, disconnect);
+        }
+      }
+      providers.append(providerCard(provider, connection, controls));
+    }
     content.replaceChildren(providers);
+    const connected = catalog.providers.filter(provider => mail[provider.id]?.status === 'connected');
+    if (connected.length === 2) content.append(button('Preview both inboxes', () =>
+      perform(request => showSamples(connected, request))));
+    content.append(preview);
+  }
+
+  async function perform(action) {
+    if (busy || !pending) return;
+    const request = pending;
+    busy = true;
+    status.textContent = 'Working…';
+    try {
+      await action(request);
+    } catch {
+      if (!request.signal.aborted) status.textContent = 'Could not complete the mailbox request. Try again.';
+    } finally {
+      busy = false;
+    }
   }
 
   function showSkills(state, focusSkill = null) {
@@ -219,7 +301,11 @@ if (opener) {
       if (skills) {
         status.textContent = message;
         showSkills(result);
-      } else showProviders(result);
+      } else {
+        let mail = {};
+        try { mail = await mailbox('', 'GET', undefined, request.signal); } catch { /* Catalog remains available. */ }
+        if (!request.signal.aborted) showProviders(result, mail, message);
+      }
     } catch {
       if (request.signal.aborted) return;
       status.textContent = skills ? 'Could not load skills. Try again.' : 'Could not load providers. Try again.';
@@ -252,4 +338,23 @@ if (opener) {
       if (workspace.hidden && dialog.open) dialog.close();
     }).observe(workspace, {attributeFilter: ['hidden']});
   }
+  const returned = window.location.hash;
+  if (returned.startsWith('#reign-mail=') || returned === '#reign-mail-error') {
+    window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    dialog.showModal();
+    returnFocus = opener;
+    void (async () => {
+      let message = 'Mailbox sign-in was not completed. Start again from Connections.';
+      if (returned.startsWith('#reign-mail=')) {
+        status.textContent = 'Verifying mailbox…';
+        try {
+          const body = new URLSearchParams({state: returned.slice('#reign-mail='.length)});
+          const result = await mailbox('/complete', 'POST', body);
+          if (result.status === 'connected') message = 'Mailbox connected and verified.';
+        } catch { /* Restart with a new one-time consent attempt. */ }
+      }
+      if (dialog.open) await load('connections', message);
+    })();
+  }
+
 }

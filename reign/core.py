@@ -14,6 +14,8 @@ from temporalio.client import Client
 from temporalio.exceptions import ApplicationError
 from temporalio.api.workflowservice.v1 import GetSystemInfoRequest
 
+from reign.mail_connections import MailConnections
+from reign.mail_routes import install as install_mail_routes
 from reign.config import QUEUE, NAMESPACE, checked_url, computer_url, temporal_address
 from reign.session_errors import BrowserOccupied, browser_occupied_response
 from reign.owned_workflow import execute_owned_workflow
@@ -77,8 +79,12 @@ async def lifespan(app: FastAPI):
     # It never changes the active LangGraph, team, speech or voice providers.
     from reign.ollama_tailnet_probe import schedule_startup_probe
     ollama_probe_task = schedule_startup_probe()
+    app.state.mail = MailConnections(team.store if team is not None else None, app.state.http)
+    mail_mcp = WorkspaceMCP()
+    mail_mcp.mail_key = secrets.token_urlsafe(32)
+    app.state.mail_mcp = mail_mcp
     try:
-        async with WorkspaceMCP().connect() as connection:
+        async with mail_mcp.connect() as connection:
             app.state.agent = AgentRuntime(adapter=MCPTools(connection), archive=archive)
             app.state.genesis = genesis
             app.state.nodes = nodes
@@ -416,6 +422,9 @@ async def linkedin_publish(data: LinkedInApprovedPost):
     from reign.linkedin_publishing import publish
 
     return await publish(data.text, expected_author=data.author)
+
+
+install_mail_routes(app, authorize)
 
 
 @app.post("/api/chat", dependencies=[Depends(authorize)])

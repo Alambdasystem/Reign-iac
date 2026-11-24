@@ -86,6 +86,48 @@ async def provider_picker_check(page):
     await expect(page.locator("#callspaceMenuPanel")).to_be_hidden()
 
 
+async def owner_mail_picker_check(page):
+    endpoint = AX + "/api/connections/mail"
+    paths = []
+
+    async def owner_mail(route):
+        path = urlsplit(route.request.url).path
+        paths.append((route.request.method, path))
+        if path == "/api/connections/mail":
+            await route.fulfill(json={
+                "gmail": {"status": "connected", "email": "owner@gmail.example"},
+                "outlook": {"status": "connected", "email": "owner@outlook.example"},
+            })
+        elif path.endswith("/gmail/preview"):
+            await route.fulfill(json={"sampled_unread": 1, "count_kind": "sample", "messages": [
+                {"subject": "Disposable Gmail title", "from": "sender@example.test", "date": ""},
+            ]})
+        elif path.endswith("/outlook/preview"):
+            await route.fulfill(status=409, json={"error": "Reconnect"})
+        else:
+            raise AssertionError("Unexpected mailbox request: " + path)
+
+    await page.route(endpoint + "**", owner_mail)
+    try:
+        await callspace_click(page, "[data-provider-picker]")
+        dialog = page.get_by_role("dialog", name="Account connections")
+        await expect(dialog.get_by_text("owner@gmail.example")).to_be_visible()
+        await expect(dialog.get_by_text("owner@outlook.example")).to_be_visible()
+        await dialog.get_by_role("button", name="Preview both inboxes").click()
+        await expect(dialog.get_by_text("Disposable Gmail title")).to_be_visible()
+        await expect(dialog.get_by_text("1 unread messages sampled")).to_be_visible()
+        outlook = dialog.locator(".mail-sample").filter(has_text="Outlook unread sample")
+        await expect(outlook.get_by_text("Could not read this mailbox", exact=False)).to_be_visible()
+        assert ("POST", "/api/connections/mail/gmail/preview") in paths
+        assert ("POST", "/api/connections/mail/outlook/preview") in paths
+        await page.keyboard.press("Escape")
+        await expect(dialog).to_be_hidden()
+        await page.locator("#callspaceCloseMenu").click()
+        await expect(page.locator("#callspaceMenuPanel")).to_be_hidden()
+    finally:
+        await page.unroute(endpoint + "**", owner_mail)
+
+
 async def skills_picker_check(page):
     await callspace_click(page, "[data-skill-picker]")
     dialog = page.get_by_role("dialog", name="Skills")
@@ -386,6 +428,8 @@ async def main():
             await page.set_viewport_size({"width": 320, "height": 720})
             await provider_picker_check(page)
             await skills_picker_check(page)
+            await owner_mail_picker_check(page)
+            passed("T24 mobile owner mail view shows separate results from disposable provider fixtures")
             passed("T23 mobile Skills manager pins workflows and saves personal checklist changes")
             await page.set_viewport_size(desktop)
             passed("T17 mobile and desktop account connections support keyboard access and independent provider availability")

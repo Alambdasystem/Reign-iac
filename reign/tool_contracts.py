@@ -65,8 +65,15 @@ class ChecklistDraftArgs(EmptyArgs):
         min_length=1, max_length=MAX_CHECKLIST_ITEMS)
 
 
+class MailUnreadArgs(EmptyArgs):
+    provider: Literal["gmail", "outlook"]
+    limit: int = Field(default=5, ge=1, le=10)
+
+
+OWNER_MAIL_TOOLS = frozenset({"reign_mail_unread"})
 SKILL_TOOLS = frozenset({"reign_skill_catalog", "reign_skill_plan", "reign_checklist_prepare"})
 CATALOG = {
+    "reign_mail_unread": ("Preview unread message headers from the verified owner mailbox.", MailUnreadArgs),
     "reign_skill_catalog": ("List approved REIGN skills and their setup status. This reads no account data.", EmptyArgs),
     "reign_skill_plan": ("Show a skill's ordered steps and setup requirements. Planning performs no provider calls.", SkillPlanArgs),
     "reign_checklist_prepare": ("Prepare an action checklist for human review. This does not save or complete items.", ChecklistDraftArgs),
@@ -88,11 +95,11 @@ CATALOG = {
 }
 
 EFFECT_TOOLS = frozenset({"open_browser", "navigate_browser", "browser_click", "browser_fill", "browser_press", "browser_scroll", "vault_use_account"})
-READ_TOOLS = SKILL_TOOLS | frozenset({"linkedin_preview_post", "workspace_status", "browser_status", "browser_observe", "vault_status", "vault_list_accounts", "vault_request_account"})
+READ_TOOLS = OWNER_MAIL_TOOLS | SKILL_TOOLS | frozenset({"linkedin_preview_post", "workspace_status", "browser_status", "browser_observe", "vault_status", "vault_list_accounts", "vault_request_account"})
 
 
 def tool_specs():
     from langchain_core.tools import StructuredTool
     return {name: StructuredTool.from_function(func=lambda **kwargs: None, name=name,
             description=description, args_schema=schema)
-            for name, (description, schema) in CATALOG.items()}
+            for name, (description, schema) in CATALOG.items() if name not in OWNER_MAIL_TOOLS}

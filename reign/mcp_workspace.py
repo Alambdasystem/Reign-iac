@@ -73,7 +73,10 @@ async def dispatch(name, arguments, meta):
     except (ValueError, TypeError, HTTPException):
         return error_result("Invalid tool arguments or workspace context", "invalid_tool_context", 403)
     try:
-        if name == "reign_skill_catalog":
+        if name == "reign_mail_unread":
+            from reign.mail_mcp import unread
+            result = await unread(args, meta)
+        elif name == "reign_skill_catalog":
             from reign.skills import catalog
             result = {"skills": catalog()}
         elif name == "reign_skill_plan":
