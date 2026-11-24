@@ -310,7 +310,7 @@ class TeamStore:
             if replacement is None:
                 return self._open(key, row["nonce"], row["body"], "mail-config", *binding, version) if row else None
             nonce, sealed = self._seal(key, replacement, "mail-config", *binding, version + 1)
-            db.execute("INSERT INTO owner_mail_config VALUES (?,?,?,?,?) ON CONFLICT(workspace,user_id,provider) "
+            db.execute("INSERT INTO owner_mail_config (workspace,user_id,provider,revision,nonce,body) VALUES (?,?,?,?,?,?) ON CONFLICT(workspace,user_id,provider) "
                        "DO UPDATE SET revision=excluded.revision,nonce=excluded.nonce,body=excluded.body",
                        (*binding, version + 1, nonce, sealed))
             grant = db.execute("SELECT revision,body FROM owner_mail " + params, binding).fetchone()
