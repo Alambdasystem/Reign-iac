@@ -20,6 +20,7 @@ OPERATIONS = frozenset({
     "agent.resume", "agent.cancel", "agent.failure", "browser.action",
 })
 TOOLS = frozenset({
+    "reign_skill_catalog", "reign_skill_plan", "reign_checklist_prepare",
     "workspace_status", "browser_status", "open_browser", "navigate_browser",
     "browser_observe", "browser_click", "browser_fill", "browser_press",
     "browser_scroll", "vault_status", "vault_list_accounts",

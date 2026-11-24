@@ -30,6 +30,7 @@ OBSERVATION = "synthetic_observation_01"
 URL = "https://alambda-forge.onrender.com/"
 SENSITIVE_FIXTURE = "synthetic-secret-must-not-escape-4387"
 EXPECTED_TOOLS = {
+    "reign_skill_catalog", "reign_skill_plan", "reign_checklist_prepare",
     "linkedin_preview_post",
     "workspace_status", "browser_status", "open_browser", "navigate_browser",
     "browser_observe", "browser_click", "browser_fill", "browser_press", "browser_scroll",

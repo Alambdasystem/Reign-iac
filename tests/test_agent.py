@@ -349,6 +349,7 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(bound.bound.openai_api_base, "https://api.openai.com/v1")
             self.assertFalse(bound.kwargs["parallel_tool_calls"])
             self.assertEqual({tool["function"]["name"] for tool in bound.kwargs["tools"]}, {
+                "reign_skill_catalog", "reign_skill_plan", "reign_checklist_prepare",
                 "linkedin_preview_post", "workspace_status", "browser_status", "open_browser", "navigate_browser",
                 "browser_observe", "browser_click", "browser_fill", "browser_press", "browser_scroll",
                 "vault_status", "vault_list_accounts", "vault_request_account", "vault_prepare_signup", "vault_use_account"})

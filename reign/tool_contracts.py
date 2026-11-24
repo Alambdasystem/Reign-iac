@@ -3,7 +3,10 @@
 Session, owner and ownership epoch are trusted transport context, never model
 arguments. No tool accepts or returns a password, token, selector or script.
 """
+from typing import Annotated, Literal
+
 from pydantic import BaseModel, ConfigDict, Field
+from reign.skills import MAX_CHECKLIST_ITEMS, MAX_CHECKLIST_LABEL
 
 
 class EmptyArgs(BaseModel):
@@ -53,7 +56,20 @@ class LinkedInPreviewArgs(EmptyArgs):
     text: str = Field(min_length=1, max_length=3000)
 
 
+class SkillPlanArgs(EmptyArgs):
+    skill: Literal["email_briefing", "aws_sso", "action_checklist"]
+
+
+class ChecklistDraftArgs(EmptyArgs):
+    items: list[Annotated[str, Field(min_length=1, max_length=MAX_CHECKLIST_LABEL)]] = Field(
+        min_length=1, max_length=MAX_CHECKLIST_ITEMS)
+
+
+SKILL_TOOLS = frozenset({"reign_skill_catalog", "reign_skill_plan", "reign_checklist_prepare"})
 CATALOG = {
+    "reign_skill_catalog": ("List approved REIGN skills and their setup status. This reads no account data.", EmptyArgs),
+    "reign_skill_plan": ("Show a skill's ordered steps and setup requirements. Planning performs no provider calls.", SkillPlanArgs),
+    "reign_checklist_prepare": ("Prepare an action checklist for human review. This does not save or complete items.", ChecklistDraftArgs),
     "linkedin_preview_post": ("Preview a text-only LinkedIn post without publishing or exposing tokens.", LinkedInPreviewArgs),
     "workspace_status": ("Check actual Core, Temporal and browser worker readiness.", EmptyArgs),
     "browser_status": ("Read the current browser URL, title, control owner and epoch.", EmptyArgs),
@@ -72,7 +88,7 @@ CATALOG = {
 }
 
 EFFECT_TOOLS = frozenset({"open_browser", "navigate_browser", "browser_click", "browser_fill", "browser_press", "browser_scroll", "vault_use_account"})
-READ_TOOLS = frozenset({"linkedin_preview_post", "workspace_status", "browser_status", "browser_observe", "vault_status", "vault_list_accounts", "vault_request_account"})
+READ_TOOLS = SKILL_TOOLS | frozenset({"linkedin_preview_post", "workspace_status", "browser_status", "browser_observe", "vault_status", "vault_list_accounts", "vault_request_account"})
 
 
 def tool_specs():
