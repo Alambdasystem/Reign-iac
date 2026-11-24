@@ -14,7 +14,7 @@ function providerCard(provider, connection, controls) {
   icon.dataset.provider = provider.id;
   const details = element('div');
   details.append(element('h3', provider.name), element('p', provider.description));
-  const status = connection?.status === 'connected' ? 'Verified' : connection ? 'Available' : 'Unavailable';
+  const status = connection?.status === 'connected' ? 'Verified' : connection?.status === 'available' ? 'Available' : 'Unavailable';
   if (connection?.email) details.append(element('p', connection.email));
   if (controls) details.append(controls);
   card.append(icon, details, element('span', status, 'provider-picker-state'));
@@ -72,14 +72,61 @@ if (opener) {
       .find(part => part.startsWith('ax_csrf='))?.slice(8) || '';
     const response = await fetch('/api/connections/mail' + path, {
       method, body, signal, cache: 'no-store', credentials: 'same-origin',
-      headers: method === 'GET' ? {} : {'X-CSRF-Token': token},
+      headers: method === 'GET' ? {} : {'X-CSRF-Token': token,
+        ...(typeof body === 'string' ? {'Content-Type': 'application/json'} : {})},
     });
     if (!response.ok) throw new Error('Mailbox request failed');
     return response.json();
   }
 
+  function settingsForm(provider) {
+    const panel = element('form', '', 'mail-settings');
+    panel.method = 'post';
+    panel.append(element('h3', 'Configure ' + provider.name));
+    panel.append(element('p', 'Register this redirect URL in the provider’s OAuth app settings.'));
+    const redirect = element('code', window.location.origin + '/connections/mail/' + provider.id + '/callback');
+    panel.append(redirect);
+
+    function field(label, type, maxLength) {
+      const wrapper = element('label', label);
+      const input = element('input');
+      input.type = type;
+      input.maxLength = maxLength;
+      input.required = true;
+      input.autocomplete = type === 'password' ? 'new-password' : 'off';
+      input.spellcheck = false;
+      wrapper.append(input);
+      panel.append(wrapper);
+      return input;
+    }
+
+    const mailboxAddress = field('Mailbox email', 'email', 255);
+    const clientId = field('OAuth client ID', 'text', 512);
+    const secret = field('OAuth client secret', 'password', 4096);
+    const tenant = provider.id === 'outlook' ? field('Microsoft Entra tenant ID', 'text', 36) : null;
+    const controls = element('div', '', 'mail-controls');
+    const submit = button('Save OAuth settings');
+    submit.type = 'submit';
+    controls.append(submit, button('Cancel', () => load('connections')));
+    panel.append(controls);
+    panel.addEventListener('submit', event => {
+      event.preventDefault();
+      if (busy) return;
+      const payload = JSON.stringify({client_id: clientId.value.trim(), client_secret: secret.value,
+        mailbox: mailboxAddress.value.trim(), tenant: tenant?.value.trim() || ''});
+      secret.value = '';
+      void perform(async request => {
+        await mailbox('/' + provider.id + '/settings', 'PUT', payload, request.signal);
+        if (!request.signal.aborted) await load('connections', provider.name + ' settings saved. Select Connect.');
+      });
+    });
+    content.replaceChildren(panel);
+    status.textContent = 'Saving new settings disconnects this mailbox until you sign in again.';
+    mailboxAddress.focus();
+  }
+
   function showProviders(catalog, mail = {}, message = '') {
-    status.textContent = message || (Object.keys(mail).length ? 'Read-only mailbox access' : 'Account linking is currently unavailable.');
+    status.textContent = message || (Object.values(mail).some(item => item.status !== 'needs_setup') ? 'Read-only mailbox access' : 'Account linking is currently unavailable.');
     const providers = list();
     const preview = element('section', '', 'mail-preview');
     preview.setAttribute('aria-live', 'polite');
@@ -116,11 +163,15 @@ if (opener) {
       const path = '/' + provider.id;
       if (controls) {
         const connected = connection.status === 'connected';
+        const configure = button(connection.status === 'needs_setup' ? 'Configure' : 'Edit settings',
+          () => { if (!busy) settingsForm(provider); });
+        configure.setAttribute('aria-label', (connection.status === 'needs_setup' ? 'Configure ' : 'Edit settings for ') + provider.name);
+        controls.append(configure);
         const start = button(connected ? 'Reconnect' : 'Connect', () => perform(async request => {
           const result = await mailbox(path + '/begin', 'POST', undefined, request.signal);
           if (!request.signal.aborted) window.location.assign(result.url);
         }));
-        controls.append(start);
+        if (connection.status !== 'needs_setup') controls.append(start);
         if (connected) {
           const inspect = button('Preview unread', () => perform(request => showSamples([provider], request)));
           const disconnect = button('Disconnect', () => perform(async request => {
@@ -316,7 +367,8 @@ if (opener) {
   retry.addEventListener('click', () => load(view));
   connectionsTab.addEventListener('click', () => load('connections'));
   skillsTab.addEventListener('click', () => load('skills'));
-  for (const [trigger, initial] of [[opener, 'connections'], [skillsOpener, 'skills']]) {
+  const accountsEntry = document.querySelector('[data-linked-accounts]');
+  for (const [trigger, initial] of [[opener, 'connections'], [accountsEntry, 'connections'], [skillsOpener, 'skills']]) {
     if (!trigger) continue;
     trigger.setAttribute('aria-haspopup', 'dialog');
     trigger.addEventListener('click', () => {

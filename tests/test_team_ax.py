@@ -126,9 +126,22 @@ class TeamAXTests(unittest.TestCase):
         self.assertEqual(self.client.get(path).status_code, 401)
         self.login()
         self.assertEqual(self.client.post(path + "/gmail/begin", headers=self.csrf()).status_code, 403)
+        config = {"client_id": "fixture-oauth-client", "client_secret": "fixture-secret",
+                  "mailbox": "owner@example.test", "tenant": ""}
+        self.assertEqual(self.client.put(path + "/gmail/settings", json=config,
+                                        headers=self.csrf()).status_code, 403)
         self.login("owner", OWNER_PASSWORD)
         first = self.cookies()
         self.assertEqual(self.client.post(path + "/gmail/begin").status_code, 403)
+        mail.configure.return_value = {"status": "available", "redirect": ORIGIN + "/connections/mail/gmail/callback"}
+        dest = path + "/gmail/settings"
+        self.assertEqual(self.client.put(dest, json=config).status_code, 403)
+        self.assertEqual(self.client.put(dest, json={**config, "origin": "https://other.test"},
+                                        headers=self.csrf()).status_code, 422)
+        saved = self.client.put(dest, json=config, headers=self.csrf())
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertNotIn(config["client_secret"], saved.text)
+        mail.configure.assert_awaited_once_with("gmail", {**config, "origin": ORIGIN})
         for provider in ("gmail", "outlook"):
             start = self.client.post(f"{path}/{provider}/begin", headers=self.csrf())
             self.assertEqual(start.status_code, 200, start.text)

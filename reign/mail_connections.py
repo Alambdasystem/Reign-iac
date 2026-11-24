@@ -35,14 +35,21 @@ class Settings:
     redirect: str
 
 
-def settings(provider):
+def settings(provider, override=None):
     if provider not in PROVIDERS:
         raise HTTPException(404, "Unknown mailbox provider")
     prefix = "REIGN_" + provider.upper()
-    client_id = os.getenv(prefix + "_CLIENT_ID", "").strip()
-    secret = os.getenv(prefix + "_CLIENT_SECRET", "")
-    mailbox = os.getenv(prefix + "_OWNER_EMAIL", "").strip().casefold()
-    origin = os.getenv("REIGN_MAIL_ORIGIN", "").rstrip("/")
+    supplied = override if override is not None else {
+        "client_id": os.getenv(prefix + "_CLIENT_ID", ""),
+        "client_secret": os.getenv(prefix + "_CLIENT_SECRET", ""),
+        "mailbox": os.getenv(prefix + "_OWNER_EMAIL", ""),
+        "origin": os.getenv("REIGN_MAIL_ORIGIN", ""),
+        "tenant": os.getenv("REIGN_OUTLOOK_TENANT_ID", ""),
+    }
+    client_id = supplied["client_id"].strip()
+    secret = supplied["client_secret"]
+    mailbox = supplied["mailbox"].strip().casefold()
+    origin = supplied["origin"].rstrip("/")
     if (not client_id or not secret or not EMAIL.fullmatch(mailbox)
             or not re.fullmatch(r"https://[a-zA-Z0-9.-]+(?::[0-9]+)?", origin)):
         return None
@@ -51,7 +58,7 @@ def settings(provider):
                 "https://oauth2.googleapis.com/token")
         scopes = (GOOGLE_SCOPE,)
     else:
-        tenant = os.getenv("REIGN_OUTLOOK_TENANT_ID", "")
+        tenant = supplied["tenant"]
         if not TENANT.fullmatch(tenant):
             return None
         issuer = "https://login.microsoftonline.com/" + tenant + "/oauth2/v2.0"
@@ -89,29 +96,46 @@ class MailConnections:
     async def _save(self, provider, revision, value):
         return await asyncio.to_thread(self.store.owner_mail, provider, (revision, value))
 
-    def _config(self, provider):
-        value = settings(provider)
-        if value is None or self.store is None:
-            raise HTTPException(503, "Mailbox provider needs setup")
-        return value
+    async def _config(self, provider):
+        if provider not in PROVIDERS:
+            raise HTTPException(404, "Unknown mailbox provider")
+        if self.store is None:
+            return None
+        saved = await asyncio.to_thread(self.store.owner_mail_config, provider)
+        return settings(provider, saved)
+
+    async def configure(self, provider, values):
+        if self.store is None:
+            raise HTTPException(503, "Mailbox settings are unavailable")
+        config = settings(provider, values)
+        if config is None:
+            raise HTTPException(422, "Enter valid OAuth settings and the mailbox address")
+        async with self.locks[provider]:
+            await asyncio.to_thread(self.store.owner_mail_config, provider, values)
+        return {"status": "available", "redirect": config.redirect}
 
     async def status(self):
         rows = {}
         for provider in PROVIDERS:
-            config = settings(provider)
-            if config is None or self.store is None:
-                continue
-            revision, value = await self._record(provider)
-            active = value and value["mailbox"] == config.mailbox
-            rows[provider] = {"status": "connected" if active else "available", "revision": revision}
-            if active:
-                rows[provider]["email"] = value["mailbox"]
+            async with self.locks[provider]:
+                config = await self._config(provider)
+                if config is None:
+                    rows[provider] = {"status": "needs_setup"}
+                    continue
+                revision, value = await self._record(provider)
+                active = value and value["mailbox"] == config.mailbox
+                rows[provider] = {"status": "connected" if active else "available", "revision": revision}
+                if active:
+                    rows[provider]["email"] = value["mailbox"]
         return rows
 
     async def begin(self, provider, state, verifier):
-        config = self._config(provider)
-        revision, _ = await self._record(provider)
-        return {"url": consent_url(config, state, verifier), "revision": revision}
+        async with self.locks[provider]:
+            config = await self._config(provider)
+            if config is None:
+                raise HTTPException(503, "Mailbox provider needs setup")
+            revision, _ = await self._record(provider)
+            return {"url": consent_url(config, state, verifier), "revision": revision}
 
     async def _json(self, method, url, **kwargs):
         try:
@@ -165,8 +189,10 @@ class MailConnections:
         return {"mailbox": mailbox, "subject": subject}
 
     async def connect(self, provider, code, verifier, revision):
-        config = self._config(provider)
         async with self.locks[provider]:
+            config = await self._config(provider)
+            if config is None:
+                raise HTTPException(503, "Mailbox provider needs setup")
             current, _ = await self._record(provider)
             if current != revision:
                 raise HTTPException(409, "Connection changed. Start sign-in again.")
@@ -185,8 +211,10 @@ class MailConnections:
         return {"status": "disconnected"}
 
     async def unread(self, provider, limit):
-        config = self._config(provider)
         async with self.locks[provider]:
+            config = await self._config(provider)
+            if config is None:
+                raise HTTPException(503, "Mailbox provider needs setup")
             revision, grant = await self._record(provider)
             if not grant or grant["mailbox"] != config.mailbox:
                 raise HTTPException(409, "Connect your verified mailbox first")

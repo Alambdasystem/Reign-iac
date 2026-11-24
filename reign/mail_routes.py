@@ -22,10 +22,22 @@ class MailComplete(EmptyArgs):
     revision: int = Field(ge=0)
 
 
+class MailSettings(EmptyArgs):
+    client_id: str = Field(min_length=1, max_length=512, pattern=r"^[!-~]+$")
+    client_secret: str = Field(min_length=1, max_length=4096, pattern=r"^[!-~]+$")
+    mailbox: str = Field(min_length=3, max_length=255)
+    origin: str = Field(min_length=9, max_length=255)
+    tenant: str = Field(default="", max_length=36)
+
+
 def install(app, authorize):
     @app.get("/internal/mail/status", dependencies=[Depends(authorize)])
     async def status(request: Request):
         return await request.app.state.mail.status()
+
+    @app.put("/internal/mail/{provider}/settings", dependencies=[Depends(authorize)])
+    async def settings(provider: Provider, args: MailSettings, request: Request):
+        return await request.app.state.mail.configure(provider, args.model_dump())
 
     @app.post("/internal/mail/{provider}/begin", dependencies=[Depends(authorize)])
     async def begin(provider: Provider, args: MailBegin, request: Request):

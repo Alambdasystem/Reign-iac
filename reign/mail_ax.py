@@ -2,7 +2,9 @@
 
 from contextlib import suppress
 from dataclasses import dataclass, field
+import json
 import logging
+import os
 import re
 import secrets
 import time
@@ -70,6 +72,27 @@ def install(app, principal, csrf, core):
         result = (await core("GET", "/internal/mail/status")).json()
         owner(request)
         return JSONResponse(result, headers=HEADERS)
+
+    @app.put("/api/connections/mail/{provider}/settings")
+    async def settings(provider: Provider, request: Request):
+        owner(request, True)
+        raw = bytearray()
+        async for chunk in request.stream():
+            if len(raw) + len(chunk) > 16000:
+                raise HTTPException(422, "Invalid OAuth settings", headers=HEADERS)
+            raw.extend(chunk)
+        try:
+            values = json.loads(raw)
+        except (ValueError, UnicodeError):
+            raise HTTPException(422, "Invalid OAuth settings", headers=HEADERS) from None
+        if type(values) is not dict or set(values) != {"client_id", "client_secret", "mailbox", "tenant"}:
+            raise HTTPException(422, "Invalid OAuth settings", headers=HEADERS)
+        owner(request, True)
+        request.app.state.mail_consent.invalidate(provider)
+        result = await core("PUT", "/internal/mail/" + provider + "/settings",
+                            {**values, "origin": os.getenv("AX_PUBLIC_ORIGIN", "")})
+        owner(request, True)
+        return JSONResponse(result.json(), headers=HEADERS)
 
     @app.post("/api/connections/mail/{provider}/begin")
     async def begin(provider: Provider, request: Request):

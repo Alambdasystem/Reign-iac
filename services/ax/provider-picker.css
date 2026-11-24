@@ -117,3 +117,8 @@ button[data-skill-picker] { min-height: 44px; }
 .mail-preview:not(:empty) { margin-top: 1rem; }
 .mail-message { padding: .55rem; border-bottom: 1px solid #59414e; overflow-wrap: anywhere; }
 .mail-message p { margin: .2rem 0 0; }
+
+.mail-settings { display: grid; gap: .65rem; }
+.mail-settings label { display: grid; gap: .25rem; color: inherit; }
+.mail-settings input { box-sizing: border-box; width: 100%; min-height: 44px; color: inherit; background: #251923; border: 1px solid #765466; border-radius: .625rem; padding: .5rem; }
+.mail-settings code { overflow-wrap: anywhere; color: #ffd0e3; }

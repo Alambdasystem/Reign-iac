@@ -153,6 +153,29 @@ class MailTests(unittest.IsolatedAsyncioTestCase):
                 server.should_exit = True
                 await task
 
+    async def test_saved_oauth_configuration_is_encrypted_and_invalidates_old_consent(self):
+        from pathlib import Path
+
+        pending = await self.mail.begin("gmail", "T" * 43, "V" * 43)
+        await self.mail.connect("gmail", "fixture-code", "V" * 43, pending["revision"])
+        pending = await self.mail.begin("gmail", "T" * 43, "V" * 43)
+        values = {"client_id": "owner-oauth-client", "client_secret": "unique-fixture-secret-to-seal",
+                  "mailbox": "owner@gmail.example", "origin": "https://reign.example.com", "tenant": ""}
+        result = await self.mail.configure("gmail", values)
+        self.assertEqual(set(result), {"status", "redirect"})
+        self.assertNotIn(values["client_secret"], str(result))
+        self.assertNotIn(values["client_secret"].encode(),
+                         (Path(self.directory) / "reign-team.sqlite3").read_bytes())
+        restarted = MailConnections(TeamStore(self.directory, bytes(range(32))), self.http)
+        self.assertEqual((await restarted.status())["gmail"]["status"], "available")
+        fresh = await restarted.begin("gmail", "T" * 43, "V" * 43)
+        self.assertEqual(parse_qs(urlsplit(fresh["url"]).query)["client_id"], ["owner-oauth-client"])
+        with self.assertRaises(HTTPException) as stale:
+            await restarted.connect("gmail", "fixture-code", "V" * 43, pending["revision"])
+        self.assertEqual(stale.exception.status_code, 409)
+        with self.assertRaises(HTTPException):
+            await restarted.unread("gmail", 1)
+
     async def test_wrong_mailbox_and_extra_scope_do_not_save_tokens(self):
         self.wrong_mailbox = True
         with self.assertRaises(HTTPException) as wrong:

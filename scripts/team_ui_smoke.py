@@ -89,15 +89,25 @@ async def provider_picker_check(page):
 async def owner_mail_picker_check(page):
     endpoint = AX + "/api/connections/mail"
     paths = []
+    configured = False
 
     async def owner_mail(route):
+        nonlocal configured
         path = urlsplit(route.request.url).path
         paths.append((route.request.method, path))
         if path == "/api/connections/mail":
             await route.fulfill(json={
-                "gmail": {"status": "connected", "email": "owner@gmail.example"},
+                "gmail": ({"status": "connected", "email": "owner@gmail.example"}
+                          if configured else {"status": "needs_setup"}),
                 "outlook": {"status": "connected", "email": "owner@outlook.example"},
             })
+        elif path.endswith("/gmail/settings"):
+            assert route.request.method == "PUT"
+            values = route.request.post_data_json
+            assert values == {"client_id": "fixture-app", "client_secret": "fixture-secret",
+                              "mailbox": "owner@gmail.example", "tenant": ""}
+            configured = True
+            await route.fulfill(json={"status": "available"})
         elif path.endswith("/gmail/preview"):
             await route.fulfill(json={"sampled_unread": 1, "count_kind": "sample", "messages": [
                 {"subject": "Disposable Gmail title", "from": "sender@example.test", "date": ""},
@@ -111,6 +121,13 @@ async def owner_mail_picker_check(page):
     try:
         await callspace_click(page, "[data-provider-picker]")
         dialog = page.get_by_role("dialog", name="Account connections")
+        await dialog.get_by_role("button", name="Configure Gmail").click()
+        await dialog.get_by_label("Mailbox email").fill("owner@gmail.example")
+        await dialog.get_by_label("OAuth client ID").fill("fixture-app")
+        secret = dialog.get_by_label("OAuth client secret")
+        await expect(secret).to_have_attribute("type", "password")
+        await secret.fill("fixture-secret")
+        await dialog.get_by_role("button", name="Save OAuth settings").click()
         await expect(dialog.get_by_text("owner@gmail.example")).to_be_visible()
         await expect(dialog.get_by_text("owner@outlook.example")).to_be_visible()
         await dialog.get_by_role("button", name="Preview both inboxes").click()

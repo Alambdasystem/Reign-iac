@@ -7,16 +7,21 @@ Microsoft Entra web application for the owner's tenant. Configure Google to
 allow the intended user. Request the smallest delegated permissions for
 the preview: Gmail metadata and Microsoft Graph User.Read and Mail.ReadBasic.
 Check the relevant Google publishing requirements for the app's audience.
-Use client secrets in the Core service's private environment.
+In REIGN, open **Work → Accounts → Manage connections**. Select **Configure**
+on Gmail or Outlook to paste the OAuth client ID, client secret, and exact
+mailbox address. Outlook also requires the Microsoft Entra tenant ID. The
+form shows the callback URL. Saving new settings clears the existing mailbox
+authorization, and the owner can then select **Connect**.
 
-| Core variable | Value |
-| --- | --- |
-| `REIGN_MAIL_ORIGIN` | The existing public HTTPS AX origin |
-| `REIGN_GMAIL_CLIENT_ID`, `REIGN_GMAIL_CLIENT_SECRET` | Google web OAuth client |
-| `REIGN_GMAIL_OWNER_EMAIL` | Actual Gmail address in the provider profile |
-| `REIGN_OUTLOOK_CLIENT_ID`, `REIGN_OUTLOOK_CLIENT_SECRET` | Entra web OAuth client |
-| `REIGN_OUTLOOK_TENANT_ID` | The Entra tenant UUID |
-| `REIGN_OUTLOOK_OWNER_EMAIL` | Actual Outlook mailbox address in the provider profile |
+Client settings and grants are sealed as separate owner- and provider-bound
+records on Core's existing private workspace disk. The form is write-only.
+There is no field for a Gmail or Outlook account password.
+
+As an alternative, a Core administrator can set `REIGN_MAIL_ORIGIN`,
+`REIGN_GMAIL_CLIENT_ID`, `REIGN_GMAIL_CLIENT_SECRET`, `REIGN_GMAIL_OWNER_EMAIL`,
+`REIGN_OUTLOOK_CLIENT_ID`, `REIGN_OUTLOOK_CLIENT_SECRET`,
+`REIGN_OUTLOOK_TENANT_ID`, and `REIGN_OUTLOOK_OWNER_EMAIL` in the private
+service environment. Settings saved in Accounts take priority.
 
 Register these exact HTTPS paths at the respective providers.
 
@@ -30,7 +35,7 @@ The clean redirect uses a fragment and the browser removes it after return.
 
 ## Consent and verification
 
-1. Sign in as the REIGN pilot owner. Open **Connections** and select **Connect**.
+1. Sign in as the REIGN pilot owner. Open **Accounts → Manage connections** and select **Connect** for the provider.
 2. Approve the provider's consent prompt in the same browser. AX verifies that
    the returning session matches the initiating session and consumes the
    consent attempt before the code exchange.
