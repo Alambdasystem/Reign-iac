@@ -318,7 +318,7 @@ class TeamStore:
             fence, disconnected = self._seal(key, None, "owner-mail", *binding, grant_version)
             self._reserve(db, len(sealed) - (len(row["body"]) if row else 0)
                           + len(disconnected) - (len(grant["body"]) if grant else 0))
-            db.execute("INSERT INTO owner_mail VALUES (?,?,?,?,?) ON CONFLICT(workspace,user_id,provider) "
+            db.execute("INSERT INTO owner_mail (workspace,user_id,provider,revision,nonce,body) VALUES (?,?,?,?,?,?) ON CONFLICT(workspace,user_id,provider) "
                        "DO UPDATE SET revision=excluded.revision,nonce=excluded.nonce,body=excluded.body",
                        (*binding, grant_version, fence, disconnected))
 
