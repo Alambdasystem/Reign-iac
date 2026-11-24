@@ -10,6 +10,7 @@ import time
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from reign.skills import catalog as skill_catalog
 from reign.team_identity import ACTOR_HEADER, OWNER_ID, TeamIdentityError, verify_actor
 from reign.team_store import MAX_ROOM_PARTICIPANTS, TeamError, TeamStore, boolean, identifier, text
 
@@ -445,6 +446,20 @@ def install(app, authorize):
         actor = await require_actor(request); runtime = get_runtime(request)
         result = await asyncio.to_thread(runtime.store.overview, actor)
         return reply({**result, "capabilities": runtime.capabilities(actor)})
+
+    @app.get("/api/team/skills")
+    async def get_skills(request: Request):
+        actor = await require_actor(request)
+        saved = await asyncio.to_thread(get_runtime(request).store.personal_skills, actor)
+        return reply({"skills": skill_catalog(), **saved})
+
+    @app.put("/api/team/skills")
+    async def save_skills(request: Request):
+        actor = await require_actor(request)
+        keys = {"revision", "pinned", "items"}
+        update = await body(request, keys, keys, 16000)
+        saved = await asyncio.to_thread(get_runtime(request).store.personal_skills, actor, update)
+        return reply(saved)
 
     @app.post("/api/team/members")
     async def create_member(request: Request):

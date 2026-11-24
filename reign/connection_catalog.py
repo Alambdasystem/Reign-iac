@@ -17,6 +17,7 @@ class Provider:
 PROVIDERS = (
     Provider("gmail", "Gmail", "Connect a Google account for approved Gmail tools."),
     Provider("outlook", "Outlook", "Connect a Microsoft account for approved Outlook tools."),
+    Provider("aws", "AWS IAM Identity Center", "Use a verified AWS account and role through an approved sign-in profile."),
 )
 
 

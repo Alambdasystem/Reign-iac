@@ -1,6 +1,7 @@
 """Exercise real AX sessions against a disposable private team directory."""
 import json
 import os
+from pathlib import Path
 import re
 import tempfile
 import unittest
@@ -85,7 +86,7 @@ class TeamAXTests(unittest.TestCase):
         self.assertEqual(owner.status_code, 200)
         self.assertEqual(owner.headers["cache-control"], "no-store")
         providers = owner.json()["providers"]
-        self.assertEqual([entry["id"] for entry in providers], ["gmail", "outlook"])
+        self.assertEqual([entry["id"] for entry in providers], ["gmail", "outlook", "aws"])
         for entry in providers:
             self.assertEqual(set(entry), {"id", "name", "description", "availability", "tools"})
             self.assertEqual(entry["availability"], "unavailable")
@@ -103,6 +104,30 @@ class TeamAXTests(unittest.TestCase):
 
         self.store.disable_member(self.owner, self.member["id"])
         self.assertEqual(self.client.get(path).status_code, 401)
+
+    def test_skills_use_member_identity_csrf_and_conflict_checked_encrypted_storage(self):
+        path = "/api/team/skills"
+        payload = {"revision": 0, "pinned": ["action_checklist"],
+                   "items": [{"label": "Review the private briefing", "done": False}]}
+        self.assertEqual(self.client.get(path).status_code, 401)
+        self.login("mayur", AVATAR_PASSWORD)
+        self.assertEqual(self.client.get(path).status_code, 403)
+        self.login()
+        self.assertEqual(self.client.put(path, json=payload).status_code, 403)
+        response = self.client.put(path, headers=self.csrf(), json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["revision"], 1)
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        self.assertEqual(self.client.put(path, headers=self.csrf(), json=payload).status_code, 409)
+        self.assertEqual(self.client.get(path).json()["items"], payload["items"])
+        self.assertNotIn(b"Review the private briefing",
+                         (Path(self.store.directory) / "reign-team.sqlite3").read_bytes())
+        self.login("owner", OWNER_PASSWORD)
+        self.assertEqual(self.client.get(path).json()["items"], [])
+        self.assertEqual(self.client.put(path, headers=self.csrf(),
+                         json={**payload, "user_id": self.member["id"]}).status_code, 422)
+        self.store.disable_member(self.owner, self.member["id"])
+        self.assertEqual(len(self.client.get(path).json()["skills"]), 3)
 
     def test_employee_login_profile_and_protected_page_keep_local_owner_and_avatar_accounts(self):
         self.login(" FIXTURE-EMPLOYEE ")

@@ -86,6 +86,32 @@ async def provider_picker_check(page):
     await expect(page.locator("#callspaceMenuPanel")).to_be_hidden()
 
 
+async def skills_picker_check(page):
+    await callspace_click(page, "[data-skill-picker]")
+    dialog = page.get_by_role("dialog", name="Skills")
+    email = dialog.get_by_role("listitem").filter(has_text="Email briefing")
+    await expect(email.get_by_text("Needs setup")).to_be_visible()
+    await email.locator("summary").click()
+    await expect(email.get_by_text("Connect and verify each mailbox independently.")).to_be_visible()
+    await dialog.get_by_role("button", name="Pin Action checklist").click()
+    await expect(dialog.get_by_role("button", name="Unpin Action checklist")).to_be_visible()
+    label = "Review the test briefing"
+    await dialog.get_by_role("textbox", name="New checklist items").fill(label)
+    await dialog.get_by_role("button", name="Add", exact=True).click()
+    await dialog.get_by_role("checkbox", name=label).click()
+    await expect(dialog.get_by_text("1 of 1 complete")).to_be_visible()
+    await dialog.get_by_role("button", name="Close").click()
+    await callspace_click(page, "[data-skill-picker]")
+    await expect(dialog.get_by_role("checkbox", name=label)).to_be_checked()
+    await dialog.get_by_role("button", name="Remove " + label).click()
+    await expect(dialog.get_by_text("0 of 0 complete")).to_be_visible()
+    await dialog.get_by_role("button", name="Unpin Action checklist").click()
+    await expect(dialog.get_by_role("button", name="Pin Action checklist")).to_be_visible()
+    await page.keyboard.press("Escape")
+    await expect(dialog).to_be_hidden()
+    await page.locator("#callspaceCloseMenu").click()
+
+
 async def shared_browser_check(page, room_id):
     """Run after the baseline restart phase has released its private slot."""
     path = f"/api/team/rooms/{room_id}/browser"
@@ -359,6 +385,8 @@ async def main():
             desktop = page.viewport_size
             await page.set_viewport_size({"width": 320, "height": 720})
             await provider_picker_check(page)
+            await skills_picker_check(page)
+            passed("T23 mobile Skills manager pins workflows and saves personal checklist changes")
             await page.set_viewport_size(desktop)
             passed("T17 mobile and desktop account connections support keyboard access and independent provider availability")
             profile = await api(page, "/api/team")

@@ -84,6 +84,7 @@ async def lifespan(app: FastAPI):
             app.state.nodes = nodes
             app.state.voice = VoiceBroker(app.state.http)
             if team is not None and team.assistant is not None:
+                team.assistant.skills_mcp = connection
                 from reign.team_voice import TeamVoice
                 team_voice = TeamVoice(team, app.state.voice)
                 await team_voice.start()

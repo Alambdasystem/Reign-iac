@@ -73,7 +73,19 @@ async def dispatch(name, arguments, meta):
     except (ValueError, TypeError, HTTPException):
         return error_result("Invalid tool arguments or workspace context", "invalid_tool_context", 403)
     try:
-        if name == "linkedin_preview_post":
+        if name == "reign_skill_catalog":
+            from reign.skills import catalog
+            result = {"skills": catalog()}
+        elif name == "reign_skill_plan":
+            from reign.skills import workflow
+            result = workflow(args["skill"])
+        elif name == "reign_checklist_prepare":
+            from reign.skills import checklist
+            try:
+                result = {"status": "draft", "items": checklist(args["items"])}
+            except ValueError:
+                return error_result("Enter one or more valid checklist labels.", "invalid_checklist", 422)
+        elif name == "linkedin_preview_post":
             from reign.linkedin_publishing import preview
             result = preview(args["text"], draft_only=True)
         elif name == "workspace_status":

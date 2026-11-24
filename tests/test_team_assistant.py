@@ -46,6 +46,26 @@ def provider_response(segments=None, **extra):
         {"type": "message", "content": [{"type": "output_text", "text": json.dumps(value)}]}], **extra})
 
 
+class RoomSkillTests(unittest.IsolatedAsyncioTestCase):
+    async def test_shared_room_can_plan_skills_without_exposing_private_tools(self):
+        first = httpx.Response(200, json={"status": "completed", "output": [{
+            "type": "function_call", "name": "reign_skill_plan", "call_id": "skill_1",
+            "arguments": json.dumps({"skill": "email_briefing"}),
+        }]})
+        http = AsyncMock()
+        http.post.side_effect = [first, provider_response()]
+        mcp = AsyncMock()
+        mcp.invoke.return_value = {"status": "needs_setup", "providers": ["gmail", "outlook"]}
+        service = TeamAssistant(http, TeamMedia(), skills_mcp=mcp)
+        payload = {"instructions": "Fixture", "input": []}
+        result = await service.model_reply(PROVIDER, payload, owner_identity(), str(uuid.uuid4()))
+        self.assertTrue(result.segments)
+        self.assertEqual({item["name"] for item in payload["tools"]},
+                         {"reign_skill_catalog", "reign_skill_plan", "reign_checklist_prepare"})
+        mcp.invoke.assert_awaited_once_with("reign_skill_plan", {"skill": "email_briefing"})
+        self.assertEqual(json.loads(payload["input"][-1]["output"])["status"], "needs_setup")
+
+
 class MediaStoreTests(unittest.TestCase):
     def test_image_is_decoded_reencoded_bounded_and_metadata_free(self):
         result = clean_image(data_image((1200, 800)))

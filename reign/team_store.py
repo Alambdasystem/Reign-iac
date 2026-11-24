@@ -20,6 +20,7 @@ import uuid
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from reign.ax_auth import hash_password, _password_bytes, _verifier, InvalidCredentials
+from reign.skills import MAX_CHECKLIST_ITEMS, MAX_CHECKLIST_LABEL, SKILLS
 from reign.team_identity import OWNER_ID
 
 WORKSPACE_ID = "rain"
@@ -44,6 +45,7 @@ ERRORS = {
     "team_owner_required": (403, "Workspace owner access is required."),
     "team_not_found": (404, "The workspace item was not found."),
     "member_exists": (409, "That username is already reserved. Refresh the member list."),
+    "skills_conflict": (409, "Skills changed in another tab. Reload and try again."),
     "document_conflict": (409, "This document changed. Reload it before saving your edits."),
     "idempotency_conflict": (409, "That request identifier was already used for different content."),
     "assistant_busy": (409, "REIGN is already working in this room. Wait for its reply."),
@@ -219,6 +221,7 @@ class TeamStore:
         # This additive table is part of the initial, still-unreleased schema.
         # Existing test/dev stores retain their records when the surface grows.
         db.execute("CREATE TABLE IF NOT EXISTS browser_bindings (room TEXT PRIMARY KEY REFERENCES rooms(id), session_id TEXT UNIQUE NOT NULL, generation INTEGER NOT NULL, nonce BLOB NOT NULL, body BLOB NOT NULL)")
+        db.execute("CREATE TABLE IF NOT EXISTS personal_skills (workspace TEXT NOT NULL, user_id TEXT NOT NULL, revision INTEGER NOT NULL, nonce BLOB NOT NULL, body BLOB NOT NULL, PRIMARY KEY(workspace,user_id))")
         # A durable per-member console grant, not a new owner identity. The
         # original membership MAC remains valid for ungranted members.
         if "console_access" not in {row[1] for row in db.execute("PRAGMA table_info(memberships)")}: 
@@ -274,6 +277,44 @@ class TeamStore:
         if not member["active"] or member["role"] != actor.get("role") or member["credential_revision"] != actor.get("credential_revision"):
             raise TeamError("team_identity_required")
         return {key: member[key] for key in ("id", "username", "display_name", "role", "credential_revision")}
+
+    def personal_skills(self, actor, update=None):
+        value = None
+        if update is not None:
+            revision = update["revision"]
+            pinned = update["pinned"]
+            items = update["items"]
+            if (type(revision) is not int or revision < 0 or type(pinned) is not list
+                    or len(pinned) > len(SKILLS) or any(type(item) is not str or item not in SKILLS for item in pinned)
+                    or len(set(pinned)) != len(pinned) or type(items) is not list
+                    or len(items) > MAX_CHECKLIST_ITEMS):
+                raise TeamError("invalid_team_request")
+            normalized = []
+            for item in items:
+                if type(item) is not dict or set(item) != {"label", "done"} or type(item["done"]) is not bool:
+                    raise TeamError("invalid_team_request")
+                label = " ".join(text(item["label"], MAX_CHECKLIST_LABEL).split())
+                if any(ord(ch) < 32 for ch in label):
+                    raise TeamError("invalid_team_request")
+                normalized.append({"label": label, "done": item["done"]})
+            value = {"pinned": pinned, "items": normalized}
+        with self._connection() as (db, key):
+            member = self._principal(db, key, actor)
+            binding = (WORKSPACE_ID, member["id"])
+            row = db.execute("SELECT revision,nonce,body FROM personal_skills WHERE workspace=? AND user_id=?", binding).fetchone()
+            current = row["revision"] if row else 0
+            if value is None:
+                stored = self._open(key, row["nonce"], row["body"], "skills", *binding, current) if row else {
+                    "pinned": [], "items": []}
+                return {"revision": current, **stored}
+            if current != revision:
+                raise TeamError("skills_conflict")
+            nonce, sealed = self._seal(key, value, "skills", *binding, current + 1)
+            self._reserve(db, len(sealed) - (len(row["body"]) if row else 0))
+            db.execute("INSERT INTO personal_skills VALUES (?,?,?,?,?) ON CONFLICT(workspace,user_id) "
+                       "DO UPDATE SET revision=excluded.revision,nonce=excluded.nonce,body=excluded.body",
+                       (*binding, current + 1, nonce, sealed))
+            return {"revision": current + 1, **value}
 
     def resolve(self, user_id, credential_revision):
         with self._connection() as (db, key):

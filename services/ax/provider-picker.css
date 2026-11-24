@@ -94,3 +94,21 @@ button[data-provider-picker]:focus-visible { outline: 2px solid #ffc1db; outline
   .provider-picker-card { grid-template-columns: auto minmax(0, 1fr); }
   .provider-picker-state { grid-column: 2; }
 }
+
+button[data-skill-picker] { min-height: 44px; }
+.provider-picker-nav { display: flex; flex-wrap: wrap; gap: .5rem; margin: .75rem 0; }
+.provider-picker-nav [aria-pressed="true"] { border-color: #e3a7c4; background: #523148; }
+.provider-picker .provider-picker-button:disabled { opacity: .6; cursor: default; }
+.provider-picker-card.skill-card { grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
+.skill-card details { min-width: 0; }
+.skill-card summary { cursor: pointer; padding-block: .4rem; font-weight: 600; }
+.skill-card summary .provider-picker-state { display: inline-block; margin-inline-start: .5rem; font-weight: normal; }
+.skill-card ol { padding-inline-start: 1.25rem; font-size: .875rem; }
+.skill-card details > .provider-picker-button { margin-top: .4rem; }
+.skill-checklist { margin-top: 1rem; padding: .75rem; border: 1px solid #59414e; border-radius: .875rem; }
+.skill-checklist-items { padding: 0; list-style: none; }
+.skill-checklist-items li { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin-block: .4rem; }
+.skill-checklist-items label { display: flex; align-items: center; gap: .5rem; overflow-wrap: anywhere; color: inherit; }
+.skill-checklist-items input[type="checkbox"] { width: auto; min-width: auto; flex: none; }
+.skill-checklist-add { display: flex; gap: .5rem; margin-block: .75rem; }
+.skill-checklist-add textarea { width: 100%; min-width: 0; flex: 1; border: 1px solid #765466; border-radius: .625rem; padding-inline: .65rem; font: inherit; color: inherit; background: #251923; resize: vertical; }

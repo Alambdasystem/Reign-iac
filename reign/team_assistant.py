@@ -8,9 +8,11 @@ import re
 import wave
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
+from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from websockets.asyncio.client import connect
 
+from reign.tool_contracts import CATALOG, SKILL_TOOLS
 from reign.team_store import TeamError, WORKSPACE_NAME
 from reign.voice import configuration, model_name
 from reign.speech import Segment
@@ -158,7 +160,8 @@ class Narrator:
 
 
 class TeamAssistant:
-    def __init__(self, http, media, narrator=None, browser=None):
+    def __init__(self, http, media, narrator=None, browser=None, skills_mcp=None):
+        self.skills_mcp = skills_mcp
         self.http, self.media = http, media
         self.narrator = narrator or Narrator()
         self.browser = browser
@@ -225,11 +228,9 @@ class TeamAssistant:
             raise
 
     async def model_reply(self, settings, payload, actor, room_id):
-        """Bounded room-only browser calls, then one structured final reply."""
+        """Bounded room browser and skill calls, then one structured final reply."""
         tools = self.browser.tool_specs() if self.browser is not None else []
-        allowed = {tool["name"] for tool in tools}
         if tools:
-            payload.update(tools=tools, parallel_tool_calls=False)
             payload["instructions"] += (
                 "\nThe available browser tools operate only this room's explicitly opened managed browser. "
                 "Use them when the current user asks to browse or perform a website task. Never use the "
@@ -240,6 +241,17 @@ class TeamAssistant:
                 "inspect before any retry; never blindly submit twice. Human control stops your actions. "
                 "Report a blocked or paused task honestly. A turn has at most four browser tool calls."
             )
+        if self.skills_mcp is not None:
+            tools.extend({"type": "function", "name": name, "description": description,
+                          "parameters": schema.model_json_schema(), "strict": False}
+                         for name, (description, schema) in CATALOG.items() if name in SKILL_TOOLS)
+            payload["instructions"] += (
+                "\nUse the skill tools for approved workflows and checklist drafts. Report missing "
+                "provider setup. Only the signed-in person can save a personal checklist."
+            )
+        allowed = {tool["name"] for tool in tools}
+        if tools:
+            payload.update(tools=tools, parallel_tool_calls=False)
         payload["include"] = ["reasoning.encrypted_content"]
         seen = {}
         async with asyncio.timeout(100 if tools else 45):
@@ -276,7 +288,15 @@ class TeamAssistant:
                     previous, tool_result = seen[call["call_id"]]
                     if previous != fingerprint: raise TeamError("assistant_failed")
                 else:
-                    tool_result = await self.browser.execute(actor, room_id, call["name"], arguments)
+                    name = call["name"]
+                    if name in SKILL_TOOLS:
+                        try:
+                            async with asyncio.timeout(3):
+                                tool_result = await self.skills_mcp.invoke(name, arguments)
+                        except (HTTPException, TimeoutError):
+                            tool_result = {"error": "Skill unavailable. Check the Skills panel or try again."}
+                    else:
+                        tool_result = await self.browser.execute(actor, room_id, name, arguments)
                     seen[call["call_id"]] = (fingerprint, tool_result)
                 encoded = json.dumps(tool_result, ensure_ascii=False)
                 if len(encoded.encode("utf-8")) > 120000:

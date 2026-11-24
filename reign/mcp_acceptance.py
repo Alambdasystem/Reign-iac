@@ -17,6 +17,7 @@ from reign.genesis_pilot import GenesisPilot
 from reign.sovereign_registry import RegistryDenied
 
 EXPECTED = frozenset({
+    "reign_skill_catalog", "reign_skill_plan", "reign_checklist_prepare",
     "linkedin_preview_post", "workspace_status", "browser_status", "open_browser", "navigate_browser",
     "browser_observe", "browser_click", "browser_fill", "browser_press",
     "browser_scroll", "vault_status", "vault_list_accounts",
@@ -72,6 +73,11 @@ async def main():
         draft = await mcp.invoke("linkedin_preview_post", {"text": "Disposable LinkedIn draft"})
         assert draft == {"status": "draft", "text": "Disposable LinkedIn draft", "media_supported": False}, draft
         record("M11 LinkedIn drafting returns text without a publishing tool")
+        plan = await mcp.invoke("reign_skill_plan", {"skill": "email_briefing"})
+        assert plan["status"] == "needs_setup" and set(plan["providers"]) == {"gmail", "outlook"}, plan
+        checklist = await mcp.invoke("reign_checklist_prepare", {"items": ["Review the reply"]})
+        assert checklist == {"status": "draft", "items": [{"label": "Review the reply", "done": False}]}, checklist
+        record("M12 skill plans report provider setup and prepare a checklist")
     # Genesis is intentionally NOT connected to the MCP executor.
     # Its persisted records must remain draft/non-provisioned, with only a
     # narrow read-only capability allowlist; no new agent is created here.
